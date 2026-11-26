@@ -7,6 +7,7 @@ import 'package:termui/termui.dart' as tui;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 
+import '../commands/shortcut_catalog.dart';
 import '../file_drop_bridge.dart';
 import '../font_loader.dart';
 import '../launch_config.dart';
@@ -1039,33 +1040,10 @@ final class _HelpOverlay extends StatelessWidget {
 
   const _HelpOverlay({required this.workspace, required this.palette});
 
-  static const List<(String, String)> _entries = [
-    ('Ctrl+Shift+P / Cmd+Shift+P', 'Command Palette (>, :, %, Quick Switch)'),
-    (r'Ctrl+\ then Shift+P', 'Command Palette (Desktop & Web)'),
-    (r'Ctrl+\ then | or %', 'Split pane left | right'),
-    (r'Ctrl+\ then - or "', 'Split pane top / bottom'),
-    (r'Ctrl+\ then h j k l / Arrows', 'Focus adjacent split pane'),
-    (r'Ctrl+\ then z', 'Toggle pane zoom'),
-    (r'Ctrl+\ then b', 'Toggle local pane relay share'),
-    (r'Ctrl+\ then c', 'Sessions & Shells picker'),
-    (r'Ctrl+\ then n / p / 1..9', 'Next / Prev / Nth tab'),
-    (r'Ctrl+\ then r', 'Rename tab or clear title pin'),
-    (r'Ctrl+\ then x', 'Close focused pane / tab'),
-    (r'Ctrl+\ then d / Space', 'Cycle tab bar (top -> left -> hidden)'),
-    (r'Ctrl+\ then e', 'Open GLSL Shader Editor tab'),
-    ('Alt+S / Cmd+S (Shift: As)', 'Save active GLSL shader in editor'),
-    (r'Ctrl+\ then , / i / ? / a', 'Settings / Stats / Help / About'),
-    ('Cmd+T/W/D/Shift+D/1..9', 'Native macOS Desktop shortcuts'),
-    ('Cmd+= / Cmd+- / Cmd+0', 'Zoom font in / out / reset (macOS)'),
-    ('Ctrl+Shift+T/W/D/E', 'Native Linux / Windows shortcuts'),
-    ('Ctrl+= / Ctrl+- / Ctrl+0', 'Zoom font in / out / reset (Linux/Win)'),
-    ('Ctrl+Shift+F5', 'Reload custom fragment shaders (Desktop)'),
-    (r'Ctrl+Shift+F6 / Ctrl+\ 0', 'Emergency Stop / Resume GPU shaders'),
-  ];
-
   @override
   Widget build(BuildContext context) {
     final p = palette;
+    final entries = buildHelpShortcutEntries();
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -1081,18 +1059,21 @@ final class _HelpOverlay extends StatelessWidget {
           Flexible(
             child: ListView.builder(
               shrinkWrap: true,
-              itemCount: _entries.length,
+              itemCount: entries.length,
               itemBuilder: (_, idx) {
-                final (chord, desc) = _entries[idx];
+                final entry = entries[idx];
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 3),
                   child: Row(
                     children: [
                       SizedBox(
                         width: 210,
-                        child: Text(chord, style: TextStyle(color: p.accent)),
+                        child: Text(
+                          entry.keys,
+                          style: TextStyle(color: p.accent),
+                        ),
                       ),
-                      Expanded(child: Text(desc)),
+                      Expanded(child: Text(entry.description)),
                     ],
                   ),
                 );

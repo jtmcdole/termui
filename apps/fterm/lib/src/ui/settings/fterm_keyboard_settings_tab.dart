@@ -10,10 +10,12 @@ import 'package:flutter/services.dart'
 import 'package:material_ui/material_ui.dart';
 import 'package:termui/terminal/event.dart' as ev;
 
+import '../../commands/fterm_capability_context.dart';
+import '../../commands/settings_descriptors.dart';
 import '../../input/key_chord.dart';
-import '../../settings_storage.dart';
 import '../../workspace/fterm_workspace_controller.dart';
 import '../fterm_overlays.dart';
+import 'settings_descriptor_renderer.dart';
 import 'settings_primitives.dart';
 
 /// Settings section configuring Meta/Cmd key policy, user-defined passthrough
@@ -289,7 +291,11 @@ final class _KeyboardMetaPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final prefs = workspace.preferences;
+    final capabilities = FtermCapabilityContext.fromWorkspace(
+      workspace,
+      isWeb: isWeb,
+      platform: platform,
+    );
     return BlenderSettingsPanel(
       id: 'keyboard-meta',
       title: 'Meta / Cmd Key Policy',
@@ -297,13 +303,11 @@ final class _KeyboardMetaPanel extends StatelessWidget {
       expanded: filter.panelExpanded('keyboard-meta'),
       onToggleExpanded: filter.toggleFor('keyboard-meta'),
       palette: palette,
-      child: _MetaKeyPolicySection(
-        mode: prefs.metaKeyMode,
-        platform: platform,
-        isWeb: isWeb,
+      child: buildSettingDescriptorWidget(
+        settingDescriptorById('keyboard-meta-policy')!,
+        workspace: workspace,
         palette: palette,
-        onSelected: (mode) =>
-            workspace.updatePreferences(prefs.copyWith(metaKeyMode: mode)),
+        capabilities: capabilities,
       ),
     );
   }
@@ -399,8 +403,10 @@ final class _KeyboardHostKeysPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final prefs = workspace.preferences;
-    final wsSettings = workspace.workspaceSettings;
+    final capabilities = FtermCapabilityContext.fromWorkspace(
+      workspace,
+      platform: Theme.of(context).platform,
+    );
     return BlenderSettingsPanel(
       id: 'keyboard-host-keys',
       title: 'Host & Platform Keys',
@@ -412,97 +418,23 @@ final class _KeyboardHostKeysPanel extends StatelessWidget {
         spacing: 8,
         children: [
           if (filter.showItem('keyboard-macos-option'))
-            BlenderCheckboxRow(
-              label: 'macOS Option as Alt',
-              caption:
-                  'Emit Alt+key instead of macOS Option dead-key composition',
-              value: prefs.macosOptionAsAlt,
-              controlKey: const ValueKey('settings-macos-option-as-alt'),
+            buildSettingDescriptorWidget(
+              settingDescriptorById('keyboard-macos-option')!,
+              workspace: workspace,
               palette: palette,
-              onChanged: (v) => workspace.updatePreferences(
-                prefs.copyWith(macosOptionAsAlt: v),
-              ),
+              capabilities: capabilities,
             ),
           if (filter.showItem('keyboard-f12-shortcuts'))
-            BlenderCheckboxRow(
-              label: 'F12 Host Shortcuts',
-              caption: 'Enable F12 screenshot and Shift+F12 atlas reload keys',
-              value: wsSettings.f12ShortcutsEnabled,
-              controlKey: const ValueKey('settings-f12-toggle'),
+            buildSettingDescriptorWidget(
+              settingDescriptorById('keyboard-f12-shortcuts')!,
+              workspace: workspace,
               palette: palette,
-              onChanged: workspace.setF12ShortcutsEnabled,
+              capabilities: capabilities,
             ),
         ],
       ),
     );
   }
-}
-
-final class _MetaKeyPolicySection extends StatelessWidget {
-  static const List<(FtermMetaKeyMode, String)> _modes = [
-    (.auto, 'Auto'),
-    (.passThrough, 'Pass Through'),
-    (.kitty, 'Kitty Only'),
-  ];
-
-  final FtermMetaKeyMode mode;
-  final TargetPlatform platform;
-  final bool isWeb;
-  final FtermOverlayPalette palette;
-  final ValueChanged<FtermMetaKeyMode> onSelected;
-
-  const _MetaKeyPolicySection({
-    required this.mode,
-    required this.platform,
-    required this.isWeb,
-    required this.palette,
-    required this.onSelected,
-  });
-
-  static String _summaryText({
-    required FtermMetaKeyMode mode,
-    required TargetPlatform platform,
-    required bool isWeb,
-  }) => switch (mode) {
-    .passThrough =>
-      isWeb
-          ? 'Always passes unhandled Meta/Cmd chords to the browser.'
-          : 'Always passes unhandled Meta/Cmd chords to the OS.',
-    .kitty =>
-      'Claims unhandled Meta/Cmd chords when Kitty keyboard protocol is active; '
-          'passes through in legacy mode.',
-    .auto when isWeb =>
-      'Auto (Web): passes unhandled Meta/Cmd chords to the browser.',
-    .auto when platform == .macOS =>
-      'Auto (macOS): passes unhandled Cmd chords to macOS.',
-    .auto =>
-      'Auto (Desktop): claims unhandled Meta chords when Kitty keyboard '
-          'protocol is active.',
-  };
-
-  @override
-  Widget build(BuildContext context) => BlenderPropertyRow(
-    label: 'Meta / Cmd Mode',
-    palette: palette,
-    hint: Text(
-      _summaryText(mode: mode, platform: platform, isWeb: isWeb),
-      key: const ValueKey('settings-meta-mode-summary'),
-      style: TextStyle(color: palette.muted, fontSize: 10.5),
-    ),
-    control: BlenderSegmentedControl<FtermMetaKeyMode>(
-      value: mode,
-      palette: palette,
-      options: [
-        for (final (candidate, label) in _modes)
-          BlenderSegmentedOption<FtermMetaKeyMode>(
-            key: ValueKey('settings-meta-mode-${candidate.name}'),
-            value: candidate,
-            label: label,
-          ),
-      ],
-      onChanged: onSelected,
-    ),
-  );
 }
 
 final class _PassthroughShortcutsSection extends StatelessWidget {

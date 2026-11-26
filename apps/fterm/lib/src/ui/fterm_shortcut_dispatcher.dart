@@ -13,9 +13,14 @@ import 'package:termui/terminal/event.dart' as ev;
 import 'package:termui_flutter/termui_flutter.dart'
     show HostShortcutResult, TerminalMetaKeyPolicy;
 
+import '../commands/action_descriptors.dart';
+import '../commands/fterm_capability_context.dart';
+import '../commands/fterm_descriptor_models.dart';
+import '../commands/fterm_shortcut_spec.dart';
+import '../commands/settings_descriptors.dart';
+import '../commands/shortcut_catalog.dart';
 import '../input/key_chord.dart';
 import '../workspace/fterm_workspace_controller.dart';
-import '../workspace/split_tree_model.dart';
 
 /// Dispatches `fterm` modal `Ctrl+\` chords, desktop OS shortcuts, and `F12`
 /// capture/passthrough rules ahead of `TerminalSurface` IME encoding.
@@ -57,17 +62,31 @@ final class FtermShortcutDispatcher {
     LogicalKeyboardKey.capsLock,
   };
 
+  static final List<FtermDescriptor> _defaultShortcutDescriptors =
+      List<FtermDescriptor>.unmodifiable(<FtermDescriptor>[
+        for (final descriptor in allActionDescriptors)
+          if (descriptor.shortcut != null) descriptor,
+        for (final descriptor in allSettingDescriptors)
+          if (descriptor is FtermToggleSettingDescriptor &&
+              descriptor.shortcut != null)
+            descriptor,
+      ]);
+
   /// Backing workspace mutated by recognized shortcuts.
   final FtermWorkspaceController workspace;
 
   final TargetPlatform? _platformOverride;
   final bool? _isWebOverride;
+  final Set<String> _enabledFeatures;
+  final List<FtermDescriptor>? _descriptorsOverride;
 
   /// Creates a shortcut dispatcher bound to [workspace].
   const FtermShortcutDispatcher({
     required this.workspace,
     this._platformOverride,
     this._isWebOverride,
+    this._enabledFeatures = const <String>{},
+    this._descriptorsOverride,
   });
 
   static const double _fontZoomStep = 1.0;
@@ -75,6 +94,17 @@ final class FtermShortcutDispatcher {
   TargetPlatform get _platform => _platformOverride ?? defaultTargetPlatform;
   bool get _isMacOs => _platform == TargetPlatform.macOS;
   bool get _isWeb => _isWebOverride ?? kIsWeb;
+
+  FtermCapabilityContext get _capabilities =>
+      FtermCapabilityContext.fromWorkspace(
+        workspace,
+        isWeb: _isWeb,
+        platform: _platform,
+        enabledFeatures: _enabledFeatures,
+      );
+
+  List<FtermDescriptor> get _shortcutDescriptors =>
+      _descriptorsOverride ?? _defaultShortcutDescriptors;
 
   /// Resolves the active [TerminalMetaKeyPolicy] for unhandled `Meta`/`Cmd`
   /// combinations based on `workspace.preferences.metaKeyMode`, platform, and
@@ -153,7 +183,11 @@ final class FtermShortcutDispatcher {
     KeyEvent event,
     Set<ev.Modifier> modifiers,
   ) {
-    if (!_isCtrlShiftKey(event.logicalKey, LogicalKeyboardKey.f6, modifiers)) {
+    final stroke = FtermShortcuts.emergencyStopShaders.universalDesktopStroke!;
+    if (!stroke.matches(event.logicalKey, modifiers)) {
+      return false;
+    }
+    if (!_isDescriptorVisible('shader.emergency_stop', _capabilities)) {
       return false;
     }
     if (event is KeyDownEvent) {
@@ -179,30 +213,16 @@ final class FtermShortcutDispatcher {
     }
     if (workspace.activeOverlay == FtermOverlay.commandPalette &&
         event is KeyDownEvent &&
-        _isCommandPaletteToggleShortcut(event.logicalKey, modifiers)) {
+        FtermShortcuts.commandPalette.matchesDesktopStroke(
+          event.logicalKey,
+          modifiers,
+          _capabilities,
+        )) {
       workspace.dismissOverlay();
       return true;
     }
     // Let modal controls, FocusTraversalGroup (Tab), and DefaultTextEditingShortcuts
     // handle overlay keys while workspace panes stay excluded via ExcludeFocus.
-    return false;
-  }
-
-  bool _isCommandPaletteToggleShortcut(
-    LogicalKeyboardKey key,
-    Set<ev.Modifier> modifiers,
-  ) {
-    if (_isWeb || key != LogicalKeyboardKey.keyP) return false;
-    if (_platform == TargetPlatform.macOS) {
-      return modifiers.contains(ev.Modifier.meta) &&
-          modifiers.contains(ev.Modifier.shift) &&
-          !modifiers.contains(ev.Modifier.control) &&
-          !modifiers.contains(ev.Modifier.alt);
-    }
-    if (_platform == TargetPlatform.linux ||
-        _platform == TargetPlatform.windows) {
-      return _isCtrlShiftKey(key, LogicalKeyboardKey.keyP, modifiers);
-    }
     return false;
   }
 
@@ -213,12 +233,20 @@ final class FtermShortcutDispatcher {
     }
     workspace.setLeaderArmed(false);
     if (event is! KeyDownEvent) return true;
-    if (_isZeroKey(event.logicalKey)) {
+    final shift =
+        modifiers.contains(ev.Modifier.shift) ||
+        HardwareKeyboard.instance.isShiftPressed;
+    if (FtermShortcuts.emergencyStopShaders.leaderChord!.matches(
+          event.logicalKey,
+          shift: shift,
+        ) &&
+        _isDescriptorVisible('shader.emergency_stop', _capabilities)) {
       workspace.toggleShaderEmergencyStop();
     } else if (workspace.activeOverlay == FtermOverlay.commandPalette &&
-        event.logicalKey == LogicalKeyboardKey.keyP &&
-        (modifiers.contains(ev.Modifier.shift) ||
-            HardwareKeyboard.instance.isShiftPressed)) {
+        FtermShortcuts.commandPalette.leaderChord!.matches(
+          event.logicalKey,
+          shift: shift,
+        )) {
       workspace.dismissOverlay();
     }
     return true;
@@ -258,144 +286,65 @@ final class FtermShortcutDispatcher {
     if (key == LogicalKeyboardKey.escape) {
       return true;
     }
-    if (_dispatchSplitOrFocusChord(key, ch, shift)) {
+    if (_dispatchLeaderSpecialChord(key, ch, shift)) {
       return true;
     }
-    if (_dispatchTabOrModalChord(key, ch, shift)) {
+    if (_dispatchLeaderDescriptor(key, ch, shift, _capabilities)) {
       return true;
     }
+    _selectDigitTab(key);
     return true;
   }
 
-  bool _dispatchSplitOrFocusChord(
+  bool _dispatchLeaderSpecialChord(
     LogicalKeyboardKey key,
     String? ch,
     bool shift,
   ) {
-    final isHorizSplit =
-        ch == '|' ||
-        ch == '%' ||
-        key == LogicalKeyboardKey.bar ||
-        key == LogicalKeyboardKey.percent ||
-        (shift &&
-            (key == LogicalKeyboardKey.backslash ||
-                key == LogicalKeyboardKey.digit5));
-    if (isHorizSplit) {
-      unawaited(workspace.splitFocusedPane(SplitAxis.horizontal));
+    if (FtermShortcuts.commandPalette.leaderChord!.matches(
+      key,
+      shift: shift,
+      character: ch,
+    )) {
+      workspace.openCommandPalette(initialInput: '>');
       return true;
     }
-
-    final isVertSplit =
-        ch == '-' ||
-        ch == '"' ||
-        key == LogicalKeyboardKey.minus ||
-        key == LogicalKeyboardKey.quote ||
-        (shift && key == LogicalKeyboardKey.quoteSingle);
-    if (isVertSplit) {
-      unawaited(workspace.splitFocusedPane(SplitAxis.vertical));
-      return true;
-    }
-
-    final direction = _mapFocusDirection(key);
-    if (direction != null) {
-      workspace.focusDirection(direction);
-      return true;
-    }
-
-    if (key == LogicalKeyboardKey.keyZ) {
-      workspace.toggleZoom();
-      return true;
-    }
-    if (key == LogicalKeyboardKey.keyB) {
-      unawaited(workspace.togglePaneShare());
+    if (FtermShortcuts.openSettings.leaderChord!.matches(
+      key,
+      shift: shift,
+      character: ch,
+    )) {
+      workspace.setOverlay(FtermOverlay.settings);
       return true;
     }
     return false;
   }
 
-  bool _dispatchTabOrModalChord(
+  bool _dispatchLeaderDescriptor(
     LogicalKeyboardKey key,
     String? ch,
     bool shift,
+    FtermCapabilityContext ctx,
   ) {
-    if (_isZeroKey(key)) {
-      workspace.toggleShaderEmergencyStop();
+    for (final descriptor in _shortcutDescriptors) {
+      final chord = _shortcutOf(descriptor)?.leaderChord;
+      if (chord == null || !chord.matches(key, shift: shift, character: ch)) {
+        continue;
+      }
+      if (!descriptor.isVisibleFor(ctx)) return false;
+      _executeDescriptor(descriptor);
       return true;
     }
-    if (key == LogicalKeyboardKey.keyE) {
-      unawaited(workspace.openShaderEditorTab());
-      return true;
-    }
+    return false;
+  }
+
+  bool _selectDigitTab(LogicalKeyboardKey key) {
     final digit = _digitIndices[key];
-    if (digit != null) {
-      if (digit < workspace.tabs.length) {
-        workspace.selectTab(digit);
-      }
-      return true;
+    if (digit == null) return false;
+    if (digit < workspace.tabs.length) {
+      workspace.selectTab(digit);
     }
-    final modalOverlay = _mapModalOverlay(key, ch, shift);
-    if (modalOverlay != null) {
-      workspace.setOverlay(modalOverlay);
-      return true;
-    }
-    if (key == LogicalKeyboardKey.keyN) {
-      workspace.cycleTab();
-      return true;
-    }
-    if (key == LogicalKeyboardKey.keyP) {
-      if (shift) {
-        workspace.openCommandPalette(initialInput: '>');
-      } else {
-        workspace.cycleTab(reverse: true);
-      }
-      return true;
-    }
-    if (key == LogicalKeyboardKey.keyX) {
-      unawaited(workspace.closePane());
-      return true;
-    }
-    if (key == LogicalKeyboardKey.keyD || key == LogicalKeyboardKey.space) {
-      workspace.cycleDockPosition();
-      return true;
-    }
-    return false;
-  }
-
-  FocusDirection? _mapFocusDirection(LogicalKeyboardKey key) {
-    if (key == LogicalKeyboardKey.keyH || key == LogicalKeyboardKey.arrowLeft) {
-      return FocusDirection.left;
-    }
-    if (key == LogicalKeyboardKey.keyJ || key == LogicalKeyboardKey.arrowDown) {
-      return FocusDirection.down;
-    }
-    if (key == LogicalKeyboardKey.keyK || key == LogicalKeyboardKey.arrowUp) {
-      return FocusDirection.up;
-    }
-    if (key == LogicalKeyboardKey.keyL ||
-        key == LogicalKeyboardKey.arrowRight) {
-      return FocusDirection.right;
-    }
-    return null;
-  }
-
-  FtermOverlay? _mapModalOverlay(
-    LogicalKeyboardKey key,
-    String? ch,
-    bool shift,
-  ) {
-    if (key == LogicalKeyboardKey.keyC) return FtermOverlay.sessionPicker;
-    if (key == LogicalKeyboardKey.keyR) return FtermOverlay.rename;
-    if (key == LogicalKeyboardKey.comma || ch == ',') {
-      return FtermOverlay.settings;
-    }
-    if (key == LogicalKeyboardKey.keyI) return FtermOverlay.stats;
-    if (key == LogicalKeyboardKey.keyA) return FtermOverlay.about;
-    final isQuestion =
-        ch == '?' ||
-        key == LogicalKeyboardKey.question ||
-        (shift && key == LogicalKeyboardKey.slash);
-    if (isQuestion) return FtermOverlay.help;
-    return null;
+    return true;
   }
 
   bool _hasZoomModifiers(Set<ev.Modifier> modifiers) {
@@ -434,75 +383,146 @@ final class FtermShortcutDispatcher {
   }
 
   bool _handleDesktopShortcut(KeyDownEvent event, Set<ev.Modifier> modifiers) {
-    if (_isWeb) return false;
-    if (_isCtrlShiftKey(event.logicalKey, LogicalKeyboardKey.f5, modifiers)) {
-      unawaited(workspace.reloadShaders());
+    final ctx = _capabilities;
+    if (ctx.isWeb) return false;
+    final key = event.logicalKey;
+
+    if (_dispatchDesktopSpecialShortcut(key, modifiers, ctx)) {
       return true;
     }
-    if (_isCtrlShiftKey(event.logicalKey, LogicalKeyboardKey.f9, modifiers)) {
-      workspace.togglePerfHud();
+    if (_handleDesktopDigitTab(key, modifiers, ctx)) {
       return true;
     }
-    if (_isCtrlShiftKey(event.logicalKey, LogicalKeyboardKey.f10, modifiers)) {
-      unawaited(workspace.toggleTraceRecording());
+    return _dispatchDesktopDescriptor(key, modifiers, ctx);
+  }
+
+  bool _dispatchDesktopSpecialShortcut(
+    LogicalKeyboardKey key,
+    Set<ev.Modifier> modifiers,
+    FtermCapabilityContext ctx,
+  ) {
+    if (FtermShortcuts.commandPalette.matchesDesktopStroke(
+      key,
+      modifiers,
+      ctx,
+    )) {
+      workspace.openCommandPalette(initialInput: '>');
       return true;
     }
-    if (_platform == TargetPlatform.macOS) {
-      return _handleMacOsShortcut(event.logicalKey, modifiers);
+    if (FtermShortcuts.openSettings.matchesDesktopStroke(key, modifiers, ctx)) {
+      workspace.setOverlay(FtermOverlay.settings);
+      return true;
     }
-    if (_platform == TargetPlatform.linux ||
-        _platform == TargetPlatform.windows) {
-      return _handleLinuxWindowsShortcut(event.logicalKey, modifiers);
+    if (ctx.isMacOs &&
+        FtermShortcuts.saveShader.matchesDesktopStroke(key, modifiers, ctx)) {
+      return _handleEditorSaveShortcut(shift: false);
+    }
+    if (ctx.isMacOs &&
+        FtermShortcuts.saveShaderAs.matchesDesktopStroke(key, modifiers, ctx)) {
+      return _handleEditorSaveShortcut(shift: true);
+    }
+    if (FtermShortcuts.newLocalShell.matchesDesktopStroke(
+      key,
+      modifiers,
+      ctx,
+    )) {
+      return _dispatchNewTabDesktopShortcut(ctx);
     }
     return false;
   }
 
-  static bool _isZeroKey(LogicalKeyboardKey key) =>
-      key == LogicalKeyboardKey.digit0 || key == LogicalKeyboardKey.numpad0;
-
-  static bool _isCtrlShiftKey(
-    LogicalKeyboardKey actual,
-    LogicalKeyboardKey expected,
-    Set<ev.Modifier> modifiers,
-  ) =>
-      actual == expected &&
-      modifiers.contains(ev.Modifier.control) &&
-      modifiers.contains(ev.Modifier.shift) &&
-      !modifiers.contains(ev.Modifier.alt) &&
-      !modifiers.contains(ev.Modifier.meta);
-
-  bool _handleMacOsShortcut(
-    LogicalKeyboardKey key,
-    Set<ev.Modifier> modifiers,
-  ) {
-    final cmdOnly =
-        modifiers.contains(ev.Modifier.meta) &&
-        !modifiers.contains(ev.Modifier.control) &&
-        !modifiers.contains(ev.Modifier.alt);
-    if (!cmdOnly) return false;
-
-    final shift = modifiers.contains(ev.Modifier.shift);
-    if (shift && key == LogicalKeyboardKey.keyP) {
-      workspace.openCommandPalette(initialInput: '>');
+  bool _dispatchNewTabDesktopShortcut(FtermCapabilityContext ctx) {
+    if (_isDescriptorVisible('workspace.new_local_shell', ctx)) {
+      unawaited(workspace.openLocalShellTab());
       return true;
     }
-    if (key == LogicalKeyboardKey.keyS) {
-      return _handleEditorSaveShortcut(shift: shift);
+    if (!workspace.isDesktopHost) {
+      workspace.setOverlay(FtermOverlay.sessionPicker);
+      return true;
     }
-    if (!shift) {
-      final digit = _digitIndices[key];
-      if (digit != null) {
-        if (digit < workspace.tabs.length) {
-          workspace.selectTab(digit);
-        }
-        return true;
+    return false;
+  }
+
+  bool _handleDesktopDigitTab(
+    LogicalKeyboardKey key,
+    Set<ev.Modifier> modifiers,
+    FtermCapabilityContext ctx,
+  ) {
+    final digit = _digitIndices[key];
+    if (digit == null) return false;
+    final isMacCmdOnly =
+        ctx.isMacOs &&
+        modifiers.contains(ev.Modifier.meta) &&
+        !modifiers.contains(ev.Modifier.shift) &&
+        !modifiers.contains(ev.Modifier.control) &&
+        !modifiers.contains(ev.Modifier.alt);
+    final isLinuxWinCtrlShift =
+        (ctx.isLinux || ctx.isWindows) &&
+        modifiers.contains(ev.Modifier.control) &&
+        modifiers.contains(ev.Modifier.shift) &&
+        !modifiers.contains(ev.Modifier.alt) &&
+        !modifiers.contains(ev.Modifier.meta);
+    if (!isMacCmdOnly && !isLinuxWinCtrlShift) return false;
+    if (digit < workspace.tabs.length) {
+      workspace.selectTab(digit);
+    }
+    return true;
+  }
+
+  bool _dispatchDesktopDescriptor(
+    LogicalKeyboardKey key,
+    Set<ev.Modifier> modifiers,
+    FtermCapabilityContext ctx,
+  ) {
+    for (final descriptor in _shortcutDescriptors) {
+      final binding = _shortcutOf(descriptor);
+      if (binding == null ||
+          !binding.matchesDesktopStroke(key, modifiers, ctx)) {
+        continue;
       }
-      if (key == LogicalKeyboardKey.comma) {
-        workspace.setOverlay(FtermOverlay.settings);
-        return true;
+      if (!descriptor.isVisibleFor(ctx)) return false;
+      _executeDescriptor(descriptor);
+      return true;
+    }
+    return false;
+  }
+
+  bool _isDescriptorVisible(String id, FtermCapabilityContext ctx) {
+    final descriptor = _findDescriptorById(id);
+    return descriptor == null || descriptor.isVisibleFor(ctx);
+  }
+
+  FtermDescriptor? _findDescriptorById(String id) {
+    if (_descriptorsOverride case final custom?) {
+      for (final descriptor in custom) {
+        if (descriptor.id == id) return descriptor;
       }
     }
-    return _dispatchCommonNewCloseSplit(key, shift: shift);
+    return actionDescriptorById(id) ?? settingDescriptorById(id);
+  }
+
+  static FtermShortcutBinding? _shortcutOf(FtermDescriptor descriptor) =>
+      switch (descriptor) {
+        FtermActionDescriptor(:final shortcut) => shortcut,
+        FtermToggleSettingDescriptor(:final shortcut) => shortcut,
+        FtermEnumSettingDescriptor<Object?>() ||
+        FtermSliderSettingDescriptor() ||
+        FtermCustomSettingDescriptor() => null,
+      };
+
+  void _executeDescriptor(FtermDescriptor descriptor) {
+    switch (descriptor) {
+      case FtermActionDescriptor():
+        final result = descriptor.execute(workspace);
+        if (result is Future<void>) unawaited(result);
+      case FtermToggleSettingDescriptor():
+        final result = descriptor.write(workspace, !descriptor.read(workspace));
+        if (result is Future<void>) unawaited(result);
+      case FtermEnumSettingDescriptor<Object?>() ||
+          FtermSliderSettingDescriptor() ||
+          FtermCustomSettingDescriptor():
+        break;
+    }
   }
 
   bool _handleEditorSaveShortcut({required bool shift}) {
@@ -516,66 +536,6 @@ final class FtermShortcutDispatcher {
       unawaited(ctrl.save());
     }
     return true;
-  }
-
-  bool _handleLinuxWindowsShortcut(
-    LogicalKeyboardKey key,
-    Set<ev.Modifier> modifiers,
-  ) {
-    final ctrlShiftOnly =
-        modifiers.contains(ev.Modifier.control) &&
-        modifiers.contains(ev.Modifier.shift) &&
-        !modifiers.contains(ev.Modifier.alt) &&
-        !modifiers.contains(ev.Modifier.meta);
-    if (!ctrlShiftOnly) return false;
-
-    final digit = _digitIndices[key];
-    if (digit != null) {
-      if (digit < workspace.tabs.length) {
-        workspace.selectTab(digit);
-      }
-      return true;
-    }
-    if (key == LogicalKeyboardKey.keyP) {
-      workspace.openCommandPalette(initialInput: '>');
-      return true;
-    }
-    if (key == LogicalKeyboardKey.comma) {
-      workspace.setOverlay(FtermOverlay.settings);
-      return true;
-    }
-    if (key == LogicalKeyboardKey.keyE) {
-      unawaited(workspace.splitFocusedPane(SplitAxis.vertical));
-      return true;
-    }
-    return _dispatchCommonNewCloseSplit(key, shift: false);
-  }
-
-  bool _dispatchCommonNewCloseSplit(
-    LogicalKeyboardKey key, {
-    required bool shift,
-  }) {
-    if (key == LogicalKeyboardKey.keyT && !shift) {
-      if (workspace.isDesktopHost) {
-        unawaited(workspace.openLocalShellTab());
-      } else {
-        workspace.setOverlay(FtermOverlay.sessionPicker);
-      }
-      return true;
-    }
-    if (key == LogicalKeyboardKey.keyW && !shift) {
-      unawaited(workspace.closePane());
-      return true;
-    }
-    if (key == LogicalKeyboardKey.keyD) {
-      unawaited(
-        workspace.splitFocusedPane(
-          shift ? SplitAxis.vertical : SplitAxis.horizontal,
-        ),
-      );
-      return true;
-    }
-    return false;
   }
 
   bool _handleF12Gate(KeyEvent event, Set<ev.Modifier> modifiers) {

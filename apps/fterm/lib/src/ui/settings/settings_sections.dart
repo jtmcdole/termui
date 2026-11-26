@@ -3,15 +3,35 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:material_ui/material_ui.dart';
 import 'package:termui/termui.dart' as tui;
-import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 
+import '../../commands/fterm_capability_context.dart';
+import '../../commands/settings_descriptors.dart';
 import '../../file_drop_bridge.dart';
 import '../../settings_storage.dart';
 import '../../update/update_service.dart';
 import '../../update/update_view_model.dart';
 import '../../workspace/fterm_workspace_controller.dart';
 import '../fterm_overlays.dart';
+import 'settings_descriptor_renderer.dart';
 import 'settings_primitives.dart';
+
+Widget _renderSettingRow(
+  String id, {
+  required FtermWorkspaceController workspace,
+  required FtermOverlayPalette palette,
+  required FtermCapabilityContext capabilities,
+  VoidCallback? onBeforeWrite,
+}) {
+  final descriptor = settingDescriptorById(id);
+  if (descriptor == null) return const SizedBox.shrink();
+  return buildSettingDescriptorWidget(
+    descriptor,
+    workspace: workspace,
+    palette: palette,
+    capabilities: capabilities,
+    onBeforeWrite: onBeforeWrite,
+  );
+}
 
 /// Builds the collapsible panels for the **Interface** section (Tab Bar and
 /// Clipboard & Selection).
@@ -63,16 +83,12 @@ final class _InterfaceTabBarPanel extends StatelessWidget {
     required this.filter,
   });
 
-  static String _dockLabel(DockPosition pos) => switch (pos) {
-    .top => 'Top',
-    .left => 'Left',
-    .hidden => 'Hidden',
-  };
-
   @override
   Widget build(BuildContext context) {
-    final wsSettings = workspace.workspaceSettings;
-    final prefs = workspace.preferences;
+    final capabilities = FtermCapabilityContext.fromWorkspace(
+      workspace,
+      platform: Theme.of(context).platform,
+    );
     return BlenderSettingsPanel(
       id: 'interface-tab-bar',
       title: 'Tab Bar',
@@ -84,33 +100,18 @@ final class _InterfaceTabBarPanel extends StatelessWidget {
         spacing: 8,
         children: [
           if (filter.showItem('interface-dock-position'))
-            BlenderPropertyRow(
-              label: 'Tab Bar Position',
+            _renderSettingRow(
+              'interface-dock-position',
+              workspace: workspace,
               palette: palette,
-              control: BlenderSegmentedControl<DockPosition>(
-                value: wsSettings.dockPosition,
-                palette: palette,
-                options: [
-                  for (final pos in DockPosition.values)
-                    BlenderSegmentedOption<DockPosition>(
-                      key: ValueKey('settings-dock-${pos.name}'),
-                      value: pos,
-                      label: _dockLabel(pos),
-                    ),
-                ],
-                onChanged: workspace.setDockPosition,
-              ),
+              capabilities: capabilities,
             ),
           if (filter.showItem('interface-auto-hide-tab'))
-            BlenderCheckboxRow(
-              label: 'Auto-Hide Single Tab',
-              caption: 'Hide tab bar when only one tab is open',
-              value: prefs.autoHideSingleTab,
-              controlKey: const ValueKey('settings-auto-hide-single'),
+            _renderSettingRow(
+              'interface-auto-hide-tab',
+              workspace: workspace,
               palette: palette,
-              onChanged: (v) => workspace.updatePreferences(
-                prefs.copyWith(autoHideSingleTab: v),
-              ),
+              capabilities: capabilities,
             ),
         ],
       ),
@@ -131,7 +132,10 @@ final class _InterfaceClipboardPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final wsSettings = workspace.workspaceSettings;
+    final capabilities = FtermCapabilityContext.fromWorkspace(
+      workspace,
+      platform: Theme.of(context).platform,
+    );
     return BlenderSettingsPanel(
       id: 'interface-clipboard',
       title: 'Clipboard & Selection',
@@ -143,23 +147,18 @@ final class _InterfaceClipboardPanel extends StatelessWidget {
         spacing: 8,
         children: [
           if (filter.showItem('interface-copy-on-select'))
-            BlenderCheckboxRow(
-              label: 'Copy on Selection',
-              caption: 'Automatically copy highlighted mouse selections',
-              value: wsSettings.copyOnSelect,
-              controlKey: const ValueKey('settings-copy-on-select'),
+            _renderSettingRow(
+              'interface-copy-on-select',
+              workspace: workspace,
               palette: palette,
-              onChanged: workspace.setCopyOnSelect,
+              capabilities: capabilities,
             ),
           if (filter.showItem('interface-osc52'))
-            BlenderCheckboxRow(
-              label: 'Remote OSC 52 Writes',
-              caption: 'Allow focused remote sessions to write clipboard',
-              value: wsSettings.osc52Policy == .allowFocused,
-              controlKey: const ValueKey('settings-osc52-toggle'),
+            _renderSettingRow(
+              'interface-osc52',
+              workspace: workspace,
               palette: palette,
-              onChanged: (enabled) =>
-                  workspace.setOsc52Policy(enabled ? .allowFocused : .deny),
+              capabilities: capabilities,
             ),
         ],
       ),
@@ -296,12 +295,6 @@ final class _ThemesAppearancePanel extends StatelessWidget {
     required this.filter,
   });
 
-  static String _appearanceLabel(ThemeAppearanceMode mode) => switch (mode) {
-    .system => 'System',
-    .dark => 'Dark',
-    .light => 'Light',
-  };
-
   void _selectPreset(String? id) {
     if (id == null) return;
     final preset = tui.TerminalColorTheme.byId(id);
@@ -315,7 +308,10 @@ final class _ThemesAppearancePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final themeSettings = workspace.workspaceSettings.themeSettings;
+    final capabilities = FtermCapabilityContext.fromWorkspace(
+      workspace,
+      platform: Theme.of(context).platform,
+    );
     final activeTheme = workspace.activeTerminalTheme;
     final presets = tui.TerminalColorTheme.presets;
     final selectedPresetId = presets.any((p) => p.id == activeTheme.id)
@@ -332,24 +328,11 @@ final class _ThemesAppearancePanel extends StatelessWidget {
       child: SettingsSpacedColumn(
         children: [
           if (filter.showItem('themes-appearance-mode'))
-            BlenderPropertyRow(
-              label: 'Appearance Mode',
+            _renderSettingRow(
+              'themes-appearance-mode',
+              workspace: workspace,
               palette: palette,
-              control: BlenderSegmentedControl<ThemeAppearanceMode>(
-                value: themeSettings.appearanceMode,
-                palette: palette,
-                options: [
-                  for (final mode in ThemeAppearanceMode.values)
-                    BlenderSegmentedOption<ThemeAppearanceMode>(
-                      key: ValueKey('settings-appearance-${mode.name}'),
-                      value: mode,
-                      label: _appearanceLabel(mode),
-                    ),
-                ],
-                onChanged: (mode) => workspace.setThemeSettings(
-                  themeSettings.copyWith(appearanceMode: mode),
-                ),
-              ),
+              capabilities: capabilities,
             ),
           if (filter.showItem('themes-preset'))
             BlenderPropertyRow(
@@ -436,14 +419,15 @@ final class _ThemesBackgroundPanel extends StatelessWidget {
     child: SettingsSpacedColumn(
       children: [
         if (filter.showItem('themes-bg-opacity'))
-          BlenderSliderRow(
-            label: 'Background Opacity',
-            value: workspace.backgroundOpacity,
-            valueLabel: '${(workspace.backgroundOpacity * 100).round()}%',
-            sliderKey: const ValueKey('settings-background-opacity-slider'),
-            valueKey: const ValueKey('settings-background-opacity-value'),
+          _renderSettingRow(
+            'themes-bg-opacity',
+            workspace: workspace,
             palette: palette,
-            onChanged: workspace.setBackgroundOpacity,
+            capabilities: FtermCapabilityContext.fromWorkspace(
+              workspace,
+              isWeb: isWeb,
+              platform: Theme.of(context).platform,
+            ),
           ),
         if (filter.showItem('themes-wallpaper'))
           _WallpaperPropertyRow(
@@ -755,22 +739,6 @@ final class SettingsShellSection extends StatefulWidget {
 }
 
 final class _SettingsShellSectionState extends State<SettingsShellSection> {
-  static const List<(String id, String label, String? executable)>
-  _posixPresets = [
-    ('default', r'Default ($SHELL)', null),
-    ('zsh', 'zsh', 'zsh'),
-    ('bash', 'bash', 'bash'),
-    ('sh', 'sh', 'sh'),
-  ];
-
-  static const List<(String id, String label, String? executable)>
-  _windowsPresets = [
-    ('default', 'Default', null),
-    ('pwsh', 'pwsh', 'pwsh'),
-    ('powershell', 'PowerShell', 'powershell.exe'),
-    ('cmd', 'cmd', 'cmd.exe'),
-  ];
-
   late final TextEditingController _shellExecCtrl;
   late final TextEditingController _shellArgsCtrl;
 
@@ -818,10 +786,14 @@ final class _SettingsShellSectionState extends State<SettingsShellSection> {
     final ws = widget.workspace;
     final palette = widget.palette;
     final filter = widget.filter;
-    final prefs = ws.preferences;
     final platform = widget.platformOverride ?? Theme.of(context).platform;
     final isWindows = platform == .windows;
-    final presets = isWindows ? _windowsPresets : _posixPresets;
+    final capabilities = FtermCapabilityContext.fromWorkspace(
+      ws,
+      isWeb: false,
+      platform: platform,
+      isDesktopHost: true,
+    );
 
     return BlenderSettingsPanel(
       id: 'shell-default',
@@ -833,31 +805,11 @@ final class _SettingsShellSectionState extends State<SettingsShellSection> {
       child: SettingsSpacedColumn(
         children: [
           if (filter.showItem('shell-preset'))
-            BlenderPropertyRow(
-              label: 'Shell Preset',
+            _renderSettingRow(
+              'shell-preset',
+              workspace: ws,
               palette: palette,
-              hint: Text(
-                'Applies to newly opened tabs and split panes.',
-                style: TextStyle(color: palette.muted, fontSize: 10.5),
-              ),
-              control: BlenderSegmentedControl<String?>(
-                value: prefs.shellExecutable,
-                palette: palette,
-                options: [
-                  for (final preset in presets)
-                    BlenderSegmentedOption<String?>(
-                      key: ValueKey('settings-shell-preset-${preset.$1}'),
-                      value: preset.$3,
-                      label: preset.$2,
-                    ),
-                ],
-                onChanged: (selected) => ws.updatePreferences(
-                  ws.preferences.copyWith(
-                    shellExecutable: selected,
-                    clearShellExecutable: selected == null,
-                  ),
-                ),
-              ),
+              capabilities: capabilities,
             ),
           if (filter.showItem('shell-executable'))
             BlenderPropertyRow(
@@ -905,14 +857,11 @@ final class _SettingsShellSectionState extends State<SettingsShellSection> {
               ),
             ),
           if (filter.showItem('shell-login'))
-            BlenderCheckboxRow(
-              label: 'Login Shell (-l)',
-              caption: 'Launch POSIX shells with -l when arguments are empty',
-              value: prefs.loginShell,
-              controlKey: const ValueKey('settings-login-shell'),
+            _renderSettingRow(
+              'shell-login',
+              workspace: ws,
               palette: palette,
-              onChanged: (v) =>
-                  ws.updatePreferences(ws.preferences.copyWith(loginShell: v)),
+              capabilities: capabilities,
             ),
         ],
       ),
@@ -992,29 +941,33 @@ final class _SystemGraphicsPanel extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => BlenderSettingsPanel(
-    id: 'system-graphics',
-    title: 'Graphics & Performance',
-    categoryBreadcrumb: filter.categoryBreadcrumb,
-    expanded: filter.panelExpanded('system-graphics'),
-    onToggleExpanded: filter.toggleFor('system-graphics'),
-    palette: palette,
-    child: SettingsSpacedColumn(
-      children: [
-        if (showPerfHud)
-          BlenderCheckboxRow(
-            label: 'Performance HUD',
-            caption: 'Show live FPS & frame timing overlay (Ctrl+Shift+F9)',
-            value: workspace.showPerfHud,
-            controlKey: const ValueKey('settings-perf-hud-switch'),
-            palette: palette,
-            onChanged: workspace.setShowPerfHud,
-          ),
-        if (showGpuDriver)
-          _GpuDriverPreferenceRow(workspace: workspace, palette: palette),
-      ],
-    ),
-  );
+  Widget build(BuildContext context) {
+    final capabilities = FtermCapabilityContext.fromWorkspace(
+      workspace,
+      platform: Theme.of(context).platform,
+    );
+    return BlenderSettingsPanel(
+      id: 'system-graphics',
+      title: 'Graphics & Performance',
+      categoryBreadcrumb: filter.categoryBreadcrumb,
+      expanded: filter.panelExpanded('system-graphics'),
+      onToggleExpanded: filter.toggleFor('system-graphics'),
+      palette: palette,
+      child: SettingsSpacedColumn(
+        children: [
+          if (showPerfHud)
+            _renderSettingRow(
+              'system-perf-hud',
+              workspace: workspace,
+              palette: palette,
+              capabilities: capabilities,
+            ),
+          if (showGpuDriver)
+            _GpuDriverPreferenceRow(workspace: workspace, palette: palette),
+        ],
+      ),
+    );
+  }
 }
 
 final class _SystemSoundPanel extends StatelessWidget {
@@ -1030,7 +983,10 @@ final class _SystemSoundPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final prefs = workspace.preferences;
+    final capabilities = FtermCapabilityContext.fromWorkspace(
+      workspace,
+      platform: Theme.of(context).platform,
+    );
     return BlenderSettingsPanel(
       id: 'system-sound',
       title: 'Sound',
@@ -1042,25 +998,18 @@ final class _SystemSoundPanel extends StatelessWidget {
         spacing: 8,
         children: [
           if (filter.showItem('system-audio-mute'))
-            BlenderCheckboxRow(
-              label: 'Mute Terminal Audio',
-              caption: 'Silence terminal bell & APC synthesized audio',
-              value: prefs.audioMuted,
-              controlKey: const ValueKey('settings-audio-mute'),
+            _renderSettingRow(
+              'system-audio-mute',
+              workspace: workspace,
               palette: palette,
-              onChanged: (v) =>
-                  workspace.updatePreferences(prefs.copyWith(audioMuted: v)),
+              capabilities: capabilities,
             ),
           if (filter.showItem('system-audio-volume'))
-            BlenderSliderRow(
-              label: 'Output Volume',
-              value: prefs.audioVolume,
-              valueLabel: '${(prefs.audioVolume * 100).round()}%',
-              sliderKey: const ValueKey('settings-audio-volume-slider'),
-              valueKey: const ValueKey('settings-audio-volume-value'),
+            _renderSettingRow(
+              'system-audio-volume',
+              workspace: workspace,
               palette: palette,
-              onChanged: (v) =>
-                  workspace.updatePreferences(prefs.copyWith(audioVolume: v)),
+              capabilities: capabilities,
             ),
         ],
       ),
@@ -1140,13 +1089,6 @@ final class _ActiveSessionRestartConfirm extends StatelessWidget {
 }
 
 final class _GpuDriverPreferenceRow extends StatefulWidget {
-  static const List<(GpuDriverPreference, String)> _options =
-      <(GpuDriverPreference, String)>[
-        (.auto, 'Auto'),
-        (.highPerformance, 'High Performance'),
-        (.powerSaving, 'Power Saving'),
-      ];
-
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
 
@@ -1185,31 +1127,25 @@ final class _GpuDriverPreferenceRowState
     final current = ws.gpuDriverPreference;
     final showIntegratedCapTip =
         current == .powerSaving && ws.maxShaderFps == null;
+    final capabilities = FtermCapabilityContext.fromWorkspace(
+      ws,
+      isWeb: false,
+      platform: .windows,
+    );
 
     return SettingsSpacedColumn(
       spacing: 8,
       children: [
-        BlenderPropertyRow(
-          label: 'GPU Adapter',
+        _renderSettingRow(
+          'system-gpu-driver',
+          workspace: ws,
           palette: palette,
-          control: BlenderSegmentedControl<GpuDriverPreference>(
-            value: current,
-            palette: palette,
-            options: [
-              for (final (pref, label) in _GpuDriverPreferenceRow._options)
-                BlenderSegmentedOption<GpuDriverPreference>(
-                  key: ValueKey('settings-gpu-driver-${pref.name}'),
-                  value: pref,
-                  label: label,
-                ),
-            ],
-            onChanged: (pref) {
-              if (_awaitingRestartConfirm) {
-                setState(() => _awaitingRestartConfirm = false);
-              }
-              ws.setGpuDriverPreference(pref);
-            },
-          ),
+          capabilities: capabilities,
+          onBeforeWrite: () {
+            if (_awaitingRestartConfirm) {
+              setState(() => _awaitingRestartConfirm = false);
+            }
+          },
         ),
         if (ws.gpuDriverRestartRequired)
           _GpuDriverRestartControls(
@@ -1391,8 +1327,13 @@ final class _UpdatesApplicationPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final prefs = workspace.preferences;
     final isBusy = vm.status == .checking || vm.status == .downloading;
+    final capabilities = FtermCapabilityContext.fromWorkspace(
+      workspace,
+      isWeb: false,
+      platform: Theme.of(context).platform,
+      supportsUpdates: true,
+    );
     return BlenderSettingsPanel(
       id: 'updates-application',
       title: 'Application Updates',
@@ -1432,26 +1373,18 @@ final class _UpdatesApplicationPanel extends StatelessWidget {
               ),
             ),
           if (filter.showItem('updates-daily'))
-            BlenderCheckboxRow(
-              label: 'Automatic Check',
-              caption: 'Check daily for updates',
-              value: prefs.updateCheckMode == .daily,
-              controlKey: const ValueKey('settings-update-daily'),
+            _renderSettingRow(
+              'updates-daily',
+              workspace: workspace,
               palette: palette,
-              onChanged: (daily) => workspace.updatePreferences(
-                prefs.copyWith(updateCheckMode: daily ? .daily : .manual),
-              ),
+              capabilities: capabilities,
             ),
           if (filter.showItem('updates-prereleases'))
-            BlenderCheckboxRow(
-              label: 'Pre-Releases',
-              caption: 'Include pre-release builds (rc / beta)',
-              value: prefs.includePrereleases,
-              controlKey: const ValueKey('settings-update-prereleases'),
+            _renderSettingRow(
+              'updates-prereleases',
+              workspace: workspace,
               palette: palette,
-              onChanged: (inc) => workspace.updatePreferences(
-                prefs.copyWith(includePrereleases: inc),
-              ),
+              capabilities: capabilities,
             ),
           if (vm.statusMessage case final infoMsg?)
             Text(
