@@ -14,6 +14,7 @@ import '../workspace/fterm_workspace_controller.dart';
 import '../workspace/split_tree_model.dart';
 import 'fterm_about_overlay.dart';
 import 'fterm_feedback_overlay.dart';
+import 'palette/fterm_command_palette_overlay.dart';
 import 'settings/fterm_settings_overlay.dart';
 
 /// Modal overlays rendered over the terminal workspace when [FtermOverlay] !=
@@ -59,7 +60,19 @@ final class FtermOverlayHost extends StatelessWidget {
       FtermOverlay.about => (540.0, 560.0),
       FtermOverlay.feedback => (560.0, 620.0),
       FtermOverlay.whatsNew => (580.0, 580.0),
+      FtermOverlay.help => (560.0, 620.0),
+      FtermOverlay.commandPalette => (620.0, 420.0),
       _ => (520.0, 540.0),
+    };
+    final isCommandPalette = overlay == FtermOverlay.commandPalette;
+    final dismissOnScrimTap =
+        overlay == FtermOverlay.about ||
+        overlay == FtermOverlay.whatsNew ||
+        isCommandPalette;
+    final scrimColor = switch (overlay) {
+      FtermOverlay.commandPalette => Colors.transparent,
+      FtermOverlay.whatsNew => const Color(0x4D000000),
+      _ => const Color(0x99000000),
     };
 
     return _ModalFocusGuard(
@@ -71,21 +84,18 @@ final class FtermOverlayHost extends StatelessWidget {
             child: GestureDetector(
               key: const ValueKey('fterm-overlay-scrim'),
               behavior: HitTestBehavior.opaque,
-              onTap:
-                  overlay == FtermOverlay.about ||
-                      overlay == FtermOverlay.whatsNew
-                  ? workspace.dismissOverlay
-                  : null,
-              child: ColoredBox(
-                color: overlay == FtermOverlay.whatsNew
-                    ? const Color(0x4D000000)
-                    : const Color(0x99000000),
-              ),
+              onTap: dismissOnScrimTap ? workspace.dismissOverlay : null,
+              child: ColoredBox(color: scrimColor),
             ),
           ),
-          Center(
+          Align(
+            alignment: isCommandPalette
+                ? Alignment.topCenter
+                : Alignment.center,
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: isCommandPalette
+                  ? const EdgeInsets.fromLTRB(16, 36, 16, 16)
+                  : const EdgeInsets.all(16),
               child: ConstrainedBox(
                 constraints: BoxConstraints(
                   maxWidth: maxWidth,
@@ -160,7 +170,12 @@ final class FtermOverlayHost extends StatelessWidget {
                         palette: palette,
                         isWeb: isWeb,
                       ),
-                      FtermOverlay.commandPalette => const SizedBox.shrink(),
+                      FtermOverlay.commandPalette => FtermCommandPaletteOverlay(
+                        workspace: workspace,
+                        palette: palette,
+                        isWeb: isWeb,
+                        platformOverride: platformOverride,
+                      ),
                     },
                   ),
                 ),
@@ -1025,6 +1040,8 @@ final class _HelpOverlay extends StatelessWidget {
   const _HelpOverlay({required this.workspace, required this.palette});
 
   static const List<(String, String)> _entries = [
+    ('Ctrl+Shift+P / Cmd+Shift+P', 'Command Palette (>, :, %, Quick Switch)'),
+    (r'Ctrl+\ then Shift+P', 'Command Palette (Desktop & Web)'),
     (r'Ctrl+\ then | or %', 'Split pane left | right'),
     (r'Ctrl+\ then - or "', 'Split pane top / bottom'),
     (r'Ctrl+\ then h j k l / Arrows', 'Focus adjacent split pane'),

@@ -1076,6 +1076,10 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
               hoveredLinkStyler: _styleHoveredRainbowLink,
               hoveredLinkAnimationInterval:
                   WorkspaceBufferCompositor.rainbowHoverTickInterval,
+              searchHighlightsProvider: pane.readSearchHighlights,
+              searchHighlightsListenable: pane.searchHighlightsListenable,
+              searchMatchColor: Color(theme.resolveAnsi256(4).argb),
+              activeSearchMatchColor: Color(theme.resolveAnsi256(3).argb),
               enableHostShortcuts: true,
               alignment: Alignment.topLeft,
               onViewportSizeChanged: pane.updateViewportSize,
@@ -1819,6 +1823,17 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
         onTap: () => widget.workspace.updatePreferences(
           widget.workspace.preferences.copyWith(audioMuted: !muted),
         ),
+      ),
+      _chromeIconButton(
+        key: const ValueKey('fterm-command-palette-button'),
+        tooltip: _isWeb
+            ? r'Command Palette (Ctrl+\ Shift+P)'
+            : (_platform == TargetPlatform.macOS
+                  ? 'Command Palette (Cmd+Shift+P)'
+                  : 'Command Palette (Ctrl+Shift+P)'),
+        icon: Icons.manage_search,
+        color: fg.withValues(alpha: 0.72),
+        onTap: () => widget.workspace.openCommandPalette(initialInput: '>'),
       ),
       _buildSettingsActionButton(theme),
       _chromeIconButton(
