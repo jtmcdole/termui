@@ -154,6 +154,13 @@ abstract interface class LocalPaneHost {
   Future<void> dispose();
 }
 
+/// Opt-in [LocalPaneHost] capability exposing OSC 133;A shell prompt line
+/// indices in primary scrollback.
+abstract interface class PromptIndexedPaneHost implements LocalPaneHost {
+  /// Monotonic line indices of OSC 133;A shell prompts in primary scrollback.
+  List<int> get promptLines;
+}
+
 /// Platform seam spawning local interactive shells and optional relay shares.
 abstract interface class LocalHostDriver {
   /// Whether this host supports spawning local native PTY shells (`true` on

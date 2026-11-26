@@ -392,7 +392,7 @@ final class IoLocalHostDriver implements LocalHostDriver {
   }
 }
 
-final class _IoLocalPaneHost implements LocalPaneHost {
+final class _IoLocalPaneHost implements PromptIndexedPaneHost {
   @override
   final String id;
   final String _executableName;
@@ -577,6 +577,10 @@ final class _IoLocalPaneHost implements LocalPaneHost {
   @override
   bool isLiveRowWrapped(int row) =>
       !_disposed && _session.terminal.isRowWrapped(row);
+
+  @override
+  List<int> get promptLines =>
+      !_disposed ? _session.terminal.promptLineIndices : const <int>[];
 
   Future<void> _disposeLocalPty() async {
     await port.dispose();

@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart'
         Listenable,
         ValueListenable,
         VoidCallback,
+        listEquals,
         visibleForTesting;
 import 'package:termui/terminal/event.dart' as ev;
 import 'package:termui/termui.dart' as tui;
@@ -20,6 +21,7 @@ import 'package:termui_flutter/termui_flutter.dart'
         GpuFrameWatchdog,
         ShaderBackendKind,
         TerminalBufferChangeSignal,
+        TerminalSearchHighlight,
         TerminalShaderBackend,
         TerminalShaderConfig;
 import 'package:termui_pty/termui_pty.dart';
@@ -79,6 +81,10 @@ final class _PaneChangeNotifier extends ChangeNotifier
   void emitChange() => notifyListeners();
 }
 
+final class _SearchHighlightsNotifier extends ChangeNotifier {
+  void emitChange() => notifyListeners();
+}
+
 /// Manages live buffer compositing, scrollback offset, cursor rendering,
 /// debounced viewport resizing, and encoded input for a single split pane.
 final class FtermPaneController {
@@ -101,6 +107,10 @@ final class FtermPaneController {
   final Duration _resizeDebounce;
   final _PaneChangeNotifier _visualNotifier = _PaneChangeNotifier();
   final _PaneChangeNotifier _pillNotifier = _PaneChangeNotifier();
+  final _SearchHighlightsNotifier _searchHighlightsNotifier =
+      _SearchHighlightsNotifier();
+  List<TerminalSearchHighlight> _searchHighlights =
+      const <TerminalSearchHighlight>[];
   final void Function(tui.Buffer buffer)? _onFrameRedrawn;
 
   PaneBellCallback? _onBell;
@@ -258,6 +268,23 @@ final class FtermPaneController {
   /// (scrollback offset transitions, share status updates, or process exit).
   Listenable get pillNotifier => _pillNotifier;
 
+  /// Listenable triggered when active terminal search highlights change.
+  Listenable get searchHighlightsListenable => _searchHighlightsNotifier;
+
+  /// Stable tear-off reading active search highlight spans for
+  /// `TerminalSurface.searchHighlightsProvider`.
+  List<TerminalSearchHighlight> readSearchHighlights() => _searchHighlights;
+
+  /// Replaces active terminal search highlight spans and notifies listeners
+  /// only when the list changes.
+  void setSearchHighlights(List<TerminalSearchHighlight> highlights) {
+    if (_disposed || listEquals(_searchHighlights, highlights)) return;
+    _searchHighlights = highlights.isEmpty
+        ? const <TerminalSearchHighlight>[]
+        : List<TerminalSearchHighlight>.unmodifiable(highlights);
+    _searchHighlightsNotifier.emitChange();
+  }
+
   /// Active listener count registered on [visualNotifier] (for regression tests).
   @visibleForTesting
   int get debugVisualListenerCount => _visualNotifier._listenerCount;
@@ -284,6 +311,39 @@ final class FtermPaneController {
 
   /// Stable tear-off reading [topVirtualRow] for `TerminalSurface`.
   int readTopVirtualRow() => topVirtualRow;
+
+  /// Number of retained primary-screen scrollback lines above live rows (`0` on
+  /// alternate screen).
+  int get retainedScrollbackLines => port.modes.altScreen
+      ? 0
+      : _retainedScrollbackLines(port.scrollbackWindow);
+
+  /// Monotonic virtual row index of the oldest retained line (`0` on alternate
+  /// screen).
+  int get oldestVirtualRow =>
+      port.modes.altScreen ? 0 : port.scrollbackWindow.oldestLine;
+
+  /// Exclusive upper bound of virtual rows (`[oldestVirtualRow .. totalVirtualLines)`).
+  int get totalVirtualLines {
+    final liveHeight = displayBuffer.height;
+    if (port.modes.altScreen) return liveHeight;
+    return port.scrollbackWindow.totalLines + liveHeight;
+  }
+
+  /// Monotonic virtual row indices of OSC 133;A shell prompts within
+  /// `[oldestVirtualRow .. totalVirtualLines)` (`const []` on alternate screen
+  /// or panes without [PromptIndexedPaneHost]).
+  List<int> get promptLines {
+    if (_disposed || port.modes.altScreen) return const <int>[];
+    final host = localHost;
+    if (host is! PromptIndexedPaneHost) return const <int>[];
+    final minRow = oldestVirtualRow;
+    final maxRow = totalVirtualLines;
+    return List<int>.unmodifiable(<int>[
+      for (final row in host.promptLines)
+        if (row >= minRow && row < maxRow) row,
+    ]);
+  }
 
   /// Epoch token combining scrollback `clearSeq` and `altScreen` state so
   /// selections reset cleanly on screen switches or history clears.
@@ -623,11 +683,29 @@ final class FtermPaneController {
   /// Scrolls primary-screen history by [deltaLines] (`+` = up, `-` = down).
   void scrollLines(int deltaLines) {
     if (_disposed || deltaLines == 0 || port.modes.altScreen) return;
+    setScrollOffsetLines(_scrollOffsetLines + deltaLines);
+  }
+
+  /// Sets primary-screen scrollback offset directly (`0` = live bottom),
+  /// clamped to `[0 .. retainedScrollbackLines]`. No-op on alternate screen.
+  void setScrollOffsetLines(int offset) {
+    if (_disposed || port.modes.altScreen) return;
     final retained = _retainedScrollbackLines(port.scrollbackWindow);
-    final next = (_scrollOffsetLines + deltaLines).clamp(0, retained);
+    final next = offset.clamp(0, retained);
     if (next == _scrollOffsetLines) return;
     _scrollOffsetLines = next;
     _recomposite(notify: true);
+  }
+
+  /// Scrolls primary-screen history so [virtualRow] is brought into view
+  /// (centered vertically when [centerInViewport] is `true`). No-op on
+  /// alternate screen.
+  void scrollToVirtualRow(int virtualRow, {bool centerInViewport = true}) {
+    if (_disposed || port.modes.altScreen) return;
+    final sbWin = port.scrollbackWindow;
+    final liveHeight = displayBuffer.height;
+    final targetTop = virtualRow - (centerInViewport ? liveHeight ~/ 2 : 0);
+    setScrollOffsetLines(sbWin.totalLines - targetTop);
   }
 
   /// Resets scrollback offset back to live bottom (`0`).
@@ -1134,6 +1212,8 @@ final class FtermPaneController {
     port.removeClipboardListener(_handleClipboard);
     _cliShaderState.dispose();
     _bufferListenable?.dispose();
+    _searchHighlights = const <TerminalSearchHighlight>[];
+    _searchHighlightsNotifier.dispose();
     _visualNotifier.dispose();
     _pillNotifier.dispose();
     if (disposePort) {

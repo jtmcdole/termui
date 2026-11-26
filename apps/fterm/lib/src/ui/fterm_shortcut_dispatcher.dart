@@ -177,8 +177,32 @@ final class FtermShortcutDispatcher {
       workspace.dismissOverlay();
       return true;
     }
+    if (workspace.activeOverlay == FtermOverlay.commandPalette &&
+        event is KeyDownEvent &&
+        _isCommandPaletteToggleShortcut(event.logicalKey, modifiers)) {
+      workspace.dismissOverlay();
+      return true;
+    }
     // Let modal controls, FocusTraversalGroup (Tab), and DefaultTextEditingShortcuts
     // handle overlay keys while workspace panes stay excluded via ExcludeFocus.
+    return false;
+  }
+
+  bool _isCommandPaletteToggleShortcut(
+    LogicalKeyboardKey key,
+    Set<ev.Modifier> modifiers,
+  ) {
+    if (_isWeb || key != LogicalKeyboardKey.keyP) return false;
+    if (_platform == TargetPlatform.macOS) {
+      return modifiers.contains(ev.Modifier.meta) &&
+          modifiers.contains(ev.Modifier.shift) &&
+          !modifiers.contains(ev.Modifier.control) &&
+          !modifiers.contains(ev.Modifier.alt);
+    }
+    if (_platform == TargetPlatform.linux ||
+        _platform == TargetPlatform.windows) {
+      return _isCtrlShiftKey(key, LogicalKeyboardKey.keyP, modifiers);
+    }
     return false;
   }
 
@@ -188,8 +212,14 @@ final class FtermShortcutDispatcher {
       return true;
     }
     workspace.setLeaderArmed(false);
-    if (event is KeyDownEvent && _isZeroKey(event.logicalKey)) {
+    if (event is! KeyDownEvent) return true;
+    if (_isZeroKey(event.logicalKey)) {
       workspace.toggleShaderEmergencyStop();
+    } else if (workspace.activeOverlay == FtermOverlay.commandPalette &&
+        event.logicalKey == LogicalKeyboardKey.keyP &&
+        (modifiers.contains(ev.Modifier.shift) ||
+            HardwareKeyboard.instance.isShiftPressed)) {
+      workspace.dismissOverlay();
     }
     return true;
   }
@@ -313,7 +343,11 @@ final class FtermShortcutDispatcher {
       return true;
     }
     if (key == LogicalKeyboardKey.keyP) {
-      workspace.cycleTab(reverse: true);
+      if (shift) {
+        workspace.openCommandPalette(initialInput: '>');
+      } else {
+        workspace.cycleTab(reverse: true);
+      }
       return true;
     }
     if (key == LogicalKeyboardKey.keyX) {
@@ -448,6 +482,10 @@ final class FtermShortcutDispatcher {
     if (!cmdOnly) return false;
 
     final shift = modifiers.contains(ev.Modifier.shift);
+    if (shift && key == LogicalKeyboardKey.keyP) {
+      workspace.openCommandPalette(initialInput: '>');
+      return true;
+    }
     if (key == LogicalKeyboardKey.keyS) {
       return _handleEditorSaveShortcut(shift: shift);
     }
@@ -496,6 +534,10 @@ final class FtermShortcutDispatcher {
       if (digit < workspace.tabs.length) {
         workspace.selectTab(digit);
       }
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyP) {
+      workspace.openCommandPalette(initialInput: '>');
       return true;
     }
     if (key == LogicalKeyboardKey.comma) {

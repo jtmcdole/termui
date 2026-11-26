@@ -189,6 +189,9 @@ final class ShaderEditorController extends ChangeNotifier {
   /// Current GLSL source text in the editor buffer.
   String get source => textController.text;
 
+  /// Total number of lines in the current editor buffer.
+  int get lineCount => textController.value.lines.length;
+
   /// Whether the buffer has unsaved edits relative to the last saved snapshot.
   bool get isDirty => textController.text != _savedSource;
 
@@ -468,6 +471,93 @@ final class ShaderEditorController extends ChangeNotifier {
     if (_diagnostics.isEmpty) return false;
     final next = (_selectedDiagnosticIndex + 1) % _diagnostics.length;
     return jumpToDiagnostic(next);
+  }
+
+  /// Captures the current cursor selection and vertical scroll offset so live
+  /// navigation previews can be restored cleanly on cancel.
+  ({tui.TextSelection selection, int scrollOffset})
+  captureNavigationSnapshot() => (
+    selection: textController.value.selection,
+    scrollOffset: textController.scrollOffset,
+  );
+
+  /// Restores a previously captured cursor selection and vertical scroll
+  /// offset without breaking undo history.
+  void restoreNavigationSnapshot(
+    ({tui.TextSelection selection, int scrollOffset}) snapshot,
+  ) {
+    if (_disposed) return;
+    final current = textController.value;
+    final lines = current.lines;
+    final maxOffset = current.text.characters.length;
+    final clampedLine = snapshot.selection.cursorLine.clamp(
+      0,
+      lines.length - 1,
+    );
+    final clampedCol = snapshot.selection.cursorColumn.clamp(
+      0,
+      _lineGraphemeLength(lines, clampedLine),
+    );
+    final restoredSelection = tui.TextSelection(
+      baseOffset: snapshot.selection.baseOffset.clamp(0, maxOffset),
+      extentOffset: snapshot.selection.extentOffset.clamp(0, maxOffset),
+      cursorLine: clampedLine,
+      cursorColumn: clampedCol,
+    );
+    textController.value = tui.TextEditingValue(
+      text: current.text,
+      selection: restoredSelection,
+    );
+    textController.scrollOffset = snapshot.scrollOffset;
+  }
+
+  /// Moves the editor cursor to 1-based [oneBasedLine] and [oneBasedColumn],
+  /// optionally selecting [selectionLength] UTF-16 code units forward on that
+  /// line.
+  bool jumpToLine(
+    int oneBasedLine, {
+    int oneBasedColumn = 1,
+    int selectionLength = 0,
+  }) {
+    if (_disposed) return false;
+    final lines = textController.value.lines;
+    if (lines.isEmpty) return false;
+    final lineIdx = (oneBasedLine - 1).clamp(0, lines.length - 1);
+    final lineText = _lineContent(lines, lineIdx);
+    final startUtf16 = oneBasedColumn > 1 ? oneBasedColumn - 1 : 0;
+    final startCol = _utf16ColumnToGraphemeFloor(lineText, startUtf16);
+    final baseOffset = _graphemeOffset(lines, lineIdx, startCol);
+    final tui.TextSelection nextSelection;
+    if (selectionLength > 0) {
+      final endCol = _utf16ColumnToGraphemeColumn(
+        lineText,
+        startUtf16 + selectionLength,
+      );
+      final extentOffset = _graphemeOffset(lines, lineIdx, endCol);
+      nextSelection = tui.TextSelection(
+        baseOffset: baseOffset,
+        extentOffset: extentOffset,
+        cursorLine: lineIdx,
+        cursorColumn: endCol,
+      );
+    } else {
+      nextSelection = tui.TextSelection.collapsed(
+        offset: baseOffset,
+        line: lineIdx,
+        column: startCol,
+      );
+    }
+    textController.breakUndoBurst();
+    final nextValue = tui.TextEditingValue(
+      text: textController.value.text,
+      selection: nextSelection,
+    );
+    if (textController.value != nextValue) {
+      textController.value = nextValue;
+    } else {
+      notifyListeners();
+    }
+    return true;
   }
 
   /// Requests closing this editor tab.
@@ -929,6 +1019,18 @@ final class ShaderEditorController extends ChangeNotifier {
       offset += _lineGraphemeLength(lines, i) + 1;
     }
     return offset + column.clamp(0, _lineGraphemeLength(lines, line));
+  }
+
+  static int _utf16ColumnToGraphemeFloor(String line, int utf16Col) {
+    if (utf16Col <= 0) return 0;
+    var units = 0;
+    var graphemeIdx = 0;
+    for (final ch in line.characters) {
+      if (units + ch.length > utf16Col) break;
+      units += ch.length;
+      graphemeIdx++;
+    }
+    return graphemeIdx;
   }
 
   static int _utf16ColumnToGraphemeColumn(String line, int utf16Col) {

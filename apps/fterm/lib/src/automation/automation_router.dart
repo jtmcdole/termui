@@ -273,6 +273,8 @@ final class AutomationRouter {
         _workspace.dismissOverlay();
       case FtermOverlay.whatsNew:
         _workspace.openWhatsNew();
+      case FtermOverlay.commandPalette:
+        _workspace.openCommandPalette();
       default:
         _workspace.setOverlay(overlay);
     }
@@ -308,6 +310,7 @@ final class AutomationRouter {
     'help' => FtermOverlay.help,
     'about' => FtermOverlay.about,
     'whatsNew' => FtermOverlay.whatsNew,
+    'commandPalette' => FtermOverlay.commandPalette,
     _ => null,
   };
 
