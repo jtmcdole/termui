@@ -2788,12 +2788,12 @@ String resolveFtermExecutablePath({
   final macOs = isMacOS ?? Platform.isMacOS;
   final relativeCandidates = windows
       ? const <String>[
-          r'build\windows\x64\runner\Release\fterm.exe',
-          r'build\windows\x64\runner\Profile\fterm.exe',
-          r'build\windows\x64\runner\Debug\fterm.exe',
-          r'apps\fterm\build\windows\x64\runner\Release\fterm.exe',
-          r'apps\fterm\build\windows\x64\runner\Profile\fterm.exe',
-          r'apps\fterm\build\windows\x64\runner\Debug\fterm.exe',
+          'build/windows/x64/runner/Release/fterm.exe',
+          'build/windows/x64/runner/Profile/fterm.exe',
+          'build/windows/x64/runner/Debug/fterm.exe',
+          'apps/fterm/build/windows/x64/runner/Release/fterm.exe',
+          'apps/fterm/build/windows/x64/runner/Profile/fterm.exe',
+          'apps/fterm/build/windows/x64/runner/Debug/fterm.exe',
         ]
       : macOs
       ? const <String>[
@@ -2811,7 +2811,7 @@ String resolveFtermExecutablePath({
           'apps/fterm/build/linux/x64/debug/bundle/fterm',
         ];
   for (final rel in relativeCandidates) {
-    final candidate = File(p.join(root, rel));
+    final candidate = File(p.joinAll(<String>[root, ...rel.split('/')]));
     if (candidate.existsSync()) return candidate.absolute.path;
   }
   throw FileSystemException(
@@ -3132,11 +3132,10 @@ File? _resolveRepoAsset({
   required String workingDir,
   bool? isWindows,
 }) {
-  final windows = isWindows ?? Platform.isWindows;
-  final relPath = windows ? windowsRelPath : posixRelPath;
+  final segments = posixRelPath.split('/');
   var dir = Directory(workingDir).absolute;
   for (var depth = 0; depth < 5; depth++) {
-    final candidate = File(p.join(dir.path, relPath));
+    final candidate = File(p.joinAll(<String>[dir.path, ...segments]));
     if (candidate.existsSync()) return candidate.absolute;
     final parent = dir.parent;
     if (parent.path == dir.path) break;
@@ -3152,12 +3151,15 @@ File? _resolveRepoAsset({
   bool? isWindows,
 }) {
   final windows = isWindows ?? Platform.isWindows;
-  final relPath = windows ? windowsRelPath : posixRelPath;
+  final segments = posixRelPath.split('/');
   var dir = Directory(workingDir).absolute;
   for (var depth = 0; depth < 5; depth++) {
-    final candidate = File(p.join(dir.path, relPath));
+    final candidate = File(p.joinAll(<String>[dir.path, ...segments]));
     if (candidate.existsSync()) {
-      return (cwd: dir.path, command: windows ? '.\\$relPath' : './$relPath');
+      return (
+        cwd: dir.path,
+        command: windows ? '.\\$windowsRelPath' : './$posixRelPath',
+      );
     }
     final parent = dir.parent;
     if (parent.path == dir.path) break;
@@ -3179,24 +3181,18 @@ String? _resolveDesktopSettingsPath({
   if (isWindows) {
     final appData = _nonEmpty(environment['APPDATA']);
     if (appData != null) {
-      return p.windows.join(appData, 'fterm', 'settings.json');
+      return p.join(appData, 'fterm', 'settings.json');
     }
     final profile = _nonEmpty(environment['USERPROFILE']);
     if (profile != null) {
-      return p.windows.join(
-        profile,
-        'AppData',
-        'Roaming',
-        'fterm',
-        'settings.json',
-      );
+      return p.join(profile, 'AppData', 'Roaming', 'fterm', 'settings.json');
     }
     return null;
   }
   final home = _nonEmpty(environment['HOME']);
   return home == null
       ? null
-      : p.posix.join(home, '.config', 'fterm', 'settings.json');
+      : p.join(home, '.config', 'fterm', 'settings.json');
 }
 
 Map<String, Object?> _asStringMap(Map<Object?, Object?> raw) =>
