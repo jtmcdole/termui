@@ -20,9 +20,6 @@ import 'package:termui_flutter/src/rendering/painter.dart';
 // ignore: implementation_imports
 import 'package:termui_flutter/src/rendering/shader_backend_gpu.dart'
     show packAlignedUniformBatch;
-// ignore: implementation_imports
-import 'package:termui_flutter/src/terminal_surface.dart'
-    show TerminalSurfaceState;
 
 final class _FakeShaderHandle implements CompiledShaderHandle {
   @override
