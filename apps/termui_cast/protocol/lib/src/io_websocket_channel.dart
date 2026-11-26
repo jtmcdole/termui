@@ -93,10 +93,10 @@ final class IoBinaryWebSocketSink implements StreamSink<Uint8List> {
     if (active != null) {
       await active;
     }
+    var timedOut = false;
     try {
       _ws.pingInterval = null;
       _onPrepareClose?.call();
-      var timedOut = false;
       await _ws
           .close(code, reason)
           .timeout(
@@ -114,10 +114,12 @@ final class IoBinaryWebSocketSink implements StreamSink<Uint8List> {
           },
         );
       }
-      if (timedOut) {
-        _onCloseTimeout?.call();
-      }
-    } on Object catch (_) {}
+    } on Object catch (_) {
+      timedOut = true;
+    }
+    if (timedOut) {
+      _invokeIgnoringErrors(_onCloseTimeout);
+    }
   }
 
   @override
@@ -240,6 +242,13 @@ final class _AbortableByteSubscription
 
 /// Adapts an open `dart:io` [WebSocket] into a binary [StreamChannel] and
 /// a close-code callback, rejecting non-binary frames with [ProtocolFormatException].
+///
+/// If provided, [onCloseTimeout] is invoked when the close handshake times out
+/// or [WebSocket.close] throws while the underlying stream has not yet emitted
+/// `onDone`. It is expected to force-destroy the underlying raw socket so the
+/// stream completes promptly, and providing it extends the post-close wait for
+/// `onDone` from `200ms` to `2500ms` before force-canceling the subscription.
+/// Errors thrown by [onCloseTimeout] are swallowed so teardown always completes.
 ({
   StreamChannel<Uint8List> channel,
   Future<void> Function(int code, String reason) closeWithCode,
@@ -248,11 +257,23 @@ wrapIoBinaryWebSocket(
   WebSocket ws, {
   int maxPayloadLength = BufferFrameCodec.maxFrameBytes,
   Duration pingInterval = const Duration(seconds: 20),
+  void Function()? onCloseTimeout,
 }) => _wrapIoBinaryWebSocketInternal(
   ws,
   maxPayloadLength: maxPayloadLength,
   pingInterval: pingInterval,
+  onCloseTimeout: onCloseTimeout,
 );
+
+void _invokeIgnoringErrors(void Function()? callback) {
+  try {
+    callback?.call();
+  } on Object catch (_) {}
+}
+
+void _resumeIfPaused(StreamSubscription<Object?> sub) {
+  if (sub.isPaused) sub.resume();
+}
 
 void _markCloseHandshakeDone(WebSocket ws, Completer<void> handshakeCompleter) {
   try {
@@ -275,16 +296,24 @@ _wrapIoBinaryWebSocketInternal(
   ws.pingInterval = pingInterval;
   final handshakeCompleter = Completer<void>();
   final wsDone = Completer<void>();
+  final destroySocket = onCloseTimeout ?? meteredSocket?.destroy;
+  final doneWaitTimeout = destroySocket != null
+      ? const Duration(milliseconds: 2500)
+      : const Duration(milliseconds: 200);
   late final StreamSubscription<Object?> sub;
   late final IoBinaryWebSocketSink sink;
   late final StreamController<Uint8List> incoming;
-  Future<void> cancelSubAfterDone() async {
-    if (wsDone.isCompleted) return;
-    try {
-      await wsDone.future.timeout(const Duration(milliseconds: 200));
-    } on TimeoutException {
-      await sub.cancel();
-    }
+  Future<void>? cancelSubFuture;
+  Future<void> cancelSubAfterDone() {
+    if (wsDone.isCompleted) return Future<void>.value();
+    return cancelSubFuture ??= wsDone.future.timeout(
+      doneWaitTimeout,
+      onTimeout: () async {
+        if (!wsDone.isCompleted) {
+          await sub.cancel();
+        }
+      },
+    );
   }
 
   incoming = StreamController<Uint8List>(
@@ -299,11 +328,12 @@ _wrapIoBinaryWebSocketInternal(
   sink = IoBinaryWebSocketSink(
     ws,
     handshakeDone: handshakeCompleter.future,
-    onPrepareClose: () {
-      if (sub.isPaused) sub.resume();
-    },
+    onPrepareClose: () => _resumeIfPaused(sub),
     onCloseTimeout: () {
-      (onCloseTimeout ?? meteredSocket?.destroy)?.call();
+      _resumeIfPaused(sub);
+      if (!wsDone.isCompleted) {
+        _invokeIgnoringErrors(destroySocket);
+      }
       _markCloseHandshakeDone(ws, handshakeCompleter);
       unawaited(cancelSubAfterDone());
     },

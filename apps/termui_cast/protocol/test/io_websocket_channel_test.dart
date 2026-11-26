@@ -326,6 +326,17 @@ void main() {
       'rejects HTTP redirects, malformed 101 upgrade headers, and cleans up timed-out late upgrades',
       _verifyUpgradeHardeningAndTimeoutCleanup,
     );
+
+    test(
+      'delayed socket destroy (>200ms) still cancels Dart 5s WebSocket close timer',
+      _verifyDelayedDestroyCancelsSdkCloseTimer,
+      timeout: const Timeout(Duration(seconds: 60)),
+    );
+
+    test(
+      'close errors invoke onCloseTimeout, swallow callback errors, and resume mid-close pause',
+      _verifyCloseErrorHandlingAndMidCloseResume,
+    );
   });
 }
 
@@ -674,13 +685,353 @@ Future<void> _assertTimeoutDestroysLateUpgradedSocket() async {
   check(serverUpgraded).equals(1);
 }
 
+Future<void> _verifyDelayedDestroyCancelsSdkCloseTimer() async {
+  // Accept a real HTTP -> WebSocket 101 upgrade, then blackhole the TCP peer
+  // so the client's close handshake times out and invokes onCloseTimeout.
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  final heldSockets = <Socket>[];
+  addTearDown(() async {
+    for (final s in heldSockets) {
+      s.destroy();
+    }
+    await server.close(force: true);
+  });
+  server.listen((req) async {
+    final key = req.headers.value('sec-websocket-key')!;
+    final accept = base64.encode(
+      sha1
+          .convert(utf8.encode('${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11'))
+          .bytes,
+    );
+    req.response
+      ..statusCode = HttpStatus.switchingProtocols
+      ..headers.add(HttpHeaders.connectionHeader, 'Upgrade')
+      ..headers.set(HttpHeaders.upgradeHeader, 'websocket')
+      ..headers.set('Sec-WebSocket-Accept', accept)
+      ..contentLength = 0;
+    final sock = await req.response.detachSocket();
+    heldSockets.add(sock);
+    sock.listen((_) {}, onError: (Object _) {});
+  });
+
+  final packageConfig = await Isolate.packageConfig;
+  check(packageConfig).isNotNull();
+  final tempDir = Directory.systemTemp.createTempSync('ws_close_timer_');
+  addTearDown(() => tempDir.deleteSync(recursive: true));
+  final childScript = File('${tempDir.path}/child_delayed_destroy.dart')
+    ..writeAsStringSync('''
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:termui_cast_protocol/termui_cast_protocol_io.dart';
+
+final class _DelayedDestroySocket extends Stream<Uint8List> implements Socket {
+  final Socket _inner;
+  _DelayedDestroySocket(this._inner);
+
+  @override
+  StreamSubscription<Uint8List> listen(
+    void Function(Uint8List event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) => _inner.listen(
+    onData,
+    onError: onError,
+    onDone: onDone,
+    cancelOnError: cancelOnError,
+  );
+
+  @override
+  void destroy() {
+    Timer(const Duration(milliseconds: 350), _inner.destroy);
+  }
+
+  @override
+  Encoding get encoding => _inner.encoding;
+  @override
+  set encoding(Encoding value) => _inner.encoding = value;
+  @override
+  void add(List<int> data) => _inner.add(data);
+  @override
+  void write(Object? object) => _inner.write(object);
+  @override
+  void writeln([Object? object = '']) => _inner.writeln(object);
+  @override
+  void writeAll(Iterable<Object?> objects, [String separator = '']) =>
+      _inner.writeAll(objects, separator);
+  @override
+  void writeCharCode(int charCode) => _inner.writeCharCode(charCode);
+  @override
+  void addError(Object error, [StackTrace? stackTrace]) =>
+      _inner.addError(error, stackTrace);
+  @override
+  Future<Object?> addStream(Stream<List<int>> stream) =>
+      _inner.addStream(stream);
+  @override
+  Future<Object?> flush() => _inner.flush();
+  @override
+  Future<Object?> close() => _inner.close();
+  @override
+  Future<Object?> get done => _inner.done;
+  @override
+  bool setOption(SocketOption option, bool enabled) =>
+      _inner.setOption(option, enabled);
+  @override
+  Uint8List getRawOption(RawSocketOption option) => _inner.getRawOption(option);
+  @override
+  void setRawOption(RawSocketOption option) => _inner.setRawOption(option);
+  @override
+  int get port => _inner.port;
+  @override
+  int get remotePort => _inner.remotePort;
+  @override
+  InternetAddress get address => _inner.address;
+  @override
+  InternetAddress get remoteAddress => _inner.remoteAddress;
+}
+
+Future<void> main(List<String> args) async {
+  final port = int.parse(args.single);
+  final client = HttpClient();
+  final req = await client.openUrl('GET', Uri.parse('http://127.0.0.1:\$port/ws'));
+  req.headers
+    ..set(HttpHeaders.connectionHeader, 'Upgrade')
+    ..set(HttpHeaders.upgradeHeader, 'websocket')
+    ..set('Sec-WebSocket-Key', 'dGhlIHNhbXBsZSBub25jZQ==')
+    ..set('Sec-WebSocket-Version', '13');
+  final response = await req.close();
+  final rawSocket = await response.detachSocket();
+  client.close();
+
+  final delayedSocket = _DelayedDestroySocket(rawSocket);
+  final ws = WebSocket.fromUpgradedSocket(
+    delayedSocket,
+    serverSide: false,
+    compression: CompressionOptions.compressionOff,
+  );
+  final (:channel, closeWithCode: _) = wrapIoBinaryWebSocket(
+    ws,
+    onCloseTimeout: delayedSocket.destroy,
+  );
+  final sub = channel.stream.listen((_) {}, onError: (Object _) {});
+  stdout.writeln('CLOSING');
+  unawaited(channel.sink.close());
+  unawaited(sub.cancel());
+}
+''');
+
+  final child = await Process.start(Platform.resolvedExecutable, [
+    '--packages=${packageConfig!.toFilePath()}',
+    childScript.path,
+    '${server.port}',
+  ]);
+  final stderrLines = <String>[];
+  final stderrSub = child.stderr
+      .transform(utf8.decoder)
+      .transform(const LineSplitter())
+      .listen(stderrLines.add);
+  final outLines = StreamIterator(
+    child.stdout.transform(utf8.decoder).transform(const LineSplitter()),
+  );
+  addTearDown(() async {
+    child.kill();
+    await child.exitCode.timeout(
+      const Duration(seconds: 5),
+      onTimeout: () => -1,
+    );
+    await stderrSub.cancel();
+    await outLines.cancel();
+  });
+
+  check(
+    await outLines.moveNext().timeout(const Duration(seconds: 30)),
+    because: 'stderr=$stderrLines',
+  ).isTrue();
+  check(outLines.current).equals('CLOSING');
+  final sw = Stopwatch()..start();
+  final exitCode = await child.exitCode.timeout(const Duration(seconds: 10));
+  sw.stop();
+
+  check(exitCode, because: 'stderr=$stderrLines').equals(0);
+  check(
+    sw.elapsedMilliseconds,
+    because: 'Expected exit well below Dart 5s WebSocket close timer',
+  ).isLessThan(4000);
+}
+
+Future<void> _verifyCloseErrorHandlingAndMidCloseResume() async {
+  // 1. Synchronous throw from ws.close() triggers onCloseTimeout / destroy.
+  var syncDestroyCount = 0;
+  late final _FakePauseTrackingWebSocket syncFailWs;
+  syncFailWs = _FakePauseTrackingWebSocket(
+    (_) {},
+    onClose: () => throw const SocketException('sync close failure'),
+  );
+  final syncWrapped = wrapIoBinaryWebSocket(
+    syncFailWs,
+    onCloseTimeout: () {
+      syncDestroyCount++;
+      syncFailWs.emitDone();
+    },
+  );
+  await syncWrapped.channel.sink.close().timeout(const Duration(seconds: 2));
+  check(syncDestroyCount).equals(1);
+
+  // 2. Asynchronous error from ws.close() triggers onCloseTimeout / destroy.
+  var asyncDestroyCount = 0;
+  late final _FakePauseTrackingWebSocket asyncFailWs;
+  asyncFailWs = _FakePauseTrackingWebSocket(
+    (_) {},
+    onClose: () =>
+        Future<Object?>.error(const SocketException('async close failure')),
+  );
+  final asyncWrapped = wrapIoBinaryWebSocket(
+    asyncFailWs,
+    onCloseTimeout: () {
+      asyncDestroyCount++;
+      asyncFailWs.emitDone();
+    },
+  );
+  await asyncWrapped
+      .closeWithCode(WebSocketStatus.goingAway, 'shutdown')
+      .timeout(const Duration(seconds: 2));
+  check(asyncDestroyCount).equals(1);
+
+  // 3. Throwing onCloseTimeout on IoBinaryWebSocketSink does not reject
+  // close() or closeWithCode().
+  var sinkCloseCalls = 0;
+  final sinkForClose = IoBinaryWebSocketSink(
+    _FakePauseTrackingWebSocket(
+      (_) {},
+      onClose: () => throw const SocketException('close failed'),
+    ),
+    handshakeDone: Completer<void>().future,
+    onCloseTimeout: () {
+      sinkCloseCalls++;
+      throw StateError('sink close timeout callback failed');
+    },
+  );
+  await sinkForClose.close().timeout(const Duration(seconds: 2));
+  check(sinkCloseCalls).equals(1);
+
+  var sinkCloseWithCodeCalls = 0;
+  final sinkForCloseWithCode = IoBinaryWebSocketSink(
+    _FakePauseTrackingWebSocket(
+      (_) {},
+      onClose: () =>
+          Future<Object?>.error(const SocketException('closeWithCode failed')),
+    ),
+    handshakeDone: Completer<void>().future,
+    onCloseTimeout: () {
+      sinkCloseWithCodeCalls++;
+      throw StateError('sink closeWithCode timeout callback failed');
+    },
+  );
+  await sinkForCloseWithCode
+      .closeWithCode(WebSocketStatus.goingAway, 'bye')
+      .timeout(const Duration(seconds: 2));
+  check(sinkCloseWithCodeCalls).equals(1);
+
+  // 4. Throwing onCloseTimeout on wrapIoBinaryWebSocket does not reject
+  // closeWithCode() or incoming.onCancel, and still runs
+  // _markCloseHandshakeDone and cancelSubAfterDone().
+  final closeWithCodeCanceled = Completer<void>();
+  late final _FakePauseTrackingWebSocket wrappedCodeWs;
+  wrappedCodeWs = _FakePauseTrackingWebSocket((event) {
+    if (event == 'cancel' && !closeWithCodeCanceled.isCompleted) {
+      closeWithCodeCanceled.complete();
+    }
+  }, onClose: () => throw const SocketException('closeWithCode throw'));
+  var wrappedCodeDestroyCalls = 0;
+  final wrappedForCode = wrapIoBinaryWebSocket(
+    wrappedCodeWs,
+    onCloseTimeout: () {
+      wrappedCodeDestroyCalls++;
+      wrappedCodeWs.pingInterval = const Duration(seconds: 1);
+      throw StateError('destroySocket boom');
+    },
+  );
+  await wrappedForCode
+      .closeWithCode(WebSocketStatus.goingAway, 'bye')
+      .timeout(const Duration(seconds: 2));
+  check(wrappedCodeDestroyCalls).equals(1);
+  check(wrappedCodeWs.pingInterval).isNull();
+
+  final cancelEvents = <String>[];
+  late final _FakePauseTrackingWebSocket wrappedCancelWs;
+  wrappedCancelWs = _FakePauseTrackingWebSocket(
+    cancelEvents.add,
+    onClose: () => throw const SocketException('cancel close throw'),
+  );
+  var wrappedCancelDestroyCalls = 0;
+  final wrappedForCancel = wrapIoBinaryWebSocket(
+    wrappedCancelWs,
+    onCloseTimeout: () {
+      wrappedCancelDestroyCalls++;
+      wrappedCancelWs.pingInterval = const Duration(seconds: 1);
+      throw StateError('destroySocket cancel boom');
+    },
+  );
+  final cancelSub = wrappedForCancel.channel.stream.listen((_) {});
+  await [
+    closeWithCodeCanceled.future.timeout(const Duration(seconds: 5)),
+    cancelSub.cancel().timeout(const Duration(seconds: 5)),
+  ].wait;
+  check(wrappedCancelDestroyCalls).equals(1);
+  check(wrappedCancelWs.pingInterval).isNull();
+  check(cancelEvents).contains('cancel');
+
+  // 5. A stream subscription paused mid-close is resumed before socket destroy
+  // when onCloseTimeout fires.
+  final pauseOrderEvents = <String>[];
+  final closeGate = Completer<Object?>();
+  late final _FakePauseTrackingWebSocket pauseWs;
+  pauseWs = _FakePauseTrackingWebSocket(
+    pauseOrderEvents.add,
+    onClose: () => closeGate.future,
+  );
+  final pauseWrapped = wrapIoBinaryWebSocket(
+    pauseWs,
+    onCloseTimeout: () {
+      pauseOrderEvents.add('destroy');
+      pauseWs.emitDone();
+    },
+  );
+  final pauseSub = pauseWrapped.channel.stream.listen((_) {});
+  final closeFuture = pauseWrapped.channel.sink.close();
+  pauseSub.pause();
+  check(pauseOrderEvents).deepEquals(const ['pause']);
+  closeGate.completeError(const SocketException('mid-close failure'));
+  await closeFuture.timeout(const Duration(seconds: 2));
+  check(
+    pauseOrderEvents.take(3),
+  ).deepEquals(const ['pause', 'resume', 'destroy']);
+  await pauseSub.cancel();
+}
+
 final class _FakePauseTrackingWebSocket extends Stream<Object?>
     implements WebSocket {
   final void Function(String event) onEvent;
   final bool hangClose;
+  final Future<Object?> Function()? onClose;
   final Completer<void> _doneCompleter = Completer<void>();
+  StreamController<Object?>? _controller;
 
-  _FakePauseTrackingWebSocket(this.onEvent, {this.hangClose = false});
+  _FakePauseTrackingWebSocket(
+    this.onEvent, {
+    this.hangClose = false,
+    this.onClose,
+  });
+
+  void emitDone() {
+    if (!_doneCompleter.isCompleted) _doneCompleter.complete();
+    final controller = _controller;
+    if (controller != null && !controller.isClosed) {
+      unawaited(controller.close());
+    }
+  }
 
   @override
   Duration? pingInterval;
@@ -703,6 +1054,7 @@ final class _FakePauseTrackingWebSocket extends Stream<Object?>
       onResume: () => onEvent('resume'),
       onCancel: () => onEvent('cancel'),
     );
+    _controller = controller;
     return controller.stream.listen(
       onData,
       onError: onError,
@@ -712,10 +1064,12 @@ final class _FakePauseTrackingWebSocket extends Stream<Object?>
   }
 
   @override
-  Future<Object?> close([int? code, String? reason]) async {
+  Future<Object?> close([int? code, String? reason]) {
+    final customClose = onClose;
+    if (customClose != null) return customClose();
     if (hangClose) return Completer<Object?>().future;
     if (!_doneCompleter.isCompleted) _doneCompleter.complete();
-    return null;
+    return Future<Object?>.value();
   }
 
   @override
