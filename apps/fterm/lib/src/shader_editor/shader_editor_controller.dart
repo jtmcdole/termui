@@ -525,7 +525,7 @@ final class ShaderEditorController extends ChangeNotifier {
     final lineIdx = (oneBasedLine - 1).clamp(0, lines.length - 1);
     final lineText = _lineContent(lines, lineIdx);
     final startUtf16 = oneBasedColumn > 1 ? oneBasedColumn - 1 : 0;
-    final startCol = _utf16ColumnToGraphemeColumn(lineText, startUtf16);
+    final startCol = _utf16ColumnToGraphemeFloor(lineText, startUtf16);
     final baseOffset = _graphemeOffset(lines, lineIdx, startCol);
     final tui.TextSelection nextSelection;
     if (selectionLength > 0) {
@@ -1019,6 +1019,18 @@ final class ShaderEditorController extends ChangeNotifier {
       offset += _lineGraphemeLength(lines, i) + 1;
     }
     return offset + column.clamp(0, _lineGraphemeLength(lines, line));
+  }
+
+  static int _utf16ColumnToGraphemeFloor(String line, int utf16Col) {
+    if (utf16Col <= 0) return 0;
+    var units = 0;
+    var graphemeIdx = 0;
+    for (final ch in line.characters) {
+      if (units + ch.length > utf16Col) break;
+      units += ch.length;
+      graphemeIdx++;
+    }
+    return graphemeIdx;
   }
 
   static int _utf16ColumnToGraphemeColumn(String line, int utf16Col) {

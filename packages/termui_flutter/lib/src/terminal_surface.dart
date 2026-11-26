@@ -1595,7 +1595,8 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     }
     _hasSearchHighlights = _readHasSearchHighlights();
     if (_hasSearchHighlights &&
-        oldWidget.topVirtualRow != widget.topVirtualRow) {
+        (widget.searchHighlightsListenable == null ||
+            oldWidget.topVirtualRow != widget.topVirtualRow)) {
       _paintNotifier.notify();
     }
   }
@@ -3325,9 +3326,6 @@ final class TerminalSurfaceState extends State<TerminalSurface>
         atlas != null;
     final showComposingOverlay =
         _hasShaderBinding && activeComposingText.isNotEmpty && atlas != null;
-    if (!showSearchOverlay && !showComposingOverlay) {
-      return baseSurface;
-    }
     return Stack(
       fit: StackFit.passthrough,
       children: <Widget>[

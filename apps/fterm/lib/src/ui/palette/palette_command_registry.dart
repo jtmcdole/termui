@@ -530,7 +530,7 @@ List<PaletteItem> _buildCustomShaderCommands(PaletteContext ctx) {
   final customEntries = _collectCustomShaderEntries(ws);
   return <PaletteItem>[
     for (final entry in customEntries)
-      _buildSingleCustomShaderItem(
+      ..._buildCustomShaderItems(
         ws,
         entry,
         bgActive: bgActive,
@@ -566,7 +566,7 @@ List<String> _collectCustomShaderEntries(FtermWorkspaceController ws) {
   return result;
 }
 
-PaletteItem _buildSingleCustomShaderItem(
+List<PaletteItem> _buildCustomShaderItems(
   FtermWorkspaceController ws,
   String entry, {
   required Set<String> bgActive,
@@ -574,14 +574,49 @@ PaletteItem _buildSingleCustomShaderItem(
 }) {
   final inBg = bgActive.contains(entry);
   final inFg = fgActive.contains(entry);
+  if (inBg && inFg) {
+    return <PaletteItem>[
+      _buildCustomShaderItem(
+        ws,
+        entry,
+        id: 'shader.custom.$entry.bg',
+        targetBg: true,
+        isActive: true,
+      ),
+      _buildCustomShaderItem(
+        ws,
+        entry,
+        id: 'shader.custom.$entry.fg',
+        targetBg: false,
+        isActive: true,
+      ),
+    ];
+  }
   final targetBg =
       inBg ||
       (!inFg &&
           ws.shaderStageHint(entry, .foreground) == ShaderStageHint.background);
-  final isActive = targetBg ? inBg : inFg;
+  return <PaletteItem>[
+    _buildCustomShaderItem(
+      ws,
+      entry,
+      id: 'shader.custom.$entry',
+      targetBg: targetBg,
+      isActive: targetBg ? inBg : inFg,
+    ),
+  ];
+}
+
+PaletteItem _buildCustomShaderItem(
+  FtermWorkspaceController ws,
+  String entry, {
+  required String id,
+  required bool targetBg,
+  required bool isActive,
+}) {
   final name = p.basename(entry);
   return PaletteItem(
-    id: 'shader.custom.$entry',
+    id: id,
     category: 'Shader',
     title: 'Toggle $name',
     subtitle: targetBg
@@ -739,7 +774,7 @@ List<PaletteItem> _buildSettingsToggleCommands(PaletteContext ctx) {
       id: 'settings.toggle.perf_hud',
       category: 'Settings',
       title: 'Toggle Performance HUD',
-      shortcutHint: 'Ctrl+Shift+F9',
+      shortcutHint: ctx.isWeb ? null : 'Ctrl+Shift+F9',
       activeBadge: _boolBadge(ws.showPerfHud),
       keywords: 'perf hud fps vram frame timing diagnostics overlay',
       icon: Icons.speed,

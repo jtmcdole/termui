@@ -786,6 +786,51 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       },
     );
 
+    test('emits distinct background and foreground items when a custom shader is active in both chains', () async {
+      final store = _FakeShaderProfileStore(
+        initialShaders: <String, String>{
+          'dual.glsl': '''
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = vec4(1.0);
+}
+''',
+        },
+      );
+      final ws = _createWorkspace(shaderProfileStore: store);
+      addTearDown(ws.dispose);
+      await ws.refreshCustomShaders();
+
+      await ws.toggleBackgroundShader('dual.glsl');
+      await ws.toggleForegroundShader('dual.glsl');
+      expect(ws.backgroundShaderChain, contains('dual.glsl'));
+      expect(ws.foregroundShaderChain, contains('dual.glsl'));
+
+      final ctx = PaletteContext(workspace: ws, isWeb: false, platform: .linux);
+      final dualCmds = buildPaletteCommands(ctx);
+      final bgItem = _byId(dualCmds, 'shader.custom.dual.glsl.bg');
+      final fgItem = _byId(dualCmds, 'shader.custom.dual.glsl.fg');
+      expect(bgItem.subtitle, equals('Custom background shader'));
+      expect(bgItem.activeBadge, equals('Active'));
+      expect(fgItem.subtitle, equals('Custom foreground shader'));
+      expect(fgItem.activeBadge, equals('Active'));
+
+      // Toggling the foreground pass disables only foreground while keeping background active.
+      await fgItem.onExecute!();
+      expect(ws.foregroundShaderChain, isNot(contains('dual.glsl')));
+      expect(ws.backgroundShaderChain, contains('dual.glsl'));
+
+      // Once active in only one chain, it collapses back to the canonical ID.
+      final afterToggle = buildPaletteCommands(ctx);
+      expect(
+        _byId(afterToggle, 'shader.custom.dual.glsl').activeBadge,
+        equals('Active'),
+      );
+      expect(
+        afterToggle.any((item) => item.id == 'shader.custom.dual.glsl.fg'),
+        isFalse,
+      );
+    });
+
     test('executes boolean toggles, enum setters, Settings deep-links, and overlays', () async {
       final storage = _MemStorage();
       final updateService = _FakeUpdateService();
@@ -950,18 +995,21 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         final ws = _createWorkspace();
         addTearDown(ws.dispose);
 
-        final webIds = {
-          for (final item in buildPaletteCommands(
-            PaletteContext(
-              workspace: ws,
-              isWeb: true,
-              platform: .linux,
-              isDesktopHost: false,
-              supportsUpdates: false,
-            ),
-          ))
-            item.id,
-        };
+        final webCommands = buildPaletteCommands(
+          PaletteContext(
+            workspace: ws,
+            isWeb: true,
+            platform: .linux,
+            isDesktopHost: false,
+            supportsUpdates: false,
+          ),
+        );
+        final webIds = {for (final item in webCommands) item.id};
+        expect(
+          _byId(webCommands, 'settings.toggle.perf_hud').shortcutHint,
+          isNull,
+        );
+        expect(_byId(webCommands, 'shader.reload').shortcutHint, isNull);
         expect(webIds, isNot(contains('workspace.new_local_shell')));
         expect(webIds, isNot(contains('pane.toggle_relay_share')));
         expect(webIds, isNot(contains('shader.open_folder')));
@@ -981,18 +1029,22 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         expect(webIds, contains('settings.open.keyboard'));
         expect(webIds, contains('settings.open.system'));
 
+        final linuxDesktopCommands = buildPaletteCommands(
+          PaletteContext(
+            workspace: ws,
+            isWeb: false,
+            platform: .linux,
+            isDesktopHost: true,
+            supportsUpdates: true,
+          ),
+        );
         final linuxDesktopIds = {
-          for (final item in buildPaletteCommands(
-            PaletteContext(
-              workspace: ws,
-              isWeb: false,
-              platform: .linux,
-              isDesktopHost: true,
-              supportsUpdates: true,
-            ),
-          ))
-            item.id,
+          for (final item in linuxDesktopCommands) item.id,
         };
+        expect(
+          _byId(linuxDesktopCommands, 'settings.toggle.perf_hud').shortcutHint,
+          equals('Ctrl+Shift+F9'),
+        );
         expect(linuxDesktopIds, contains('workspace.new_local_shell'));
         expect(linuxDesktopIds, contains('shader.open_folder'));
         expect(linuxDesktopIds, contains('settings.toggle.login_shell'));

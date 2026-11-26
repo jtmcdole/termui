@@ -287,7 +287,7 @@ TerminalTextSearchResult searchShaderEditor(
   try {
     final source = useRegex ? query : RegExp.escape(query);
     return (
-      pattern: RegExp(source, caseSensitive: caseSensitive),
+      pattern: RegExp(source, caseSensitive: caseSensitive, unicode: true),
       errorMessage: null,
     );
   } on FormatException catch (error) {

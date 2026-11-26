@@ -104,6 +104,26 @@ void main() {
       final TerminalSearchHighlightsProvider provider = readSpans;
       expect(provider(), equals(const [a, active]));
     });
+
+    test('debug assertions reject negative row/column or inverted ranges', () {
+      expect(
+        () => TerminalSearchHighlight(virtualRow: -1, startCol: 0, endCol: 1),
+        throwsAssertionError,
+      );
+      expect(
+        () => TerminalSearchHighlight(virtualRow: 0, startCol: -1, endCol: 1),
+        throwsAssertionError,
+      );
+      expect(
+        () => TerminalSearchHighlight(virtualRow: 0, startCol: 4, endCol: 3),
+        throwsAssertionError,
+      );
+      // Degenerate empty span (endCol == startCol) remains valid.
+      expect(
+        TerminalSearchHighlight(virtualRow: 0, startCol: 4, endCol: 4).endCol,
+        equals(4),
+      );
+    });
   });
 
   group('TerminalSearchHighlightPainter', () {
@@ -380,6 +400,9 @@ void main() {
         );
         // Idle with shader host: still zero search overlay CustomPaint.
         final idleCount = tester.widgetList(customPaints).length;
+        final shaderHostStateBefore = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
 
         highlights = const <TerminalSearchHighlight>[
           TerminalSearchHighlight(
@@ -392,6 +415,15 @@ void main() {
         highlightSignal.emit();
         await tester.pump();
 
+        expect(
+          identical(
+            shaderHostStateBefore,
+            tester.state<TerminalShaderHostState>(
+              find.byType(TerminalShaderHost),
+            ),
+          ),
+          isTrue,
+        );
         expect(tester.widgetList(customPaints).length, equals(idleCount + 1));
         final overlayFinder = find.byWidgetPredicate(
           (w) =>
@@ -411,7 +443,81 @@ void main() {
         highlightSignal.emit();
         await tester.pump();
 
+        expect(
+          identical(
+            shaderHostStateBefore,
+            tester.state<TerminalShaderHostState>(
+              find.byType(TerminalShaderHost),
+            ),
+          ),
+          isTrue,
+        );
         expect(tester.widgetList(customPaints).length, equals(idleCount));
+      },
+    );
+
+    testWidgets(
+      'repaints search highlight overlay on rebuild when searchHighlightsListenable is omitted',
+      (tester) async {
+        final buffer = Buffer.blank(20, 6);
+        final atlasController = GlyphAtlasController(fontSize: 13.0);
+        addTearDown(atlasController.dispose);
+
+        var highlights = const <TerminalSearchHighlight>[
+          TerminalSearchHighlight(
+            virtualRow: 0,
+            startCol: 0,
+            endCol: 3,
+            isActive: true,
+          ),
+        ];
+        var paintReadCount = 0;
+
+        List<TerminalSearchHighlight> readHighlights() {
+          paintReadCount++;
+          return highlights;
+        }
+
+        late StateSetter rebuildParent;
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                rebuildParent = setState;
+                return SizedBox(
+                  width: 320,
+                  height: 160,
+                  child: TerminalSurface(
+                    atlasController: atlasController,
+                    buffer: buffer,
+                    searchHighlightsProvider: readHighlights,
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final readsBeforeRebuild = paintReadCount;
+        // Update highlights behind the same tear-off without a listenable and
+        // without changing topVirtualRow; parent rebuild must repaint overlay.
+        rebuildParent(() {
+          highlights = const <TerminalSearchHighlight>[
+            TerminalSearchHighlight(
+              virtualRow: 1,
+              startCol: 2,
+              endCol: 6,
+              isActive: true,
+            ),
+          ];
+        });
+        await tester.pump();
+
+        // At least 2 reads: one from _syncSearchHighlightsBinding and one from
+        // TerminalSearchHighlightPainter.paint().
+        expect(paintReadCount, greaterThanOrEqualTo(readsBeforeRebuild + 2));
       },
     );
   });

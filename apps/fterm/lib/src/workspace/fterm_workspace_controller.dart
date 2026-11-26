@@ -1663,7 +1663,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       persistCredentials: persistCredentials,
     );
     if (_activeOverlay == FtermOverlay.connect) {
-      _activeOverlay = FtermOverlay.none;
+      _applyOverlayTransition(FtermOverlay.none);
     }
     _notifyChromeChanged();
     await repository.reconnect(
@@ -1767,7 +1767,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     );
     _activeTabIndex = _tabs.length - 1;
     _syncFocusedPaneStates();
-    _activeOverlay = FtermOverlay.none;
+    _applyOverlayTransition(FtermOverlay.none);
     _notifyChromeChanged();
     return tabId;
   }
@@ -1779,7 +1779,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     final existingIdx = _findTabIndexForSession(sessionId);
     if (existingIdx >= 0) {
       selectTab(existingIdx);
-      _activeOverlay = FtermOverlay.none;
+      _applyOverlayTransition(FtermOverlay.none);
       _notifyChromeChanged();
       return _tabs[existingIdx].tabId;
     }
@@ -1797,7 +1797,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     );
     _activeTabIndex = _tabs.length - 1;
     _syncFocusedPaneStates();
-    _activeOverlay = FtermOverlay.none;
+    _applyOverlayTransition(FtermOverlay.none);
     _persistWebWorkspaceResumeSnapshot();
     _notifyChromeChanged();
     return tabId;
@@ -1828,7 +1828,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       final existing = _findExistingEditorPane(trimmedPath);
       if (existing != null) {
         focusPane(existing.paneId);
-        _activeOverlay = FtermOverlay.none;
+        _applyOverlayTransition(FtermOverlay.none);
         _notifyChromeChanged();
         return _tabs[existing.tabIndex].tabId;
       }
@@ -1847,7 +1847,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         final existing = _findExistingEditorPane(trimmedPath);
         if (existing != null) {
           focusPane(existing.paneId);
-          _activeOverlay = FtermOverlay.none;
+          _applyOverlayTransition(FtermOverlay.none);
           _notifyChromeChanged();
           return _tabs[existing.tabIndex].tabId;
         }
@@ -1867,7 +1867,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       );
       _activeTabIndex = _tabs.length - 1;
       _syncFocusedPaneStates();
-      _activeOverlay = FtermOverlay.none;
+      _applyOverlayTransition(FtermOverlay.none);
       _notifyChromeChanged();
       return tabId;
     } finally {
@@ -2484,7 +2484,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
           : (trimmed.isNotEmpty ? trimmed : remote.displayTitle);
       remote.rename(wireTitle, clearPin: clearPin || trimmed.isEmpty);
     }
-    _activeOverlay = FtermOverlay.none;
+    _applyOverlayTransition(FtermOverlay.none);
     _persistWebWorkspaceResumeSnapshot();
     _notifyChromeChanged();
   }
@@ -2667,7 +2667,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   /// Captures the focused pane scrollback offset or shader editor navigation
   /// snapshot so uncommitted Command Palette previews can roll back cleanly.
   void captureCommandPalettePreviewSnapshot() {
-    if (_disposed) return;
+    if (_disposed || _commandPalettePreviewSnapshot != null) return;
     final pane = focusedPane;
     final editor = focusedEditorPane;
     _commandPalettePreviewSnapshot = (
@@ -2684,6 +2684,13 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     if (_disposed) return;
     _commandPalettePreviewSnapshot = null;
     _clearAllPaneSearchHighlights();
+  }
+
+  /// Rolls back any uncommitted Command Palette preview (scrollback offset or
+  /// shader editor navigation snapshot) and clears transient search highlights.
+  void rollbackCommandPalettePreview() {
+    if (_disposed) return;
+    _rollbackCommandPalettePreview();
   }
 
   void _clearAllPaneSearchHighlights() {
@@ -2709,7 +2716,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     }
   }
 
-  void _setOverlay(FtermOverlay overlay) {
+  void _applyOverlayTransition(FtermOverlay overlay) {
     if (_disposed || _activeOverlay == overlay) return;
     if (_activeOverlay == FtermOverlay.whatsNew &&
         overlay != FtermOverlay.whatsNew) {
@@ -2736,6 +2743,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       default:
         break;
     }
+  }
+
+  void _setOverlay(FtermOverlay overlay) {
+    if (_disposed || _activeOverlay == overlay) return;
+    _applyOverlayTransition(overlay);
     _notifyChromeChanged();
   }
 
@@ -2784,19 +2796,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     }
     _leaderArmed = false;
     if (_activeOverlay == FtermOverlay.licenses) {
-      _activeOverlay = FtermOverlay.about;
+      _applyOverlayTransition(FtermOverlay.about);
       _notifyChromeChanged();
       return;
     }
-    if (_activeOverlay == FtermOverlay.whatsNew) {
-      _whatsNewPreviewSnapshot = null;
-    }
-    if (_activeOverlay == FtermOverlay.commandPalette) {
-      _rollbackCommandPalettePreview();
-    }
-    if (_activeOverlay != FtermOverlay.none) {
-      _activeOverlay = FtermOverlay.none;
-    }
+    _applyOverlayTransition(FtermOverlay.none);
     _notifyChromeChanged();
   }
 
@@ -2807,7 +2811,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     _pendingUploadFiles = const [];
     _stagedUploadSessionId = null;
     if (_activeOverlay == FtermOverlay.fileUpload) {
-      _activeOverlay = FtermOverlay.none;
+      _applyOverlayTransition(FtermOverlay.none);
     }
     _notifyChromeChanged();
   }
@@ -2834,7 +2838,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     if (ok && !_disposed) {
       _stagedUploadSessionId = null;
       _pendingUploadFiles = const [];
-      _activeOverlay = FtermOverlay.none;
+      _applyOverlayTransition(FtermOverlay.none);
       _notifyChromeChanged();
     }
     return ok;
@@ -4267,7 +4271,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       if (!localHostDriver.isSupported) {
         _relayCredentials = RelayCredentials.empty;
         saveStoredRelayCredentials(_storage, RelayCredentials.empty);
-        _activeOverlay = FtermOverlay.connect;
+        _applyOverlayTransition(FtermOverlay.connect);
       }
       _notifyChromeChanged();
       return;

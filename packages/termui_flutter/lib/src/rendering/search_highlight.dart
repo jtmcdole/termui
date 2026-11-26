@@ -20,7 +20,9 @@ final class TerminalSearchHighlight {
     required this.startCol,
     required this.endCol,
     this.isActive = false,
-  });
+  }) : assert(virtualRow >= 0, 'virtualRow must be non-negative'),
+       assert(startCol >= 0, 'startCol must be non-negative'),
+       assert(endCol >= startCol, 'endCol must be >= startCol');
 
   @override
   bool operator ==(Object other) =>

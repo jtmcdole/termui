@@ -212,8 +212,14 @@ final class FtermShortcutDispatcher {
       return true;
     }
     workspace.setLeaderArmed(false);
-    if (event is KeyDownEvent && _isZeroKey(event.logicalKey)) {
+    if (event is! KeyDownEvent) return true;
+    if (_isZeroKey(event.logicalKey)) {
       workspace.toggleShaderEmergencyStop();
+    } else if (workspace.activeOverlay == FtermOverlay.commandPalette &&
+        event.logicalKey == LogicalKeyboardKey.keyP &&
+        (modifiers.contains(ev.Modifier.shift) ||
+            HardwareKeyboard.instance.isShiftPressed)) {
+      workspace.dismissOverlay();
     }
     return true;
   }

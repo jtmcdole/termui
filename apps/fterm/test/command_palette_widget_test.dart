@@ -567,6 +567,56 @@ void main() {
           const {ev.Modifier.shift},
         );
         expect(ws.activeOverlay, FtermOverlay.commandPalette);
+
+        // Re-arming leader and pressing Shift+P toggles the palette off on Web.
+        webDispatcher.handleHostShortcut(
+          const KeyDownEvent(
+            physicalKey: PhysicalKeyboardKey.backslash,
+            logicalKey: LogicalKeyboardKey.backslash,
+            timeStamp: Duration.zero,
+          ),
+          const {ev.Modifier.control},
+        );
+        webDispatcher.handleHostShortcut(
+          const KeyDownEvent(
+            physicalKey: PhysicalKeyboardKey.keyP,
+            logicalKey: LogicalKeyboardKey.keyP,
+            character: 'P',
+            timeStamp: Duration.zero,
+          ),
+          const {ev.Modifier.shift},
+        );
+        expect(ws.activeOverlay, FtermOverlay.none);
+
+        // Same toggle symmetry on desktop via leader chord.
+        final desktopDispatcher = FtermShortcutDispatcher(
+          workspace: ws,
+          platformOverride: TargetPlatform.linux,
+          isWebOverride: false,
+        );
+        for (final expected in const <FtermOverlay>[
+          FtermOverlay.commandPalette,
+          FtermOverlay.none,
+        ]) {
+          desktopDispatcher.handleHostShortcut(
+            const KeyDownEvent(
+              physicalKey: PhysicalKeyboardKey.backslash,
+              logicalKey: LogicalKeyboardKey.backslash,
+              timeStamp: Duration.zero,
+            ),
+            const {ev.Modifier.control},
+          );
+          desktopDispatcher.handleHostShortcut(
+            const KeyDownEvent(
+              physicalKey: PhysicalKeyboardKey.keyP,
+              logicalKey: LogicalKeyboardKey.keyP,
+              character: 'P',
+              timeStamp: Duration.zero,
+            ),
+            const {ev.Modifier.shift},
+          );
+          expect(ws.activeOverlay, expected);
+        }
       },
     );
 
@@ -1051,6 +1101,269 @@ void main() {
           await tester.pumpAndSettle();
           expect(tester.takeException(), isNull);
         }
+      },
+    );
+
+    testWidgets(
+      'executing a > command after previewing : or % rolls back abandoned scroll and editor jumps',
+      (tester) async {
+        final env = await _mountShell(
+          tester,
+          platform: TargetPlatform.linux,
+          onPopulatePort: (port, prompts) {
+            for (var i = 0; i < 60; i++) {
+              port.appendScrollbackLine(
+                i == 5 ? 'needle target row' : 'history line $i',
+              );
+            }
+          },
+        );
+        final ws = env.workspace;
+        final pane = ws.focusedPane!;
+        expect(pane.scrollOffsetLines, 0);
+
+        // Preview ':' jump, switch to '>' command, execute -> must roll back scroll.
+        ws.openCommandPalette(initialInput: ':50%');
+        await tester.pumpAndSettle();
+        expect(pane.scrollOffsetLines, greaterThan(0));
+
+        final muteBefore = ws.preferences.audioMuted;
+        await tester.enterText(
+          find.byKey(const ValueKey('palette-input')),
+          '> Toggle Mute Audio',
+        );
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+
+        expect(ws.activeOverlay, FtermOverlay.none);
+        expect(ws.preferences.audioMuted, !muteBefore);
+        expect(pane.scrollOffsetLines, 0);
+        expect(pane.readSearchHighlights(), isEmpty);
+
+        // Preview '%' search, switch to '>' command, execute -> must roll back scroll & clear highlights.
+        ws.openCommandPalette(initialInput: '% needle');
+        await tester.pumpAndSettle();
+        expect(pane.scrollOffsetLines, greaterThan(0));
+        expect(pane.readSearchHighlights(), isNotEmpty);
+
+        final perfBefore = ws.showPerfHud;
+        await tester.enterText(
+          find.byKey(const ValueKey('palette-input')),
+          '> Toggle Performance HUD',
+        );
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+
+        expect(ws.showPerfHud, !perfBefore);
+        expect(pane.scrollOffsetLines, 0);
+        expect(pane.readSearchHighlights(), isEmpty);
+
+        // Same rollback for Shader Editor when switching from ':' to '>'.
+        await ws.openShaderEditorTab();
+        await tester.pumpAndSettle();
+        final ctrl = ws.focusedEditorPane!.controller;
+        ctrl.textController.value = tui.TextEditingValue(
+          text: [for (var i = 1; i <= 30; i++) '// line $i'].join('\n'),
+          selection: const tui.TextSelection.collapsed(
+            offset: 0,
+            line: 0,
+            column: 0,
+          ),
+        );
+        ctrl.textController.scrollOffset = 2;
+        await tester.pumpAndSettle();
+        final initialSelection = ctrl.textController.value.selection;
+        final initialScroll = ctrl.textController.scrollOffset;
+
+        ws.openCommandPalette(initialInput: ':20');
+        await tester.pumpAndSettle();
+        expect(ctrl.textController.value.selection.cursorLine, 19);
+
+        await tester.enterText(
+          find.byKey(const ValueKey('palette-input')),
+          '> Toggle Performance HUD',
+        );
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+
+        expect(ctrl.textController.value.selection, initialSelection);
+        expect(ctrl.textController.scrollOffset, initialScroll);
+      },
+    );
+
+    testWidgets(
+      'dismissing palette before initState post-frame callback prevents stale highlights and scroll',
+      (tester) async {
+        final env = await _mountShell(
+          tester,
+          platform: TargetPlatform.linux,
+          onPopulatePort: (port, prompts) {
+            for (var i = 0; i < 60; i++) {
+              port.appendScrollbackLine(
+                i == 5 ? 'early dismiss needle' : 'filler line $i',
+              );
+            }
+          },
+        );
+        final ws = env.workspace;
+        final pane = ws.focusedPane!;
+        expect(pane.scrollOffsetLines, 0);
+
+        // Schedule dismissOverlay() before the overlay's own initState post-frame
+        // callback so activeOverlay leaves commandPalette while mounted is still true.
+        ws.openCommandPalette(initialInput: '% early dismiss needle');
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          ws.dismissOverlay();
+        });
+        await tester.pump();
+        await tester.pumpAndSettle();
+
+        expect(ws.activeOverlay, FtermOverlay.none);
+        expect(pane.scrollOffsetLines, 0);
+        expect(pane.readSearchHighlights(), isEmpty);
+      },
+    );
+
+    testWidgets(
+      'direct overlay transitions (tab open & fatal auth error) roll back command palette previews and highlights',
+      (tester) async {
+        final env = await _mountShell(
+          tester,
+          platform: TargetPlatform.linux,
+          onPopulatePort: (port, prompts) {
+            for (var i = 0; i < 60; i++) {
+              port.appendScrollbackLine(
+                i == 5 ? 'transition needle' : 'line $i',
+              );
+            }
+          },
+        );
+        final ws = env.workspace;
+        final firstPane = ws.focusedPane!;
+
+        ws.openCommandPalette(initialInput: '% transition needle');
+        await tester.pumpAndSettle();
+        expect(firstPane.scrollOffsetLines, greaterThan(0));
+        expect(firstPane.readSearchHighlights(), isNotEmpty);
+
+        // In-flight local tab open completes while commandPalette is open.
+        await ws.openLocalShellTab();
+        await tester.pumpAndSettle();
+
+        expect(ws.activeOverlay, FtermOverlay.none);
+        expect(firstPane.scrollOffsetLines, 0);
+        expect(firstPane.readSearchHighlights(), isEmpty);
+
+        // Snapshot capture does not overwrite an existing active preview snapshot.
+        ws.selectTab(0);
+        await tester.pumpAndSettle();
+        ws.captureCommandPalettePreviewSnapshot();
+        firstPane.setScrollOffsetLines(15);
+        ws.captureCommandPalettePreviewSnapshot();
+        ws.rollbackCommandPalettePreview();
+        expect(firstPane.scrollOffsetLines, 0);
+      },
+    );
+
+    testWidgets(
+      'fatal auth error on Web rolls back command palette preview and clears highlights',
+      (tester) async {
+        final env = await _mountShell(
+          tester,
+          platform: TargetPlatform.linux,
+          isWeb: true,
+        );
+        final ws = env.workspace;
+        const sessionId = SessionId('web-session-1');
+        ws.openRemoteSessionTab(sessionId);
+        await tester.pumpAndSettle();
+
+        final pane = ws.focusedPane!;
+        ws.openCommandPalette(initialInput: '%');
+        await tester.pumpAndSettle();
+        pane.setSearchHighlights(const <TerminalSearchHighlight>[
+          TerminalSearchHighlight(
+            virtualRow: 0,
+            startCol: 0,
+            endCol: 4,
+            isActive: true,
+          ),
+        ]);
+        expect(pane.readSearchHighlights(), isNotEmpty);
+
+        clientMessageReceivedEvent.post(
+          ws.repository.bus,
+          const ErrorFrame(
+            code: 'auth_failed',
+            message: 'Session token expired',
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(ws.activeOverlay, FtermOverlay.connect);
+        expect(pane.readSearchHighlights(), isEmpty);
+      },
+    );
+
+    testWidgets(
+      'keyboard navigation keeps selected row inside viewport across mixed-height headers and subtitle tiles',
+      (tester) async {
+        final env = await _mountShell(
+          tester,
+          platform: TargetPlatform.linux,
+          surfaceSize: const Size(640, 460),
+        );
+        final ws = env.workspace;
+        // Record MRU entries so both RECENTLY USED and ALL COMMANDS headers render
+        // above mixed title-only and subtitle shader/theme command tiles.
+        ws
+          ..recordRecentCommand('overlay.about')
+          ..recordRecentCommand('shader.preset.crt_lottes');
+
+        ws.openCommandPalette(initialInput: '>');
+        await tester.pumpAndSettle();
+
+        final listFinder = find.byKey(const ValueKey('palette-results-list'));
+        final listRect = tester.getRect(listFinder);
+        final listView = tester.widget<ListView>(listFinder);
+        final scrollCtrl = listView.controller!;
+
+        // Navigate down 24 rows past headers, title-only items, and subtitle items.
+        for (var i = 0; i < 24; i++) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+          await tester.pump();
+        }
+        expect(scrollCtrl.offset, greaterThan(0));
+
+        // Find the selected tile (marked by the non-transparent accent tint)
+        // and verify it is visibly inside the ListView viewport.
+        final selectedTileFinder = find.byWidgetPredicate(
+          (w) =>
+              w is Container &&
+              w.color != null &&
+              w.color != Colors.transparent &&
+              w.padding ==
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        );
+        expect(selectedTileFinder, findsOneWidget);
+        final selectedRect = tester.getRect(selectedTileFinder);
+        expect(selectedRect.top, greaterThanOrEqualTo(listRect.top - 2.0));
+        expect(selectedRect.bottom, lessThanOrEqualTo(listRect.bottom + 2.0));
+
+        // Navigate back up to the top and verify the first item is visible again.
+        for (var i = 0; i < 24; i++) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+          await tester.pump();
+        }
+        final topSelectedRect = tester.getRect(selectedTileFinder);
+        expect(topSelectedRect.top, greaterThanOrEqualTo(listRect.top - 2.0));
+        expect(
+          topSelectedRect.bottom,
+          lessThanOrEqualTo(listRect.bottom + 2.0),
+        );
       },
     );
   });

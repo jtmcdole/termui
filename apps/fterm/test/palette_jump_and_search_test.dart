@@ -499,6 +499,36 @@ void main() {
       expect(party.matches.single.endCol, 9);
     });
 
+    test('regex search in Unicode mode matches surrogate-pair emoji once without splitting surrogates', () {
+      final port = _TestTerminalPort(cols: 20, rows: 2)
+        ..scrollbackRows = <ScrollbackLine>[
+          ScrollbackLine(
+            width: 20,
+            characters: <String>['🚀', '', ' ', 'a'],
+            attributes: Uint32List(4 * 3),
+          ),
+        ];
+      final pane = _makePane(port);
+      addTearDown(() {
+        pane.dispose(disposePort: false);
+        unawaited(port.dispose());
+      });
+
+      final nonSpace = searchTerminalPane(pane, r'\S', useRegex: true);
+      expect(nonSpace.errorMessage, isNull);
+      expect(nonSpace.matches, hasLength(2));
+      expect(nonSpace.matches[0].startCol, 0);
+      expect(nonSpace.matches[0].endCol, 2);
+      expect(nonSpace.matches[0].matchLength, 2);
+      expect(nonSpace.matches[1].startCol, 3);
+      expect(nonSpace.matches[1].endCol, 4);
+
+      final anyChar = searchTerminalPane(pane, '.', useRegex: true);
+      expect(anyChar.matches, hasLength(3));
+      expect(anyChar.matches[0].startCol, 0);
+      expect(anyChar.matches[0].endCol, 2);
+    });
+
     test(
       'skips uncached remote empty slices without issuing scrollback fetches',
       () async {
@@ -778,6 +808,41 @@ void main() {
           .getRange(sel.baseOffset, sel.extentOffset)
           .string;
       expect(selected, 'glow');
+    });
+
+    test('Unicode regex does not split surrogate pairs and jumpToLine selects mid-grapheme combining marks', () {
+      final editor = ShaderEditorController(
+        shaderName: 'unicode.glsl',
+        initialSource: '// 🚀 cafe\u0301',
+      );
+      addTearDown(editor.dispose);
+
+      // Unicode regex \S matches surrogate-pair emoji once (length 2), not twice.
+      final rx = searchShaderEditor(editor, r'\S', useRegex: true);
+      expect(rx.errorMessage, isNull);
+      final emojiMatch = rx.matches.firstWhere((m) => m.editorColumn == 4);
+      expect(emojiMatch.matchLength, 2);
+      expect(rx.matches.where((m) => m.editorColumn == 5), isEmpty);
+
+      // Mid-grapheme combining mark (U+0301 at UTF-16 offset 10 -> 1-based col 11)
+      // must floor startCol to include the containing grapheme ('e\u0301').
+      final markResult = searchShaderEditor(editor, '\u0301');
+      expect(markResult.matches, hasLength(1));
+      final mark = markResult.matches.single;
+      expect(
+        editor.jumpToLine(
+          mark.editorLine!,
+          oneBasedColumn: mark.editorColumn!,
+          selectionLength: mark.matchLength,
+        ),
+        isTrue,
+      );
+      final sel = editor.textController.value.selection;
+      expect(sel.isCollapsed, isFalse);
+      final selected = editor.source.characters
+          .getRange(sel.baseOffset, sel.extentOffset)
+          .string;
+      expect(selected, 'e\u0301');
     });
   });
 }

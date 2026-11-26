@@ -51,7 +51,12 @@ final class FtermCommandPaletteOverlay extends StatefulWidget {
 
 final class _FtermCommandPaletteOverlayState
     extends State<FtermCommandPaletteOverlay> {
-  static const double _estimatedRowHeight = 36.0;
+  static const double _listVerticalPadding = 4.0;
+  static const double _firstSectionHeaderHeight = 19.0;
+  static const double _sectionHeaderHeight = 25.0;
+  static const double _titleOnlyTileHeight = 30.0;
+  static const double _titleWithBadgeTileHeight = 32.0;
+  static const double _subtitleTileHeight = 46.0;
 
   late final TextEditingController _inputController;
   late final FocusNode _inputFocusNode;
@@ -87,7 +92,11 @@ final class _FtermCommandPaletteOverlayState
     _recomputeResults(applyPreview: false);
     if (_mode == .scrollbackJump || _mode == .textSearch) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _applySelectedPreview();
+        if (!mounted ||
+            widget.workspace.activeOverlay != FtermOverlay.commandPalette) {
+          return;
+        }
+        _applySelectedPreview();
       });
     }
   }
@@ -184,20 +193,50 @@ final class _FtermCommandPaletteOverlayState
     _applySelectedPreview();
   }
 
+  bool _hasGroupHeader(int index) {
+    final label = _items[index].groupLabel;
+    if (label == null || label.isEmpty) return false;
+    return index == 0 || label != _items[index - 1].groupLabel;
+  }
+
+  static double _estimateTileHeight(PaletteItem item) {
+    if (item.subtitle case final sub? when sub.isNotEmpty) {
+      return _subtitleTileHeight;
+    }
+    final hasPill =
+        (item.activeBadge?.isNotEmpty ?? false) ||
+        (item.shortcutHint?.isNotEmpty ?? false);
+    return hasPill ? _titleWithBadgeTileHeight : _titleOnlyTileHeight;
+  }
+
+  ({double top, double bottom}) _estimateItemBounds(int targetIndex) {
+    var offset = _listVerticalPadding;
+    for (var i = 0; i <= targetIndex; i++) {
+      final headerHeight = _hasGroupHeader(i)
+          ? (i == 0 ? _firstSectionHeaderHeight : _sectionHeaderHeight)
+          : 0.0;
+      final itemExtent = headerHeight + _estimateTileHeight(_items[i]);
+      if (i == targetIndex) {
+        return (top: offset, bottom: offset + itemExtent);
+      }
+      offset += itemExtent;
+    }
+    return (top: offset, bottom: offset);
+  }
+
   void _scrollSelectedIntoView() {
-    if (!_listScrollController.hasClients) return;
+    if (!_listScrollController.hasClients || _items.isEmpty) return;
     final position = _listScrollController.position;
-    final targetTop = _selectedIndex * _estimatedRowHeight;
-    final targetBottom = targetTop + _estimatedRowHeight;
+    final (:top, :bottom) = _estimateItemBounds(_selectedIndex);
     final visibleTop = position.pixels;
     final visibleBottom = visibleTop + position.viewportDimension;
-    if (targetTop < visibleTop) {
+    if (top < visibleTop) {
       _listScrollController.jumpTo(
-        targetTop.clamp(position.minScrollExtent, position.maxScrollExtent),
+        top.clamp(position.minScrollExtent, position.maxScrollExtent),
       );
-    } else if (targetBottom > visibleBottom) {
+    } else if (bottom > visibleBottom) {
       _listScrollController.jumpTo(
-        (targetBottom - position.viewportDimension).clamp(
+        (bottom - position.viewportDimension).clamp(
           position.minScrollExtent,
           position.maxScrollExtent,
         ),
@@ -485,7 +524,11 @@ final class _FtermCommandPaletteOverlayState
     if (isCommandRecordable) {
       widget.workspace.recordRecentCommand(item.id);
     }
-    widget.workspace.commitCommandPalettePreview();
+    if (_mode == .scrollbackJump || _mode == .textSearch) {
+      widget.workspace.commitCommandPalettePreview();
+    } else {
+      widget.workspace.rollbackCommandPalettePreview();
+    }
     final result = action();
     if (result is Future<void>) {
       unawaited(result);
@@ -545,11 +588,7 @@ final class _FtermCommandPaletteOverlayState
 
   Widget _buildResultEntry(int index) {
     final item = _items[index];
-    final prevGroup = index > 0 ? _items[index - 1].groupLabel : null;
-    final showGroupHeader =
-        item.groupLabel != null &&
-        item.groupLabel!.isNotEmpty &&
-        item.groupLabel != prevGroup;
+    final showGroupHeader = _hasGroupHeader(index);
     final tile = _PaletteResultTile(
       item: item,
       palette: widget.palette,
