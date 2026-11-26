@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:pty2/pty2.dart';
 import 'package:pty2/src/impl/windows.dart' if (dart.library.html) '';
 import 'package:test/test.dart';
+import 'package:win32/win32.dart' as win32;
 
 PseudoTerminal _startTrackedPty(String executable, List<String> arguments) {
   final pty = PseudoTerminal.start(executable, arguments);
@@ -136,6 +137,51 @@ void main() {
         await pty.exitCode;
       }
     });
+
+    test(
+      'Windows ConPTY ignores stale thread GetLastError before CreatePipe',
+      () async {
+        final tempDir = Directory.systemTemp.createTempSync('pty2_lasterr_');
+        addTearDown(() {
+          try {
+            if (tempDir.existsSync()) {
+              tempDir.deleteSync(recursive: true);
+            }
+          } on FileSystemException {
+            // Ignore transient Windows file lock during teardown.
+          }
+        });
+        final scriptFile = File('${tempDir.path}/check_tty.dart')
+          ..writeAsStringSync('''
+import 'dart:io';
+
+void main() {
+  print('HAS_TERMINAL=\${stdout.hasTerminal}');
+}
+''');
+
+        // Simulate stale ERROR_IO_PENDING left by overlapped socket I/O on the
+        // calling thread; CreatePipe succeeds without clearing GetLastError().
+        win32.SetLastError(win32.ERROR_IO_PENDING);
+        final pty = PseudoTerminal.start(Platform.executable, [
+          scriptFile.path,
+        ], workingDirectory: tempDir.path);
+        addTearDown(() => pty.kill(ProcessSignal.sigkill));
+
+        final output = await pty.out.join().timeout(
+          const Duration(seconds: 15),
+        );
+        await pty.exitCode.timeout(const Duration(seconds: 5));
+
+        expect(
+          output,
+          contains('HAS_TERMINAL=true'),
+          reason:
+              'Expected real ConPTY despite stale ERROR_IO_PENDING; '
+              'got legacy-pipe output: $output',
+        );
+      },
+    );
   }
 
   test('Resize sets exact winsize inside PTY child across platforms', () async {
