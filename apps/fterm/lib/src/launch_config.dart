@@ -53,6 +53,22 @@ final class CastLaunchConfig {
   /// (`--trace-exit`).
   final bool traceExitOnComplete;
 
+  /// Whether the loopback HTTP automation driver should start automatically on
+  /// launch (`--automation-driver`).
+  final bool automationDriverEnabled;
+
+  /// Whether PTY-scoped automation endpoints should start enabled on launch
+  /// (`--automation-allow-pty`).
+  final bool automationAllowPty;
+
+  /// Optional loopback port override (`1..65535`) for the HTTP automation
+  /// driver (`--automation-port`).
+  final int? automationPort;
+
+  /// Optional ephemeral Bearer token override for the HTTP automation driver
+  /// (`FTERM_AUTOMATION_TOKEN` environment variable only).
+  final String? automationTokenOverride;
+
   /// Creates an explicit launch configuration.
   CastLaunchConfig({
     Uri? serverUri,
@@ -68,6 +84,10 @@ final class CastLaunchConfig {
     this.traceOutPath,
     this.traceDuration,
     this.traceExitOnComplete = false,
+    this.automationDriverEnabled = false,
+    this.automationAllowPty = false,
+    this.automationPort,
+    this.automationTokenOverride,
   }) : serverUri = serverUri ?? defaultServerUri,
        relaunchArgs = relaunchArgs.isEmpty
            ? const []

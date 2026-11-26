@@ -1,5 +1,6 @@
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 
+import 'automation/automation_models.dart';
 import 'desktop_launch_env_stub.dart'
     if (dart.library.io) 'desktop_launch_env_io.dart'
     as impl;
@@ -75,6 +76,21 @@ final class DesktopLaunchOverrides {
   /// Whether `fterm` should exit automatically once a timed startup trace ends.
   final bool traceExitOnComplete;
 
+  /// Whether `--automation-driver` was supplied to start the loopback HTTP
+  /// automation driver on launch.
+  final bool automationDriverEnabled;
+
+  /// Whether `--automation-allow-pty` was supplied to enable PTY-scoped
+  /// automation endpoints on launch.
+  final bool automationAllowPty;
+
+  /// Optional `--automation-port` loopback TCP port override (`1..65535`).
+  final int? automationPort;
+
+  /// Optional ephemeral Bearer token override read from
+  /// `FTERM_AUTOMATION_TOKEN` (never accepted as a CLI flag).
+  final String? automationTokenOverride;
+
   /// Creates an immutable set of desktop launch overrides.
   const DesktopLaunchOverrides({
     this.serverUrl,
@@ -96,11 +112,22 @@ final class DesktopLaunchOverrides {
     this.traceOutPath,
     this.traceDuration,
     this.traceExitOnComplete = false,
+    this.automationDriverEnabled = false,
+    this.automationAllowPty = false,
+    this.automationPort,
+    this.automationTokenOverride,
   });
+
+  /// Whether any HTTP automation driver CLI flag or environment override is set.
+  bool get hasAutomationConfig =>
+      automationDriverEnabled ||
+      automationAllowPty ||
+      automationPort != null ||
+      automationTokenOverride != null;
 
   /// Sanitized CLI arguments safe to forward across an auto-update relaunch
   /// (preserving canonicalized file flags and server URL while stripping raw
-  /// `--token` and `--caster-token` bearer values).
+  /// `--token`, `--caster-token`, and `--automation-*` flags).
   List<String> get relaunchArgs => List<String>.unmodifiable(<String>[
     if (cliServerUrl case final server?) ...['--server', server],
     if (tokenFile case final tf?) ...['--token-file', tf],
@@ -171,6 +198,13 @@ DesktopLaunchOverrides parseDesktopLaunchOverrides({
       '--trace-exit requires --trace-seconds or TERMUI_TRACE_SECONDS.',
     );
   }
+  final automationPort = _resolveAutomationPort(
+    hasCliPort: cli.hasAutomationPort,
+    cliPortRaw: cli.automationPort,
+  );
+  final automationTokenOverride = _nonEmptyTrimmed(
+    environment['FTERM_AUTOMATION_TOKEN'],
+  );
   final cliServer = _nonEmptyTrimmed(cli.serverUrl);
   final envKeyRaw = _nonEmptyTrimmed(environment['TERMUI_CAST_IAP_KEY_FILE']);
   final envGcloudRaw = _nonEmptyTrimmed(environment['TERMUI_CAST_GCLOUD_PATH']);
@@ -204,7 +238,28 @@ DesktopLaunchOverrides parseDesktopLaunchOverrides({
         cliTraceOut ?? _nonEmptyTrimmed(environment['TERMUI_TRACE_OUT']),
     traceDuration: traceDuration,
     traceExitOnComplete: cli.traceExit,
+    automationDriverEnabled: cli.automationDriver,
+    automationAllowPty: cli.automationAllowPty,
+    automationPort: automationPort,
+    automationTokenOverride: automationTokenOverride,
   );
+}
+
+int? _resolveAutomationPort({
+  required bool hasCliPort,
+  required String? cliPortRaw,
+}) {
+  if (!hasCliPort) return null;
+  final trimmed = _nonEmptyTrimmed(cliPortRaw);
+  final parsed = trimmed == null ? null : int.tryParse(trimmed);
+  if (parsed == null || !AutomationDriverConfig.isValidPort(parsed)) {
+    throw FormatException(
+      'Invalid port for --automation-port (expected '
+      '${AutomationDriverConfig.minPort}..'
+      '${AutomationDriverConfig.maxPort}): "$cliPortRaw".',
+    );
+  }
+  return parsed;
 }
 
 Duration? _resolveTraceDuration({
@@ -334,7 +389,8 @@ CastLaunchConfig resolveCastLaunchConfig({
       iapFactory == null &&
       !hasGcloudOverride &&
       relaunchArgs.isEmpty &&
-      !hasTraceConfig) {
+      !hasTraceConfig &&
+      !overrides.hasAutomationConfig) {
     return baseConfig;
   }
   return CastLaunchConfig(
@@ -351,6 +407,10 @@ CastLaunchConfig resolveCastLaunchConfig({
     traceOutPath: overrides.traceOutPath,
     traceDuration: overrides.traceDuration,
     traceExitOnComplete: overrides.traceExitOnComplete,
+    automationDriverEnabled: overrides.automationDriverEnabled,
+    automationAllowPty: overrides.automationAllowPty,
+    automationPort: overrides.automationPort,
+    automationTokenOverride: overrides.automationTokenOverride,
   );
 }
 
@@ -526,6 +586,10 @@ final class _ParsedCliFlags {
   final bool hasTraceOut;
   final bool hasTraceSeconds;
   final bool traceExit;
+  final bool automationDriver;
+  final bool automationAllowPty;
+  final String? automationPort;
+  final bool hasAutomationPort;
 
   const _ParsedCliFlags({
     required this.serverUrl,
@@ -548,6 +612,10 @@ final class _ParsedCliFlags {
     required this.hasTraceOut,
     required this.hasTraceSeconds,
     required this.traceExit,
+    required this.automationDriver,
+    required this.automationAllowPty,
+    required this.automationPort,
+    required this.hasAutomationPort,
   });
 }
 
@@ -562,6 +630,7 @@ _ParsedCliFlags _parseCliArgs(List<String> args) {
   String? gcloudPath;
   String? traceOut;
   String? traceSeconds;
+  String? automationPort;
   var hasToken = false;
   var hasTokenFile = false;
   var hasCasterToken = false;
@@ -572,6 +641,9 @@ _ParsedCliFlags _parseCliArgs(List<String> args) {
   var hasTraceOut = false;
   var hasTraceSeconds = false;
   var traceExit = false;
+  var automationDriver = false;
+  var automationAllowPty = false;
+  var hasAutomationPort = false;
   for (var i = 0; i < args.length; i++) {
     final current = args[i];
     if (current == '--') break;
@@ -610,10 +682,22 @@ _ParsedCliFlags _parseCliArgs(List<String> args) {
         traceSeconds = readValue();
         hasTraceSeconds = true;
       case '--trace-exit':
-        if (split != null) {
-          throw FormatException('Unexpected value for --trace-exit: $current');
-        }
+        _rejectFlagValue(split, '--trace-exit', current);
         traceExit = true;
+      case '--automation-driver':
+        _rejectFlagValue(split, '--automation-driver', current);
+        automationDriver = true;
+      case '--automation-allow-pty':
+        _rejectFlagValue(split, '--automation-allow-pty', current);
+        automationAllowPty = true;
+      case '--automation-port':
+        automationPort = readValue();
+        hasAutomationPort = true;
+      case '--automation-token':
+        throw const FormatException(
+          '--automation-token is not supported on the command line; '
+          'use the FTERM_AUTOMATION_TOKEN environment variable instead.',
+        );
     }
   }
   return _ParsedCliFlags(
@@ -637,7 +721,21 @@ _ParsedCliFlags _parseCliArgs(List<String> args) {
     hasTraceOut: hasTraceOut,
     hasTraceSeconds: hasTraceSeconds,
     traceExit: traceExit,
+    automationDriver: automationDriver,
+    automationAllowPty: automationAllowPty,
+    automationPort: automationPort,
+    hasAutomationPort: hasAutomationPort,
   );
+}
+
+void _rejectFlagValue(
+  ({String flag, String value})? split,
+  String flag,
+  String current,
+) {
+  if (split != null) {
+    throw FormatException('Unexpected value for $flag: $current');
+  }
 }
 
 ({String flag, String value})? _splitEqualsOption(String arg) {

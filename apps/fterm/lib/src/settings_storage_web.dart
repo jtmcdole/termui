@@ -23,6 +23,7 @@ final class _WebSettingsStorage implements SettingsStorage {
 
   @override
   String? getItem(String key) {
+    if (key == ftermAutomationConfigStorageKey) return null;
     if (_isSessionScopedKey(key)) {
       if (key == ftermRelayCredentialsStorageKey) {
         _purgeLocalStorageKey(key);
@@ -42,6 +43,7 @@ final class _WebSettingsStorage implements SettingsStorage {
 
   @override
   void setItem(String key, String value) {
+    if (key == ftermAutomationConfigStorageKey) return;
     if (_isSessionScopedKey(key)) {
       if (key == ftermRelayCredentialsStorageKey) {
         _purgeLocalStorageKey(key);

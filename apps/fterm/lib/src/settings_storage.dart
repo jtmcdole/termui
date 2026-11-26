@@ -28,6 +28,11 @@ const String ftermRelayCredentialsStorageKey = 'fterm.relay_credentials.v1';
 const String ftermWebWorkspaceResumeStorageKey =
     'fterm.web_workspace_resume.v1';
 
+/// Storage key used to persist desktop-only HTTP automation driver settings
+/// (`port` and generated `password`) in private desktop storage (`0600` on
+/// POSIX, user-only ACLs on Windows; ignored on Web).
+const String ftermAutomationConfigStorageKey = 'fterm.automation.v1';
+
 /// Key-value storage seam for persisting `fterm` settings, relay credentials,
 /// and Web workspace resume state.
 ///

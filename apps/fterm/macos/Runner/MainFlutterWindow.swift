@@ -57,6 +57,9 @@ class MainFlutterWindow: NSWindow {
       case "zoomWindow":
         self.performZoom(nil)
         result(nil)
+      // TODO(automation): Implement "getBounds" and "setBounds" on fterm/window
+      // using NSWindow.frame, setFrame(_:display:), and NSWindow.level for
+      // macOS window automation parity with Windows.
       default:
         result(FlutterMethodNotImplemented)
       }
