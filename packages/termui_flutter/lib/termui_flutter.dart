@@ -72,7 +72,7 @@ export 'src/terminal.dart' show Terminal;
 export 'src/terminal_ime_client.dart'
     show HostShortcutResult, TerminalImeClient, TerminalMetaKeyPolicy;
 export 'src/terminal_surface.dart'
-    show TerminalBufferChangeSignal, TerminalSurface;
+    show TerminalBufferChangeSignal, TerminalSurface, TerminalSurfaceState;
 export 'src/service/terminal_service.dart'
     show DefaultTerminalService, TerminalService;
 export 'src/rendering/atlas.dart'

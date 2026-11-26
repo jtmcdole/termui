@@ -491,6 +491,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   DateTime? _lastScrollAt;
 
   bool _hasReportedLayout = false;
+  Size? _lastLayoutSize;
   int _lastReportedCols = 0;
   int _lastReportedRows = 0;
   double _lastReportedCellW = 0.0;
@@ -556,6 +557,45 @@ final class TerminalSurfaceState extends State<TerminalSurface>
 
   /// Per-pane [GpuFrameWatchdog] monitoring custom CLI shaders.
   GpuFrameWatchdog get gpuFrameWatchdog => _gpuWatchdog;
+
+  /// Most recent logical layout size computed for the terminal grid, or `null`
+  /// before the first layout pass.
+  Size? get lastLogicalLayoutSize => _lastLayoutSize;
+
+  /// Injects a normalized `[0.0, 1.0]` pointer position into shader `iMouse`
+  /// uniforms without moving the OS cursor or forwarding PTY mouse events.
+  ///
+  /// Clamps [x] and [y] to `[0.0, 1.0]` and maps them to logical pixels using
+  /// [_lastLayoutSize] (falling back to the mounted [RenderBox] size when laid
+  /// out). Preserves the initial press origin while [pressed] remains `true`.
+  void injectShaderPointerNormalized({
+    required double x,
+    required double y,
+    bool pressed = false,
+  }) {
+    if (!mounted || x.isNaN || y.isNaN) return;
+    final layoutSize = _resolveLogicalLayoutSize();
+    if (layoutSize == null) return;
+    final lx = x.clamp(0.0, 1.0) * layoutSize.width;
+    final ly = y.clamp(0.0, 1.0) * layoutSize.height;
+    if (pressed && !_shaderPrimaryButtonDown) {
+      _shaderHasPointerClick = true;
+      _shaderClickLogicalX = math.max(lx, 1e-3);
+      _shaderClickLogicalY = math.max(ly, 1e-3);
+    }
+    _shaderPrimaryButtonDown = pressed;
+    _publishShaderPointer(lx, ly);
+  }
+
+  /// Resets injected shader pointer state and zeroes `iMouse` uniforms.
+  void clearInjectedShaderPointer() {
+    if (!mounted) return;
+    _shaderHasPointerClick = false;
+    _shaderPrimaryButtonDown = false;
+    _shaderClickLogicalX = 0.0;
+    _shaderClickLogicalY = 0.0;
+    _shaderMouseNotifier.update(0.0, 0.0, 0.0, 0.0, notify: _hasShaderBinding);
+  }
 
   /// Compiles and registers a custom CLI GLSL shader [source] under [id] with
   /// a bounded [timeout] (defaults to `4s`).
@@ -2026,10 +2066,19 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     );
   }
 
-  void _updateShaderPointerState(PointerEvent event) {
-    final lx = event.localPosition.dx;
-    final ly = event.localPosition.dy;
-    _syncShaderPointerButtons(event, lx, ly);
+  Size? _resolveLogicalLayoutSize() {
+    final cached = _lastLayoutSize;
+    if (cached != null && !cached.isEmpty) return cached;
+    final renderObject = context.findRenderObject();
+    if (renderObject is RenderBox &&
+        renderObject.hasSize &&
+        !renderObject.size.isEmpty) {
+      return renderObject.size;
+    }
+    return null;
+  }
+
+  void _publishShaderPointer(double lx, double ly) {
     final sign = _shaderPrimaryButtonDown ? 1.0 : -1.0;
     final clickZ = _shaderHasPointerClick ? sign * _shaderClickLogicalX : 0.0;
     final clickW = _shaderHasPointerClick ? sign * _shaderClickLogicalY : 0.0;
@@ -2040,6 +2089,13 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       clickW,
       notify: _hasShaderBinding,
     );
+  }
+
+  void _updateShaderPointerState(PointerEvent event) {
+    final lx = event.localPosition.dx;
+    final ly = event.localPosition.dy;
+    _syncShaderPointerButtons(event, lx, ly);
+    _publishShaderPointer(lx, ly);
   }
 
   void _syncShaderPointerButtons(PointerEvent event, double lx, double ly) {
@@ -2658,6 +2714,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _syncTerminalSizeAndIme(cols, rows, atlas.cellWidth, atlas.cellHeight);
 
     final layoutSize = Size(cols * atlas.cellWidth, rows * atlas.cellHeight);
+    _lastLayoutSize = layoutSize;
     return Focus(
       focusNode: _focusNode,
       autofocus: widget.autofocus,

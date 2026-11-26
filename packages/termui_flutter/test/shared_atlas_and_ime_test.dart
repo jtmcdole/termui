@@ -10,9 +10,6 @@ import 'package:termui/ui/color.dart' as tui_color;
 import 'package:termui/ui/style.dart';
 import 'package:termui/ui/terminal_palette.dart';
 import 'package:termui_flutter/src/rendering/painter.dart';
-// ignore: implementation_imports
-import 'package:termui_flutter/src/terminal_surface.dart'
-    show TerminalSurfaceState;
 import 'package:termui_flutter/termui_flutter.dart';
 
 final class _FakeTerminalService implements TerminalService {

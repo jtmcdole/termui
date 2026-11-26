@@ -15,8 +15,6 @@ import 'package:termui/ui/widgets/display/kitty_image.dart';
 import 'package:termui_flutter/src/rendering/painter.dart';
 // ignore: implementation_imports
 import 'package:termui_flutter/src/rendering/staging_cache.dart';
-// ignore: implementation_imports
-import 'package:termui_flutter/src/terminal_surface.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 
 Future<Uint8List> _renderRgba(TuiAtlasPainter painter) async {

@@ -26,9 +26,6 @@ import 'package:termui_flutter/src/rendering/shader_resource_pools.dart'
         GpuPingPongRegistry,
         GpuSizePool,
         WebGlRegionTargetPool;
-// ignore: implementation_imports
-import 'package:termui_flutter/src/terminal_surface.dart'
-    show TerminalSurfaceState;
 
 final class _FakeHandle implements CompiledShaderHandle {
   @override
