@@ -2149,8 +2149,6 @@ final class SizzleDirector {
       return file.existsSync() ? file.absolute.path : null;
     }
     final sourceAsset = _resolveRepoAsset(
-      windowsRelPath:
-          r'packages\termui_audio\example\assets\VoxelRevolution.ogg',
       posixRelPath: 'packages/termui_audio/example/assets/VoxelRevolution.ogg',
       workingDir: Directory.current.path,
     );
