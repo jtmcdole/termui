@@ -962,6 +962,9 @@ final class AutomationRouter {
       );
     }
 
+    if (_workspace.audioController.needsGestureUnlock) {
+      await _workspace.audioController.notifyUserGesture();
+    }
     final result = _workspace.sendRawPtyBytes(targetPaneId, bytes);
     return switch (result) {
       AutomationPtyWriteResult.ok => AutomationHttpResponse.ok(
@@ -1194,6 +1197,9 @@ final class AutomationRouter {
       );
     }
 
+    if (_workspace.audioController.needsGestureUnlock) {
+      await _workspace.audioController.notifyUserGesture();
+    }
     final buffer =
         ptyPane?.readDisplayBuffer() ?? editorPane!.readDisplayBuffer();
     final coords = _resolveMouseCoordinates(parsed, buffer);

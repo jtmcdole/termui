@@ -150,7 +150,14 @@ bool Win32Window::Create(const std::wstring& title,
 }
 
 bool Win32Window::Show() {
-  return ShowWindow(window_handle_, SW_SHOWNORMAL);
+  const bool shown = ShowWindow(window_handle_, SW_SHOWNORMAL) != FALSE;
+  if (!IsWindowVisible(window_handle_)) {
+    // Win32 ignores the nCmdShow argument on a process's first ShowWindow call
+    // when the parent passed STARTF_USESHOWWINDOW with SW_HIDE (e.g. Dart's
+    // ProcessStartMode.detached). A second call guarantees the window shows.
+    ShowWindow(window_handle_, SW_SHOW);
+  }
+  return shown || IsWindowVisible(window_handle_) != FALSE;
 }
 
 // static
