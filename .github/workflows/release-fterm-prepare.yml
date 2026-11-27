@@ -179,40 +179,40 @@ jobs:
             push --force origin "HEAD:refs/heads/${RELEASE_BRANCH}"
 
           WHATS_NEW_REMINDER="$(python3 - "$FTERM_VERSION" <<'PY'
-import pathlib, re, sys
+          import pathlib, re, sys
 
-target = sys.argv[1]
-target_match = re.match(r'^(\d+)\.(\d+)\.', target)
-catalog = pathlib.Path("apps/fterm/lib/src/ui/whats_new_catalog.dart")
-current = None
-if catalog.is_file():
-    m = re.search(
-        r"const\s+String\s+whatsNewContentVersion\s*=\s*'([^']+)'",
-        catalog.read_text(encoding="utf-8"),
-    )
-    if m:
-        current = m.group(1)
+          target = sys.argv[1]
+          target_match = re.match(r'^(\d+)\.(\d+)\.', target)
+          catalog = pathlib.Path("apps/fterm/lib/src/ui/whats_new_catalog.dart")
+          current = None
+          if catalog.is_file():
+              m = re.search(
+                  r"const\s+String\s+whatsNewContentVersion\s*=\s*'([^']+)'",
+                  catalog.read_text(encoding="utf-8"),
+              )
+              if m:
+                  current = m.group(1)
 
-cur_match = re.match(r'^(\d+)\.(\d+)\.', current or '')
-stale = True
-if target_match and cur_match:
-    target_mm = (int(target_match.group(1)), int(target_match.group(2)))
-    cur_mm = (int(cur_match.group(1)), int(cur_match.group(2)))
-    stale = target_mm > cur_mm
+          cur_match = re.match(r'^(\d+)\.(\d+)\.', current or '')
+          stale = True
+          if target_match and cur_match:
+              target_mm = (int(target_match.group(1)), int(target_match.group(2)))
+              cur_mm = (int(cur_match.group(1)), int(cur_match.group(2)))
+              stale = target_mm > cur_mm
 
-if stale:
-    stamped = f"`v{current}`" if current else "missing"
-    print(
-        f"> [!WARNING]\n"
-        f"> **What's New cards need a refresh before merging**: "
-        f"`apps/fterm/lib/src/ui/whats_new_catalog.dart` is still stamped {stamped} "
-        f"while this release bumps `fterm` to `v{target}`.\n"
-        f"> - [ ] Update `whatsNewHighlights` and bump `whatsNewContentVersion` in "
-        f"`apps/fterm/lib/src/ui/whats_new_catalog.dart` (and update "
-        f"`apps/fterm/test/fterm_whats_new_test.dart`)."
-    )
-PY
-)"
+          if stale:
+              stamped = f"`v{current}`" if current else "missing"
+              print(
+                  f"> [!WARNING]\n"
+                  f"> **What's New cards need a refresh before merging**: "
+                  f"`apps/fterm/lib/src/ui/whats_new_catalog.dart` is still stamped {stamped} "
+                  f"while this release bumps `fterm` to `v{target}`.\n"
+                  f"> - [ ] Update `whatsNewHighlights` and bump `whatsNewContentVersion` in "
+                  f"`apps/fterm/lib/src/ui/whats_new_catalog.dart` (and update "
+                  f"`apps/fterm/test/fterm_whats_new_test.dart`)."
+              )
+          PY
+          )"
 
           {
             if [ -n "$WHATS_NEW_REMINDER" ]; then
