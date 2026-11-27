@@ -3512,7 +3512,10 @@ final class _KittyGpuImageCache {
   final VoidCallback onDecoded;
   final Map<KittyImageData, ui.Image> images = {};
   final Map<(KittyImageRegistry, int), ui.Image> imagesById = {};
+  final Map<(KittyImageRegistry, int), KittyImageData> _dataBySlot = {};
   final Set<KittyImageData> _decoding = Set.identity();
+  final List<ui.Image> _pendingDisposals = <ui.Image>[];
+  bool _postFrameDisposalScheduled = false;
   bool _disposed = false;
 
   _KittyGpuImageCache({required this.onDecoded});
@@ -3645,12 +3648,37 @@ final class _KittyGpuImageCache {
     }
   }
 
+  void _scheduleImageDisposal(ui.Image image) {
+    if (_disposed) {
+      image.dispose();
+      return;
+    }
+    _pendingDisposals.add(image);
+    if (_postFrameDisposalScheduled) return;
+    _postFrameDisposalScheduled = true;
+    final scheduler = SchedulerBinding.instance;
+    scheduler.addPostFrameCallback((_) => _flushPendingDisposals());
+    if (scheduler.schedulerPhase == SchedulerPhase.idle) {
+      scheduler.ensureVisualUpdate();
+    }
+  }
+
+  void _flushPendingDisposals() {
+    _postFrameDisposalScheduled = false;
+    if (_pendingDisposals.isEmpty) return;
+    for (final image in _pendingDisposals) {
+      image.dispose();
+    }
+    _pendingDisposals.clear();
+  }
+
   void _evictOldest() {
     final oldestKey = images.keys.first;
     final evicted = images.remove(oldestKey);
     if (evicted == null) return;
     imagesById.removeWhere((_, img) => identical(img, evicted));
-    evicted.dispose();
+    _dataBySlot.removeWhere((_, cached) => cached == oldestKey);
+    _scheduleImageDisposal(evicted);
   }
 
   void _onImageDecoded(
@@ -3663,14 +3691,23 @@ final class _KittyGpuImageCache {
       decoded.dispose();
       return;
     }
+    final slot = (registry, data.imageId);
+    final previousData = _dataBySlot[slot];
+    if (previousData != null && previousData != data) {
+      final superseded = images.remove(previousData);
+      if (superseded != null && !identical(superseded, decoded)) {
+        _scheduleImageDisposal(superseded);
+      }
+    }
     while (images.length >= _maxKittyGpuImages && !images.containsKey(data)) {
       _evictOldest();
     }
     final old = images[data];
     images[data] = decoded;
-    imagesById[(registry, data.imageId)] = decoded;
+    imagesById[slot] = decoded;
+    _dataBySlot[slot] = data;
     if (old != null && !identical(old, decoded)) {
-      old.dispose();
+      _scheduleImageDisposal(old);
     }
     onDecoded();
   }
@@ -3678,11 +3715,13 @@ final class _KittyGpuImageCache {
   void dispose() {
     _disposed = true;
     imagesById.clear();
+    _dataBySlot.clear();
     for (final image in images.values) {
       image.dispose();
     }
     images.clear();
     _decoding.clear();
+    _flushPendingDisposals();
   }
 }
 

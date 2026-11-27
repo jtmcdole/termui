@@ -797,4 +797,122 @@ void main() {
       }
     });
   });
+
+  group('GpuKittyQuad rawRgbaPixels and cacheSlot', () {
+    test('populates rawRgbaPixels only for exact formatRgba32 matches and omits it for PNG or stale kittyImagesById fallback', () async {
+      final imgV1 = await _makeTestImage(8, 4);
+      final imgV2 = await _makeTestImage(12, 4);
+      final pngImg = await _makeTestImage(8, 4);
+      addTearDown(imgV1.dispose);
+      addTearDown(imgV2.dispose);
+      addTearDown(pngImg.dispose);
+
+      final rgbaV2 = Uint8List(12 * 4 * 4);
+      final dataV2 = KittyImageData(
+        imageId: 7,
+        pixelWidth: 12,
+        pixelHeight: 4,
+        rgbaPixels: rgbaV2,
+        gridCols: 2,
+        gridRows: 1,
+        version: 2,
+      );
+      final registry = KittyImageRegistry()..registerImage(dataV2);
+      final buffer = Buffer(4, 2)
+        ..registerKittyRegistry(const tui_geo.Rect(0, 0, 4, 2), registry);
+
+      StagingBufferSet stagePlaceholder(int imageId) {
+        final staged = StagingBufferSet()..ensureGridCapacity(2, 4);
+        staged.addFallbackCell(
+          char: kittyPlaceholderCell(0, 0),
+          gridCol: 0,
+          gridRow: 0,
+          modifiers: Modifier.kittyPlaceholder,
+          fgArgb: 0xFF000000 | imageId,
+          bgArgb: 0xFF000000,
+          resolvedFg: 0xFF000000 | imageId,
+          x: 0.0,
+          y: 0.0,
+          w: 10.0,
+          h: 20.0,
+        );
+        return staged;
+      }
+
+      GpuAtlasQuadBatch build({
+        required int imageId,
+        required Map<KittyImageData, ui.Image> kittyImages,
+        required Map<(KittyImageRegistry, int), ui.Image> kittyImagesById,
+      }) => GpuAtlasBatchBuilder().build(
+        staged: stagePlaceholder(imageId),
+        buffer: buffer,
+        logicalSize: const ui.Size(40.0, 40.0),
+        devicePixelRatio: 1.0,
+        cellWidth: 10.0,
+        cellHeight: 20.0,
+        atlasPhysWidth: 256.0,
+        atlasPhysHeight: 256.0,
+        fgScaleBlock: 1.0,
+        overhangFgPhysical: 0.0,
+        overhangFgLogical: 0.0,
+        defaultBackgroundArgb: 0x00000000,
+        stagingGeneration: 1,
+        kittyImages: kittyImages,
+        kittyImagesById: kittyImagesById,
+      );
+
+      // 1. Exact RGBA32 match with matching dimensions attaches rawRgbaPixels + cacheSlot.
+      final exactBatch = build(
+        imageId: 7,
+        kittyImages: <KittyImageData, ui.Image>{dataV2: imgV2},
+        kittyImagesById: <(KittyImageRegistry, int), ui.Image>{
+          (registry, 7): imgV2,
+        },
+      );
+      final exactQuad = exactBatch.kittyQuads.single;
+      expect(identical(exactQuad.rawRgbaPixels, rgbaV2), isTrue);
+      expect(exactQuad.cacheSlot, equals((registry, 7)));
+
+      // 2. Stale kittyImagesById fallback (before dataV2 decoded) must NOT attach
+      // dataV2's 12x4 pixels to imgV1's 8x4 image.
+      final staleBatch = build(
+        imageId: 7,
+        kittyImages: const <KittyImageData, ui.Image>{},
+        kittyImagesById: <(KittyImageRegistry, int), ui.Image>{
+          (registry, 7): imgV1,
+        },
+      );
+      final staleQuad = staleBatch.kittyQuads.single;
+      expect(identical(staleQuad.image, imgV1), isTrue);
+      expect(staleQuad.rawRgbaPixels, isNull);
+      expect(staleQuad.cacheSlot, isNull);
+
+      // 3. Dimension mismatch between exactImage and data omits rawRgbaPixels.
+      final mismatchBatch = build(
+        imageId: 7,
+        kittyImages: <KittyImageData, ui.Image>{dataV2: imgV1},
+        kittyImagesById: const <(KittyImageRegistry, int), ui.Image>{},
+      );
+      expect(mismatchBatch.kittyQuads.single.rawRgbaPixels, isNull);
+
+      // 4. PNG format (f=100) omits rawRgbaPixels (payload is PNG bytes, not RGBA).
+      final pngData = KittyImageData.fromPng(
+        imageId: 9,
+        pixelWidth: 8,
+        pixelHeight: 4,
+        pngBytes: Uint8List.fromList([0x89, 0x50, 0x4E, 0x47]),
+        gridCols: 2,
+        gridRows: 1,
+      );
+      registry.registerImage(pngData);
+      final pngBatch = build(
+        imageId: 9,
+        kittyImages: <KittyImageData, ui.Image>{pngData: pngImg},
+        kittyImagesById: const <(KittyImageRegistry, int), ui.Image>{},
+      );
+      final pngQuad = pngBatch.kittyQuads.single;
+      expect(pngQuad.rawRgbaPixels, isNull);
+      expect(pngQuad.cacheSlot, equals((registry, 9)));
+    });
+  });
 }

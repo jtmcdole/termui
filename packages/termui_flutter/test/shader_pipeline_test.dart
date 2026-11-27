@@ -4167,6 +4167,162 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         expect(watchdog.activeCustomShaderIds, isEmpty);
       },
     );
+
+    testWidgets(
+      'pauses ambient background sync renders while direct priming is in flight for a new Kitty image',
+      (tester) async {
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final atlasImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 8,
+            height: 8,
+            color: const Color(0xFFFFFFFF),
+          ),
+        );
+        final outputImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 16,
+            height: 16,
+            color: const Color(0xFF112233),
+          ),
+        );
+        final kittyV1 = await tester.runAsync(
+          () => _createSolidImage(
+            width: 8,
+            height: 8,
+            color: const Color(0xFFFF0000),
+          ),
+        );
+        final kittyV2 = await tester.runAsync(
+          () => _createSolidImage(
+            width: 12,
+            height: 8,
+            color: const Color(0xFF00FF00),
+          ),
+        );
+        addTearDown(() => atlasImg?.dispose());
+        addTearDown(() => outputImg?.dispose());
+        addTearDown(() => kittyV1?.dispose());
+        addTearDown(() => kittyV2?.dispose());
+
+        final prepareV2 = Completer<bool>();
+        final uploadedKitty = <ui.Image>{kittyV1!};
+        late _FakeDirectShaderBackend backend;
+        backend = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+          primedInitially: true,
+          prepareHandler: (_) async {
+            final ready = await prepareV2.future;
+            if (ready) {
+              uploadedKitty.add(kittyV2!);
+              backend.forceNullDirectRender = false;
+            }
+            return ready;
+          },
+        );
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+        final activity = _TestPaintNotifier();
+        addTearDown(activity.dispose);
+
+        final config = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'user:damask_bg',
+              stage: TerminalShaderStage.background,
+              inlineGlsl: _validAnimatedGlsl,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.always,
+        );
+        await tester.runAsync(() => controller.syncConfig(config));
+
+        GpuAtlasQuadBatch buildBatch(ui.Image kittyImg, int gen) =>
+            GpuAtlasQuadBatch(
+              instanceData: Float32List(16),
+              instanceCount: 1,
+              italicStartInstanceIndex: 1,
+              kittyInsertInstanceIndex: 1,
+              generation: gen,
+              defaultBackgroundArgb: 0xFF000000,
+              kittyQuads: <GpuKittyQuad>[
+                GpuKittyQuad(
+                  image: kittyImg,
+                  dstX: 0.0,
+                  dstY: 0.0,
+                  dstWidth: 8.0,
+                  dstHeight: 8.0,
+                  u0: 0.0,
+                  v0: 0.0,
+                  u1: 1.0,
+                  v1: 1.0,
+                ),
+              ],
+              hasCanvasOnlyContent: false,
+            );
+
+        var currentBatch = buildBatch(kittyV1, 1);
+
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: Center(
+              child: TerminalShaderHost(
+                controller: controller,
+                config: config,
+                isFocused: true,
+                activityListenable: activity,
+                atlasImage: atlasImg,
+                atlasDevicePixelRatio: 1.0,
+                directLogicalSize: const Size(120, 60),
+                directTerminalBatchProvider: (_, _) => currentBatch,
+                child: const SizedBox(width: 120, height: 60),
+              ),
+            ),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(backend.directSyncRenderCount, greaterThanOrEqualTo(1));
+
+        // Navigate to a new Kitty image not yet uploaded on GPU -> triggers
+        // _DirectFallbackReason.priming with prepareDirectResources in flight.
+        currentBatch = buildBatch(kittyV2!, 2);
+        backend.forceNullDirectRender = true;
+        backend.syncBackgroundCalls.clear();
+        activity.fire();
+        await tester.pump();
+        expect(backend.prepareCallCount, equals(1));
+
+        // While prepareDirectResources (Windows IO-thread toByteData) is in
+        // flight, ambient 60 FPS background sync renders must pause rather than
+        // hammering DXGI SwapChain::Present concurrently on the Raster thread.
+        for (var i = 0; i < 5; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        expect(
+          backend.syncBackgroundCalls,
+          isEmpty,
+          reason:
+              'Ambient renderBackgroundSync frames must not submit while direct '
+              'priming (toByteData) is still in flight.',
+        );
+
+        // Once priming finishes, direct GPU rendering and ticking resume.
+        final rendersBefore = backend.directSyncRenderCount;
+        prepareV2.complete(true);
+        for (var i = 0; i < 4; i++) {
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        final hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        expect(hostState.debugIsDirectModeActive, isTrue);
+        expect(backend.directSyncRenderCount, greaterThan(rendersBefore));
+      },
+    );
   });
 }
 
