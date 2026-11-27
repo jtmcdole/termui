@@ -8,6 +8,7 @@ import 'package:fterm/src/launch_config.dart';
 import 'package:fterm/src/settings_storage.dart';
 import 'package:fterm/src/shader_profile_store.dart';
 import 'package:fterm/src/ui/fterm_shell_scaffold.dart';
+import 'package:fterm/src/ui/whats_new_catalog.dart';
 import 'package:fterm/src/update/update_service.dart';
 import 'package:fterm/src/workspace/fterm_workspace_controller.dart';
 import 'package:fterm/src/workspace/local_host_driver.dart';
@@ -286,6 +287,27 @@ void main() {
     await loadCastFonts();
   });
 
+  group('whatsNewHighlights catalog', () {
+    test(
+      'stamps a valid SemVer content version and unique non-empty cards',
+      () {
+        expect(FtermSemVer.tryParse(whatsNewContentVersion), isNotNull);
+        expect(whatsNewHighlights, isNotEmpty);
+        final ids = <String>{};
+        for (final card in whatsNewHighlights) {
+          expect(card.id.trim(), isNotEmpty);
+          expect(
+            ids.add(card.id),
+            isTrue,
+            reason: 'Duplicate card id ${card.id}',
+          );
+          expect(card.title.trim(), isNotEmpty);
+          expect(card.description.trim(), isNotEmpty);
+        }
+      },
+    );
+  });
+
   group('FtermPreferences.lastSeenWhatsNewVersion persistence', () {
     test('decodes missing key to null, round-trips JSON, and supports copyWith/clear', () {
       const legacyJson = '{"audioMuted":true,"audioVolume":0.5}';
@@ -363,12 +385,9 @@ void main() {
 
         expect(env.workspace.activeOverlay, equals(FtermOverlay.whatsNew));
         expect(find.text("What's New in v0.3.0"), findsOneWidget);
+        expect(find.text('VS Code-Style Command Palette'), findsOneWidget);
         expect(
-          find.text('Remote Shell Spawning, Nerd Font v3 & Layout Resume'),
-          findsOneWidget,
-        );
-        expect(
-          find.text('Self-Hosted Web Relay, Compression & Subpaths'),
+          find.text('Blender-Style Settings Overhaul & Live Search'),
           findsOneWidget,
         );
         expect(env.workspace.shouldShowWhatsNewPill, isFalse);
@@ -427,6 +446,10 @@ void main() {
         );
 
         // Try Wave + Glow: sets bg + fg chains and auto-reveals background opacity.
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('whats-new-try-wave-glow')),
+        );
+        await tester.pump();
         await tester.tap(find.byKey(const ValueKey('whats-new-try-wave-glow')));
         await tester.pump();
         expect(
@@ -571,6 +594,40 @@ void main() {
           findsNothing,
         );
         expect(find.byIcon(Icons.auto_awesome), findsWidgets);
+      },
+    );
+
+    testWidgets(
+      'launches Command Palette and Blender Settings from What\'s New highlight buttons',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(960, 720));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final env = _WhatsNewHarness(currentVersion: FtermSemVer(0, 8, 1));
+        addTearDown(() => tester.runAsync(env.dispose));
+        await tester.runAsync(env.workspace.start);
+
+        await tester.pumpWidget(_buildScaffoldApp(env.workspace));
+        await tester.pump();
+
+        env.workspace.openWhatsNew();
+        await tester.pump();
+
+        await tester.tap(
+          find.byKey(const ValueKey('whats-new-try-command-palette')),
+        );
+        await tester.pump();
+        expect(
+          env.workspace.activeOverlay,
+          equals(FtermOverlay.commandPalette),
+        );
+
+        env.workspace.openWhatsNew();
+        await tester.pump();
+
+        await tester.tap(find.byKey(const ValueKey('whats-new-try-settings')));
+        await tester.pump();
+        expect(env.workspace.activeOverlay, equals(FtermOverlay.settings));
       },
     );
   });

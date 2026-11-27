@@ -17,6 +17,7 @@ import 'fterm_about_overlay.dart';
 import 'fterm_feedback_overlay.dart';
 import 'palette/fterm_command_palette_overlay.dart';
 import 'settings/fterm_settings_overlay.dart';
+import 'whats_new_catalog.dart';
 
 /// Modal overlays rendered over the terminal workspace when [FtermOverlay] !=
 /// [FtermOverlay.none].
@@ -1125,8 +1126,8 @@ final class _WhatsNewOverlay extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'Try live GPU shader presets below — changes preview on the '
-              'terminal behind this modal and can be reverted in one click.',
+              'Explore recent highlights below, or preview live GPU shader '
+              'presets on the terminal behind this modal.',
               style: TextStyle(color: p.muted, fontSize: 11),
             ),
             const SizedBox(height: 12),
@@ -1136,64 +1137,19 @@ final class _WhatsNewOverlay extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _WhatsNewCard(
-                      palette: p,
-                      icon: Icons.auto_awesome,
-                      title: 'Ghostty GLSL Shaders & Built-In Presets',
-                      description:
-                          'Drop Ghostty .glsl shaders into your shaders folder or '
-                          'stack built-in GPU passes (flutter_gpu on desktop, '
-                          'WebGL2 on web).',
-                      footer: _WhatsNewTryItRow(
-                        workspace: workspace,
+                    for (var i = 0; i < whatsNewHighlights.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 10),
+                      _WhatsNewCard(
                         palette: p,
+                        icon: whatsNewHighlights[i].icon,
+                        title: whatsNewHighlights[i].title,
+                        description: whatsNewHighlights[i].description,
+                        footer: _buildCardFooter(
+                          whatsNewHighlights[i].action,
+                          p,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    _WhatsNewCard(
-                      palette: p,
-                      icon: Icons.terminal,
-                      title: 'CLI Artistic Shaders (ESC _ S) & Safe Trust',
-                      description:
-                          'Built-in region presets (fire, one_ring, vortex, '
-                          'ice_frost, neon_pulse, glitch_tear, forge_spark), '
-                          '120–240 Hz GPU cell transforms, and SHA-256 trust prompts '
-                          'for custom CLI GLSL.',
-                    ),
-                    const SizedBox(height: 10),
-                    _WhatsNewCard(
-                      palette: p,
-                      icon: Icons.speed,
-                      title: 'GPU Adapter Picker, FPS Cap & Performance HUD',
-                      description:
-                          'Switch integrated vs. discrete GPU on Windows (with '
-                          '1-click restart), cap ambient shader FPS, monitor live '
-                          'FPS/GPU/VRAM (Ctrl+Shift+F9), and record Chrome traces '
-                          '(Ctrl+Shift+F10).',
-                    ),
-                    const SizedBox(height: 10),
-                    _WhatsNewCard(
-                      palette: p,
-                      icon: Icons.add_box_outlined,
-                      title:
-                          'Remote Shell Spawning, Nerd Font v3 & Layout Resume',
-                      description:
-                          'Spawn fresh remote shells from fterm Web (picker or '
-                          'pane splits) via multi-PTY termui_cast, restore tabs '
-                          'and splits across refreshes via sessionStorage, and '
-                          'render Nerd Font v3 icons plus offline COLRv1 emoji.',
-                    ),
-                    const SizedBox(height: 10),
-                    _WhatsNewCard(
-                      palette: p,
-                      icon: Icons.public,
-                      title: 'Self-Hosted Web Relay, Compression & Subpaths',
-                      description:
-                          'Gzip/Brotli static WASM and font serving, loopback '
-                          '--allowed-origin proxy support, --trust-proxy-client-auth '
-                          'one-step reloads, --base-path subpath hosting, and an '
-                          'About-styled Web loading splash.',
-                    ),
+                    ],
                   ],
                 ),
               ),
@@ -1205,6 +1161,33 @@ final class _WhatsNewOverlay extends StatelessWidget {
       );
     },
   );
+
+  Widget? _buildCardFooter(WhatsNewCardAction action, FtermOverlayPalette p) =>
+      switch (action) {
+        .none => null,
+        .openCommandPalette => Align(
+          alignment: .centerLeft,
+          child: OutlinedButton.icon(
+            key: const ValueKey('whats-new-try-command-palette'),
+            onPressed: () => workspace.openCommandPalette(initialInput: '>'),
+            icon: const Icon(Icons.terminal, size: 14),
+            label: const Text(
+              'Try Command Palette',
+              style: TextStyle(fontSize: 11),
+            ),
+          ),
+        ),
+        .openSettings => Align(
+          alignment: .centerLeft,
+          child: OutlinedButton.icon(
+            key: const ValueKey('whats-new-try-settings'),
+            onPressed: workspace.openSettingsOverlay,
+            icon: const Icon(Icons.tune, size: 14),
+            label: const Text('Open Settings', style: TextStyle(fontSize: 11)),
+          ),
+        ),
+        .shaderTryIt => _WhatsNewTryItRow(workspace: workspace, palette: p),
+      };
 }
 
 final class _WhatsNewCard extends StatelessWidget {
