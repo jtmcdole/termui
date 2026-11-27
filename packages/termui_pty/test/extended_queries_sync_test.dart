@@ -268,12 +268,14 @@ void main() {
     );
 
     test(
-      'OSC 99 parses chunks, ignores p=? queries, and enforces 16 KiB & 32-entry caps',
+      'OSC 99 parses chunks, answers p=? queries, and enforces 16 KiB & 32-entry caps',
       () {
         final notifications = <({String title, String message})>[];
+        final replies = <String>[];
         final vt = VirtualTerminal(
           width: 20,
           height: 5,
+          onReply: replies.add,
           onNotification: (title, message) =>
               notifications.add((title: title, message: message)),
         );
@@ -306,12 +308,33 @@ void main() {
         vt.writeString('\x1b]99;e=1;$base64Payload\x1b\\');
         expect(notifications, [(title: 'Encrypted Alert', message: '')]);
 
-        // Ignore p=? queries and unsupported p= types (never call onNotification!)
+        // Answer p=? queries via onReply (sanitizing & capping unsafe/long IDs),
+        // ignore unsupported p= types, and never disturb in-flight chunks or onNotification!
         notifications.clear();
+        replies.clear();
+        final longId = 'A' * 200;
+        vt.writeString('\x1b]99;i=mid:p=title:d=0;Half\x1b\\');
         vt.writeString(
-          '\x1b]99;p=?\x1b\\\x1b]99;i=q1:p=?;?\x1b\\\x1b]99;p=alive;\x1b\\',
+          '\x1b]99;p=?\x1b\\\x1b]99;i=q1:p=?;?\x1b\\'
+          '\x1b]99;i=bad space\$!@:p=?;\x1b\\'
+          '\x1b]99;i=$longId:p=?;\x1b\\'
+          '\x1b]99;i=mid:p=?;\x1b\\'
+          '\x1b]99;p=alive;\x1b\\',
         );
         expect(notifications, isEmpty);
+        expect(
+          replies,
+          equals([
+            '\x1b]99;p=?;a=report:c=1:p=title,body,close,?\x1b\\',
+            '\x1b]99;i=q1:p=?;a=report:c=1:p=title,body,close,?\x1b\\',
+            '\x1b]99;i=badspace:p=?;a=report:c=1:p=title,body,close,?\x1b\\',
+            '\x1b]99;i=${'A' * 128}:p=?;a=report:c=1:p=title,body,close,?\x1b\\',
+            '\x1b]99;i=mid:p=?;a=report:c=1:p=title,body,close,?\x1b\\',
+          ]),
+        );
+        vt.writeString('\x1b]99;i=mid:p=body:d=1;Done\x1b\\');
+        expect(notifications, [(title: 'Half', message: 'Done')]);
+        notifications.clear();
 
         // Cap each pending notification at 16 * 1024 chars across chunks
         final chunk4k = 'A' * 4096;
@@ -360,6 +383,119 @@ void main() {
       ]);
       vt.dispose();
     });
+  });
+
+  group('Pointer Shapes (OSC 22)', () {
+    test(
+      'supports set, explicit =, push >, pop <, 64-entry cap, ? queries, ?__current__, and reset',
+      () {
+        final replies = <String>[];
+        final changes = <String?>[];
+        final vt = VirtualTerminal(
+          width: 20,
+          height: 5,
+          onReply: replies.add,
+          onMouseCursorChanged: changes.add,
+        );
+
+        // Capability query reports 1 for supported CSS/W3C shapes and 0 for unknown.
+        vt.writeString(
+          '\x1b]22;?pointer,text,nesw-resize,ktty-invalid-shape\x1b\\',
+        );
+        expect(replies.last, equals('\x1b]22;1,1,1,0\x1b\\'));
+
+        // Empty query returns empty OSC 22 reply; __current__ returns '0' on empty stack.
+        vt.writeString('\x1b]22;?\x1b\\\x1b]22;?__current__\x1b\\');
+        expect(replies[1], equals('\x1b]22;\x1b\\'));
+        expect(replies[2], equals('\x1b]22;0\x1b\\'));
+        expect(vt.mouseCursorShape, isNull);
+        expect(changes, isEmpty);
+
+        // Bare set, explicit = set, duplicate no-op suppression, and reset via empty/default.
+        vt.writeString('\x1b]22;pointer\x1b\\');
+        vt.writeString('\x1b]22;pointer\x1b\\');
+        expect(vt.mouseCursorShape, equals('pointer'));
+        expect(changes, equals(['pointer']));
+        vt.writeString('\x1b]22;?__current__\x1b\\');
+        expect(replies.last, equals('\x1b]22;pointer\x1b\\'));
+
+        // Reject invalid shape names (C1 bytes, commas, semicolons, uppercase, >64 chars)
+        // without mutating the active shape or leaking control bytes into ?__current__.
+        vt.writeString('\x1b]22;bad\u009c\u009bpayload\x1b\\');
+        vt.writeString('\x1b]22;a,b;c\x1b\\');
+        vt.writeString('\x1b]22;UPPER\x1b\\');
+        vt.writeString('\x1b]22;${'a' * 65}\x1b\\');
+        vt.osc(22, 'raw\x1b[31m\n');
+        expect(vt.mouseCursorShape, equals('pointer'));
+
+        // Cap query token count at 64 to prevent reply amplification DoS.
+        final hugeQuery = List<String>.filled(100, '__current__').join(',');
+        vt.writeString('\x1b]22;?$hugeQuery\x1b\\');
+        expect(
+          replies.last,
+          equals(
+            '\x1b]22;${List<String>.filled(64, 'pointer').join(',')}\x1b\\',
+          ),
+        );
+
+        vt.writeString('\x1b]22;=crosshair\x1b\\');
+        expect(vt.mouseCursorShape, equals('crosshair'));
+        vt.writeString('\x1b]22;\x1b\\');
+        expect(vt.mouseCursorShape, isNull);
+
+        // Push (>a,b), empty > push, and pop (< / <ignored) stack semantics.
+        vt.writeString('\x1b]22;>text,grab,wait\x1b\\');
+        expect(vt.mouseCursorShape, equals('wait'));
+        vt.writeString('\x1b]22;>\x1b\\');
+        expect(vt.mouseCursorShape, isNull);
+        vt.writeString('\x1b]22;?__current__\x1b\\');
+        expect(replies.last, equals('\x1b]22;default\x1b\\'));
+        vt.writeString('\x1b]22;<ignored\x1b\\');
+        expect(vt.mouseCursorShape, equals('wait'));
+        vt.writeString('\x1b]22;<\x1b\\');
+        expect(vt.mouseCursorShape, equals('grab'));
+        vt.writeString('\x1b]22;default\x1b\\');
+        expect(vt.mouseCursorShape, isNull);
+        vt.writeString('\x1b]22;<\x1b\\');
+        expect(vt.mouseCursorShape, equals('text'));
+        vt.writeString('\x1b]22;<\x1b\\');
+        expect(vt.mouseCursorShape, isNull);
+        // Pop on empty stack is a safe no-op.
+        vt.writeString('\x1b]22;<\x1b\\');
+        expect(vt.mouseCursorShape, isNull);
+
+        // Stack depth is bounded at 64 entries (oldest evicted).
+        for (var i = 0; i < 70; i++) {
+          vt.writeString('\x1b]22;>shape-$i\x1b\\');
+        }
+        expect(vt.mouseCursorShape, equals('shape-69'));
+        for (var i = 0; i < 63; i++) {
+          vt.writeString('\x1b]22;<\x1b\\');
+        }
+        expect(vt.mouseCursorShape, equals('shape-6'));
+        vt.writeString('\x1b]22;<\x1b\\');
+        expect(vt.mouseCursorShape, isNull);
+
+        // reset(), DECSTR (\x1b[!p), and RIS (\x1bc) all clear pointer shape and notify listener.
+        changes.clear();
+        vt.writeString('\x1b]22;>pointer\x1b\\');
+        expect(changes, equals(['pointer']));
+        vt.reset();
+        expect(vt.mouseCursorShape, isNull);
+        expect(changes, equals(['pointer', null]));
+
+        changes.clear();
+        vt.writeString('\x1b]22;>grab\x1b\\\x1b[!p');
+        expect(vt.mouseCursorShape, isNull);
+        expect(changes, equals(['grab', null]));
+
+        changes.clear();
+        vt.writeString('\x1b]22;>wait\x1b\\\x1bc');
+        expect(vt.mouseCursorShape, isNull);
+        expect(changes, equals(['wait', null]));
+        vt.dispose();
+      },
+    );
   });
 
   group('SGR-Pixels Mouse Mode (?1016)', () {

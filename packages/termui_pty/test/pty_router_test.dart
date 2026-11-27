@@ -677,5 +677,61 @@ void main() {
         expect(port.dirtySpans, isEmpty);
       },
     );
+
+    test(
+      'PtyRouter exposes OSC 22 mouseCursorShape on modes and forwards OSC 22 / OSC 99 query replies',
+      () async {
+        final backend = _FakeRoutedPtyBackend();
+        final router = PtyRouter();
+        final session = router.createSession(
+          id: 'osc22-1',
+          backend: backend,
+          initialCols: 40,
+          initialRows: 10,
+        );
+        final port = session.openPort(initialCols: 40, initialRows: 10);
+        addTearDown(() async {
+          await port.dispose();
+          await router.dispose();
+        });
+
+        var notifications = 0;
+        port.addListener(() => notifications++);
+        expect(port.modes.mouseCursorShape, isNull);
+        expect(
+          const TerminalPortModes(mouseCursorShape: 'pointer'),
+          equals(const TerminalPortModes(mouseCursorShape: 'pointer')),
+        );
+        expect(
+          const TerminalPortModes(mouseCursorShape: 'pointer').hashCode,
+          equals(const TerminalPortModes(mouseCursorShape: 'pointer').hashCode),
+        );
+        expect(
+          const TerminalPortModes(mouseCursorShape: 'pointer'),
+          isNot(equals(const TerminalPortModes(mouseCursorShape: 'text'))),
+        );
+
+        backend.emitOutput('\x1b]22;>pointer\x1b\\');
+        await Future<void>.delayed(Duration.zero);
+        expect(port.modes.mouseCursorShape, equals('pointer'));
+        expect(notifications, greaterThan(0));
+
+        backend.emitOutput('\x1b]22;?pointer,bogus\x1b\\');
+        backend.emitOutput('\x1b]99;i=ktty:p=?;\x1b\\');
+        await Future<void>.delayed(Duration.zero);
+        final replyText = backend.writtenChunks.map(utf8.decode).join();
+        expect(replyText, contains('\x1b]22;1,0\x1b\\'));
+        expect(
+          replyText,
+          contains(
+            '\x1b]99;i=ktty:p=?;a=report:c=1:p=title,body,close,?\x1b\\',
+          ),
+        );
+
+        backend.emitOutput('\x1b]22;<\x1b\\');
+        await Future<void>.delayed(Duration.zero);
+        expect(port.modes.mouseCursorShape, isNull);
+      },
+    );
   });
 }

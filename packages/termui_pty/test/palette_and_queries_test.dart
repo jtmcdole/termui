@@ -208,9 +208,17 @@ void main() {
         expect(replies.single, equals('\x1b[?2031;1\$y'));
         replies.clear();
 
+        var listenerCalls = 0;
+        vt.addListener(() => listenerCalls++);
+
         vt.setColorScheme(TerminalBrightness.light);
         expect(replies.single, equals('\x1b[?997;2n'));
+        expect(listenerCalls, equals(1));
         replies.clear();
+
+        // Setting the same scheme again is a no-op and does not notify.
+        vt.setColorScheme(TerminalBrightness.light);
+        expect(listenerCalls, equals(1));
 
         vt.writeString('\x1b[?996n');
         expect(replies.single, equals('\x1b[?997;2n'));
@@ -219,8 +227,10 @@ void main() {
         // RIS clears OSC overrides and disables mode 2031 reporting.
         vt.writeString('\x1b]4;1;#ff0000\x07\x1b]10;#222222\x07');
         vt.writeString('\x1bc');
+        final callsBeforeDark = listenerCalls;
         vt.setColorScheme(TerminalBrightness.dark);
         expect(replies, isEmpty);
+        expect(listenerCalls, equals(callsBeforeDark + 1));
 
         vt.writeString('\x1b[?2031\$p\x1b]4;1;?\x07\x1b]10;?\x07');
         expect(
