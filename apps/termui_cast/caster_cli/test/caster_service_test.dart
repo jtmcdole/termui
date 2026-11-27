@@ -3425,10 +3425,10 @@ void main() {
     );
 
     test(
-      'answers all 17 ktty_probe capability queries and streams uploaded KittyImagePayload frames',
+      'answers all 26 core ktty_probe capability queries and streams uploaded KittyImagePayload frames',
       () {
         fakeAsync((async) {
-          const sessionId = SessionId('ktty-probe-17');
+          const sessionId = SessionId('ktty-probe-26');
           final pty = _FakePtySession();
           late StreamChannel<Uint8List> serverSide;
           final serverFrames = <CastMessage>[];
@@ -3481,23 +3481,40 @@ void main() {
           final rawB64 = base64Encode(sampleRgba);
           final zlibB64 = base64Encode(_zlibCompressForTest(sampleRgba));
           final pngB64 = base64Encode(_pngEncode2x2ForTest(sampleRgba));
+          final splitAt = (rawB64.length ~/ 2) & ~3;
+          final chunk0 = rawB64.substring(0, splitAt);
+          final chunk1 = rawB64.substring(splitAt);
 
-          // Emit all 17 ktty_probe queries (+ CSI 16 t cell pixel size) in one batch.
+          // Emit all 26 core ktty_probe queries in one batch, matching ktty_probe_report.dart.
           final probeBatch = StringBuffer()
             ..write('\x1b_Gi=901,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\')
             ..write('\x1b_Gi=902,s=2,v=2,a=t,t=d,f=32,q=0;$rawB64\x1b\\')
             ..write('\x1b_Gi=903,s=2,v=2,a=t,t=d,f=32,o=z,q=0;$zlibB64\x1b\\')
             ..write('\x1b_Gi=904,a=t,t=d,f=100,q=0;$pngB64\x1b\\')
+            ..write('\x1b_Gi=905,s=2,v=2,a=t,t=d,f=32,q=0,m=1;$chunk0\x1b\\')
+            ..write('\x1b_Ga=t,m=0;$chunk1\x1b\\')
+            ..write('\x1b_Ga=d,d=I,i=905,q=2\x1b\\')
+            ..write('\x1b_Gi=906,s=2,v=2,a=t,t=d,f=32,q=2;$rawB64\x1b\\')
+            ..write('\x1b_Ga=d,d=i,i=906,q=2\x1b\\')
+            ..write('\x1b_Ga=p,i=906,p=7,U=1,c=1,r=1,q=0\x1b\\')
+            ..write('\x1b_Ga=d,d=I,i=906,q=2\x1b\\')
+            ..write('\x1b_GI=907,s=2,v=2,a=t,t=d,f=32,q=0;$rawB64\x1b\\')
+            ..write('\x1b_Ga=d,d=N,I=907,q=2\x1b\\')
             ..write('\x1b[?u')
             ..write('\x1b[>0q')
             ..write('\x1b]10;?\x1b\\')
             ..write('\x1b]11;?\x1b\\')
+            ..write('\x1b]22;?pointer,text,ktty-invalid\x1b\\')
+            ..write('\x1b]99;i=ktty-probe:p=?;\x1b\\')
             ..write('\x1b[?2026\$p')
             ..write('\x1b[?1016\$p')
             ..write('\x1b[?2027\$p')
             ..write('\x1b[?2004\$p')
             ..write('\x1b[?1004\$p')
             ..write('\x1b[?1006\$p')
+            ..write('\x1b[?2031\$p')
+            ..write('\x1b[?996n')
+            ..write('\x1b[14t')
             ..write('\x1b[16t')
             ..write('\x1b[18t')
             ..write('\x1b[>c')
@@ -3509,22 +3526,30 @@ void main() {
             for (final bytes in pty.writtenInputs) utf8.decode(bytes),
           ].join();
 
-          // Assert all 17 ktty_probe replies + CSI 16 t cell-pixel reply arrived!
+          // Assert all 26 core ktty_probe replies arrived!
           final expectedTokens = <String>[
             '\x1b_Gi=901;OK\x1b\\',
             '\x1b_Gi=902;OK\x1b\\',
             '\x1b_Gi=903;OK\x1b\\',
             '\x1b_Gi=904;OK\x1b\\',
+            '\x1b_Gi=905;OK\x1b\\',
+            '\x1b_Gi=906,p=7;OK\x1b\\',
+            ',I=907;OK\x1b\\',
             '\x1b[?0u',
             '\x1bP>|termui',
             '\x1b]10;rgb:',
             '\x1b]11;rgb:',
+            '\x1b]22;1,1,0\x1b\\',
+            '\x1b]99;i=ktty-probe:p=?;a=report:c=1:p=title,body,close,?\x1b\\',
             '\x1b[?2026;2\$y',
             '\x1b[?1016;2\$y',
             '\x1b[?2027;2\$y',
             '\x1b[?2004;2\$y',
             '\x1b[?1004;2\$y',
             '\x1b[?1006;2\$y',
+            '\x1b[?2031;2\$y',
+            '\x1b[?997;1n',
+            '\x1b[4;480;800t',
             '\x1b[6;16;8t',
             '\x1b[8;30;100t',
             '\x1b[>',
