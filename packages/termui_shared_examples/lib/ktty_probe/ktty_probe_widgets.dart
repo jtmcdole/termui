@@ -10,7 +10,7 @@ enum KttyProbeTab {
   /// Combined overview of capability matrix, graphics, SGR, and live telemetry.
   overview('1:Overview'),
 
-  /// Full 17-row capability probe table with protocol tags and decoded replies.
+  /// Full 28-row capability probe table with protocol tags and decoded replies.
   matrix('2:Matrix'),
 
   /// Kitty Graphics (`f=32`, 32-bit MSB, `f=100` PNG), occlusion, SGR & ligatures.
@@ -42,6 +42,9 @@ final class KttyProbeActions {
   /// Toggles the cell-granularity occlusion badge over the `KittyImage` tiles.
   final void Function() onToggleOcclusion;
 
+  /// Cycles Kitty Graphics delete modes (`a=d,d=a,q=2` vs `a=d,d=A,q=2`).
+  final void Function()? onCycleDeleteMode;
+
   /// Emits an `OSC 99` desktop notification sequence over the wire.
   final void Function() onSendNotification;
 
@@ -64,6 +67,7 @@ final class KttyProbeActions {
     required this.onCycleKittyKeyboard,
     required this.onToggleSgrPixels,
     required this.onToggleOcclusion,
+    this.onCycleDeleteMode,
     required this.onSendNotification,
     required this.onSendClipboard,
     required this.onCycleWindowTitle,
@@ -95,6 +99,9 @@ final class KttyProbeViewState {
   /// Last interactive `OSC` action message.
   final String lastActionMessage;
 
+  /// Optional label for the active Kitty Graphics delete mode (`'d=a'` or `'d=A'`).
+  final String? deleteModeLabel;
+
   /// Creates a [KttyProbeViewState].
   const KttyProbeViewState({
     required this.report,
@@ -104,6 +111,7 @@ final class KttyProbeViewState {
     required this.showOcclusion,
     required this.keyLog,
     required this.lastActionMessage,
+    this.deleteModeLabel,
   });
 }
 
@@ -226,8 +234,138 @@ final class _KttyDataTileElement extends Element {
   }
 }
 
+/// Widget that paints a 24-bit [KittyImageData] ([kttyVisualShorthandImageId])
+/// using shorthand `U+10EEEE` Unicode placeholder cells: column 0 carries a
+/// single row diacritic (`U+10EEEE` + row diacritic, 3 UTF-16 code units) and
+/// columns `1..cols-1` carry bare `U+10EEEE` (2 UTF-16 code units), while
+/// `underlineColor` encodes placement IDs `p=1` (top half) and `p=2` (bottom half).
+final class KttyShorthandTileWidget extends Widget {
+  /// Descriptor containing pixels payload, 24-bit `imageId`, and grid dimensions.
+  final KittyImageData imageData;
+
+  /// Creates a [KttyShorthandTileWidget].
+  const KttyShorthandTileWidget({super.key, required this.imageData});
+
+  @override
+  int getIntrinsicWidth(int height) => imageData.gridCols;
+
+  @override
+  int getIntrinsicHeight(int width) => imageData.gridRows;
+
+  @override
+  Element createElement() => _KttyShorthandTileElement(this);
+}
+
+final class _KttyShorthandTileElement extends Element {
+  static final int _topPlacementColor = const Color(0, 0, 1).argb;
+  static final int _bottomPlacementColor = const Color(0, 0, 2).argb;
+
+  KittyImageData? _cachedBase;
+  KittyImageData? _cachedSizedData;
+  List<String>? _cachedRowHeads;
+
+  _KttyShorthandTileElement(KttyShorthandTileWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final data = (widget as KttyShorthandTileWidget).imageData;
+    return constraints.constrain(Size(data.gridCols, data.gridRows));
+  }
+
+  KittyImageData _resolveSizedData(
+    KittyImageData base,
+    int validId,
+    int cols,
+    int rows,
+  ) {
+    if (base.imageId == validId &&
+        cols == base.gridCols &&
+        rows == base.gridRows) {
+      return base;
+    }
+    if (identical(_cachedBase, base) &&
+        _cachedSizedData != null &&
+        _cachedSizedData!.imageId == validId &&
+        _cachedSizedData!.gridCols == cols &&
+        _cachedSizedData!.gridRows == rows) {
+      return _cachedSizedData!;
+    }
+    final sized = base.copyWith(
+      imageId: validId,
+      gridCols: cols,
+      gridRows: rows,
+    );
+    _cachedBase = base;
+    _cachedSizedData = sized;
+    return sized;
+  }
+
+  List<String> _ensureRowHeads(int rows) {
+    final existing = _cachedRowHeads;
+    if (existing != null && existing.length == rows) {
+      return existing;
+    }
+    final heads = List<String>.generate(
+      rows,
+      (row) =>
+          '$kittyPlaceholderChar${String.fromCharCode(kittyDiacritics[row])}',
+      growable: false,
+    );
+    _cachedRowHeads = heads;
+    return heads;
+  }
+
+  @override
+  void performPaint(Buffer buffer, Offset offset) {
+    final base = (widget as KttyShorthandTileWidget).imageData;
+    final cols = math.min(size.width, kittyDiacritics.length);
+    final rows = math.min(size.height, kittyDiacritics.length);
+    if (cols <= 0 || rows <= 0) return;
+
+    final low24 = base.imageId & 0xFFFFFF;
+    final validId = low24 == 0 ? kttyVisualShorthandImageId : low24;
+    KittyImageRegistry.register(_resolveSizedData(base, validId, cols, rows));
+    buffer.registerKittyRegistry(
+      Rect(offset.dx, offset.dy, cols, rows),
+      KittyImageRegistry.global,
+    );
+
+    final rowHeads = _ensureRowHeads(rows);
+    final fgArgb = 0xFF000000 | validId;
+    final splitRow = rows ~/ 2;
+    for (var ry = 0; ry < rows; ry++) {
+      final by = offset.dy + ry;
+      final ulArgb = ry < splitRow ? _topPlacementColor : _bottomPlacementColor;
+      buffer.setAttributes(
+        offset.dx,
+        by,
+        char: rowHeads[ry],
+        fg: fgArgb,
+        bg: 0,
+        modifiers: Modifier.kittyPlaceholder,
+        underlineColor: ulArgb,
+        blend: false,
+      );
+      for (var rx = 1; rx < cols; rx++) {
+        buffer.setAttributes(
+          offset.dx + rx,
+          by,
+          char: kittyPlaceholderChar,
+          fg: fgArgb,
+          bg: 0,
+          modifiers: Modifier.kittyPlaceholder,
+          underlineColor: ulArgb,
+          blend: false,
+        );
+      }
+    }
+  }
+}
+
 /// Stateless presentation layout for the KTTY Probe & Check TUI.
 final class KttyProbeDashboard extends StatelessWidget {
+  static const int _shorthandMinInnerWidth = 56;
+
   static final KittyImageData _rawTile = buildRawRgbaVisualTile(
     cols: 12,
     rows: 4,
@@ -237,6 +375,10 @@ final class KttyProbeDashboard extends StatelessWidget {
     rows: 4,
   );
   static final KittyImageData _pngTile = buildPngVisualTile(cols: 12, rows: 4);
+  static final KittyImageData _shorthandTile = buildShorthandVisualTile(
+    cols: 12,
+    rows: 4,
+  );
 
   /// Current state snapshot.
   final KttyProbeViewState state;
@@ -382,17 +524,54 @@ final class KttyProbeDashboard extends StatelessWidget {
 
   Widget _buildMatrixPanel() {
     final entries = state.report.entries;
+    final mux = state.report.multiplexerDiagnostics;
+    final hasMuxWarning = mux != null && mux.hints.isNotEmpty;
     return _borderedPanel(
       title:
           'Capability Matrix (Run #${state.report.probeRunCount}${state.report.isComplete ? " - DA1 Complete" : " - Waiting"})',
       borderColor: CharmColors.charple,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final visible = entries.take(math.max(0, constraints.maxHeight));
+          final bannerRows = hasMuxWarning && constraints.maxHeight >= 1
+              ? 1
+              : 0;
+          final visible = entries.take(
+            math.max(0, constraints.maxHeight - bannerRows),
+          );
           return Column([
+            if (bannerRows == 1) _buildMultiplexerBanner(mux!),
             for (final entry in visible) _buildCapabilityRow(entry),
           ]);
         },
+      ),
+    );
+  }
+
+  Widget _buildMultiplexerBanner(KttyMultiplexerDiagnostics mux) {
+    final summary = mux.hints.join(' | ');
+    return SizedBox(
+      height: 1,
+      child: RichText(
+        wrap: false,
+        text: TextSpan(
+          children: [
+            TextSpan(
+              text: '[WARN] ${mux.multiplexer}:',
+              style: const Style(
+                foreground: CharmColors.pepper,
+                background: CharmColors.butter,
+                modifiers: Modifier.bold,
+              ),
+            ),
+            TextSpan(
+              text: ' $summary',
+              style: const Style(
+                foreground: CharmColors.butter,
+                modifiers: Modifier.bold,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -415,7 +594,7 @@ final class KttyProbeDashboard extends StatelessWidget {
               style: Style(foreground: color, modifiers: Modifier.bold),
             ),
             TextSpan(
-              text: entry.name.padRight(23),
+              text: entry.name.padRight(24),
               style: const Style(foreground: CharmColors.salt),
             ),
             TextSpan(
@@ -440,67 +619,81 @@ final class KttyProbeDashboard extends StatelessWidget {
       title:
           'Kitty Graphics (U+10EEEE) & Cell Occlusion [O:${state.showOcclusion ? "ON" : "OFF"}]',
       borderColor: CharmColors.malibu,
-      child: Column([
-        const SizedBox(
-          height: 1,
-          child: Text(
-            ' f=32 RGBA24    32-bit MSB ID   f=100 PNG',
-            style: Style(foreground: CharmColors.smoke),
-          ),
-        ),
-        Expanded(
-          child: Stack([
-            Positioned(
-              left: 1,
-              top: 0,
-              width: 42,
-              height: 4,
-              child: Row([
-                KttyDataTileWidget(imageData: _rawTile),
-                const SizedBox(width: 2, child: Text('')),
-                KttyDataTileWidget(imageData: _msbTile),
-                const SizedBox(width: 2, child: Text('')),
-                KttyDataTileWidget(imageData: _pngTile),
-              ]),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final showShorthand = constraints.maxWidth >= _shorthandMinInnerWidth;
+          final caption = showShorthand
+              ? ' f=32 RGBA24    32-bit MSB ID   f=100 PNG  Shorthand'
+              : ' f=32 RGBA24    32-bit MSB ID   f=100 PNG';
+          final rowWidth = showShorthand ? 54 : 40;
+          return Column([
+            SizedBox(
+              height: 1,
+              child: Text(
+                caption,
+                style: const Style(foreground: CharmColors.smoke),
+              ),
             ),
-            if (state.showOcclusion)
-              const Positioned(
-                left: 10,
-                top: 1,
-                width: 22,
-                height: 2,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    backgroundColor: CharmColors.pepper,
-                  ),
-                  child: Column([
-                    SizedBox(
-                      height: 1,
-                      child: Text(
-                        ' [Z-Occlusion Cell] ',
-                        style: Style(
-                          foreground: CharmColors.butter,
-                          background: CharmColors.pepper,
-                          modifiers: Modifier.bold,
-                        ),
-                      ),
-                    ),
-                    SizedBox(
-                      height: 1,
-                      child: Text(
-                        ' Clips U+10EEEE [O] ',
-                        style: Style(
-                          foreground: CharmColors.julep,
-                          background: CharmColors.pepper,
-                        ),
-                      ),
-                    ),
+            Expanded(
+              child: Stack([
+                Positioned(
+                  left: 1,
+                  top: 0,
+                  width: rowWidth,
+                  height: 4,
+                  child: Row([
+                    KttyDataTileWidget(imageData: _rawTile),
+                    const SizedBox(width: 2, child: Text('')),
+                    KttyDataTileWidget(imageData: _msbTile),
+                    const SizedBox(width: 2, child: Text('')),
+                    KttyDataTileWidget(imageData: _pngTile),
+                    if (showShorthand) ...[
+                      const SizedBox(width: 2, child: Text('')),
+                      KttyShorthandTileWidget(imageData: _shorthandTile),
+                    ],
                   ]),
                 ),
+                if (state.showOcclusion) _buildOcclusionOverlay(),
+              ]),
+            ),
+          ]);
+        },
+      ),
+    );
+  }
+
+  Widget _buildOcclusionOverlay() {
+    return const Positioned(
+      left: 10,
+      top: 1,
+      width: 22,
+      height: 2,
+      child: DecoratedBox(
+        decoration: BoxDecoration(backgroundColor: CharmColors.pepper),
+        child: Column([
+          SizedBox(
+            height: 1,
+            child: Text(
+              ' [Z-Occlusion Cell] ',
+              style: Style(
+                foreground: CharmColors.butter,
+                background: CharmColors.pepper,
+                modifiers: Modifier.bold,
               ),
-          ]),
-        ),
-      ]),
+            ),
+          ),
+          SizedBox(
+            height: 1,
+            child: Text(
+              ' Clips U+10EEEE [O] ',
+              style: Style(
+                foreground: CharmColors.julep,
+                background: CharmColors.pepper,
+              ),
+            ),
+          ),
+        ]),
+      ),
     );
   }
 
@@ -697,6 +890,8 @@ final class KttyProbeDashboard extends StatelessWidget {
   }
 
   Widget _buildActionButtonsRow() {
+    final delLabel = state.deleteModeLabel;
+    final delText = delLabel == null ? '[D:DelMode]' : '[D:$delLabel]';
     return SizedBox(
       height: 1,
       child: Row([
@@ -716,6 +911,12 @@ final class KttyProbeDashboard extends StatelessWidget {
           text: '[O:Occlude]',
           onPressed: actions.onToggleOcclusion,
           style: const Style(foreground: CharmColors.butter),
+        ),
+        const SizedBox(width: 1, child: Text('')),
+        Button(
+          text: delText,
+          onPressed: actions.onCycleDeleteMode ?? () {},
+          style: const Style(foreground: CharmColors.salmon),
         ),
         const SizedBox(width: 1, child: Text('')),
         Button(
@@ -743,7 +944,7 @@ final class KttyProbeDashboard extends StatelessWidget {
     return const SizedBox(
       height: 1,
       child: Text(
-        ' Keys: [1-4] Tabs │ [R] Re-Probe │ [K] Kitty Kb │ [M] ?1016 Pixels │ [O] Occlusion │ [N] OSC 99 │ [C] OSC 52 │ [T] OSC 2 │ [P] OSC 133 │ [Q] Quit',
+        ' Keys: [1-4] Tabs │ [R] Re-Probe │ [K] Kitty Kb │ [M] ?1016 Pixels │ [O] Occlusion │ [D] DelMode │ [N] OSC 99 │ [C] OSC 52 │ [T] OSC 2 │ [P] OSC 133 │ [Q] Quit',
         style: Style(foreground: CharmColors.smoke, modifiers: Modifier.dim),
       ),
     );
