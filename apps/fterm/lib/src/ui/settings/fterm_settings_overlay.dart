@@ -6,6 +6,7 @@ import 'package:flutter/services.dart'
     show HardwareKeyboard, KeyDownEvent, KeyEvent;
 import 'package:material_ui/material_ui.dart';
 
+import '../../commands/fterm_capability_context.dart';
 import '../../file_drop_bridge.dart';
 import '../../workspace/fterm_workspace_controller.dart';
 import '../fterm_overlays.dart';
@@ -35,6 +36,10 @@ final class FtermSettingsOverlay extends StatefulWidget {
   /// Optional platform override for hermetic cross-platform testing.
   final TargetPlatform? platformOverride;
 
+  /// Optional runtime feature flag override. When omitted, inherits
+  /// `workspace.enabledFeatures`.
+  final Set<String>? enabledFeatures;
+
   /// Creates the overhauled Settings modal overlay.
   const FtermSettingsOverlay({
     super.key,
@@ -43,6 +48,7 @@ final class FtermSettingsOverlay extends StatefulWidget {
     required this.onOpenUrl,
     required this.isWeb,
     this.platformOverride,
+    this.enabledFeatures,
   });
 
   @override
@@ -249,14 +255,15 @@ final class _FtermSettingsOverlayState extends State<FtermSettingsOverlay> {
     );
     final isSearching = _isSearching;
     final platform = _effectivePlatform(context);
+    final capabilities = FtermCapabilityContext.fromWorkspace(
+      workspace,
+      isWeb: widget.isWeb,
+      platform: platform,
+      supportsUpdates: _supportsUpdates,
+      enabledFeatures: widget.enabledFeatures,
+    );
     final searchResult = isSearching
-        ? SettingsCatalog.search(
-            _searchQuery,
-            isWeb: widget.isWeb,
-            isDesktopHost: workspace.isDesktopHost,
-            supportsUpdates: _supportsUpdates,
-            isWindows: platform == .windows,
-          )
+        ? SettingsCatalog.search(_searchQuery, capabilities: capabilities)
         : const SettingsSearchResult(
             sectionMatchCounts: <FtermSettingsSection, int>{},
             panelMatches: <SettingsSearchPanelMatch>[],
@@ -327,8 +334,7 @@ final class _FtermSettingsOverlayState extends State<FtermSettingsOverlay> {
                                     workspace: workspace,
                                     palette: palette,
                                     onOpenUrl: widget.onOpenUrl,
-                                    isWeb: widget.isWeb,
-                                    platformOverride: platform,
+                                    capabilities: capabilities,
                                     searchQuery: _searchQuery,
                                     result: searchResult,
                                     onClearSearch: _clearSearch,
@@ -338,8 +344,7 @@ final class _FtermSettingsOverlayState extends State<FtermSettingsOverlay> {
                                     workspace: workspace,
                                     palette: palette,
                                     onOpenUrl: widget.onOpenUrl,
-                                    isWeb: widget.isWeb,
-                                    platformOverride: platform,
+                                    capabilities: capabilities,
                                     filter: SettingsPanelFilter(
                                       isPanelExpanded: _isPanelExpanded,
                                       onTogglePanel: _togglePanel,
@@ -371,8 +376,7 @@ final class _SettingsSectionContent extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
   final UrlOpener onOpenUrl;
-  final bool isWeb;
-  final TargetPlatform platformOverride;
+  final FtermCapabilityContext capabilities;
   final SettingsPanelFilter filter;
 
   const _SettingsSectionContent({
@@ -380,8 +384,7 @@ final class _SettingsSectionContent extends StatelessWidget {
     required this.workspace,
     required this.palette,
     required this.onOpenUrl,
-    required this.isWeb,
-    required this.platformOverride,
+    required this.capabilities,
     required this.filter,
   });
 
@@ -390,38 +393,49 @@ final class _SettingsSectionContent extends StatelessWidget {
     .interface => SettingsInterfaceSection(
       workspace: workspace,
       palette: palette,
+      isWeb: capabilities.isWeb,
+      platformOverride: capabilities.platform,
+      capabilities: capabilities,
       filter: filter,
     ),
     .themes => SettingsThemesSection(
       workspace: workspace,
       palette: palette,
-      isWeb: isWeb,
+      isWeb: capabilities.isWeb,
+      platformOverride: capabilities.platform,
+      capabilities: capabilities,
       filter: filter,
     ),
     .shaders => SettingsShadersSection(
       workspace: workspace,
       palette: palette,
-      isWeb: isWeb,
+      isWeb: capabilities.isWeb,
+      platformOverride: capabilities.platform,
+      capabilities: capabilities,
       filter: filter,
     ),
     .keyboard => FtermKeyboardSettingsTab(
       workspace: workspace,
       palette: palette,
-      isWeb: isWeb,
-      platformOverride: platformOverride,
+      isWeb: capabilities.isWeb,
+      platformOverride: capabilities.platform,
+      capabilities: capabilities,
       filter: filter,
     ),
     .shell => SettingsShellSection(
       workspace: workspace,
       palette: palette,
-      platformOverride: platformOverride,
+      isWeb: capabilities.isWeb,
+      platformOverride: capabilities.platform,
+      capabilities: capabilities,
       filter: filter,
     ),
     .system => SettingsSystemSection(
       workspace: workspace,
       palette: palette,
-      isWeb: isWeb,
-      platformOverride: platformOverride,
+      isWeb: capabilities.isWeb,
+      platformOverride: capabilities.platform,
+      capabilities: capabilities,
       filter: filter,
     ),
     .automation => FtermAutomationSettingsTab(
@@ -433,6 +447,9 @@ final class _SettingsSectionContent extends StatelessWidget {
       workspace: workspace,
       palette: palette,
       onOpenUrl: onOpenUrl,
+      isWeb: capabilities.isWeb,
+      platformOverride: capabilities.platform,
+      capabilities: capabilities,
       filter: filter,
     ),
   };
@@ -442,8 +459,7 @@ final class _SettingsSearchResultsBody extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
   final UrlOpener onOpenUrl;
-  final bool isWeb;
-  final TargetPlatform platformOverride;
+  final FtermCapabilityContext capabilities;
   final String searchQuery;
   final SettingsSearchResult result;
   final VoidCallback onClearSearch;
@@ -452,8 +468,7 @@ final class _SettingsSearchResultsBody extends StatelessWidget {
     required this.workspace,
     required this.palette,
     required this.onOpenUrl,
-    required this.isWeb,
-    required this.platformOverride,
+    required this.capabilities,
     required this.searchQuery,
     required this.result,
     required this.onClearSearch,
@@ -506,8 +521,7 @@ final class _SettingsSearchResultsBody extends StatelessWidget {
             workspace: workspace,
             palette: palette,
             onOpenUrl: onOpenUrl,
-            isWeb: isWeb,
-            platformOverride: platformOverride,
+            capabilities: capabilities,
             filter: SettingsPanelFilter(
               onlyPanelId: match.panelId,
               visibleItemIds: match.matchedItemIds,

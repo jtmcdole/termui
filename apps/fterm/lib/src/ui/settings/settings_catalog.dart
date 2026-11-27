@@ -1,6 +1,9 @@
 import 'package:material_ui/material_ui.dart';
-import 'package:termui/termui.dart' as tui;
 
+import '../../commands/descriptor_adapters.dart';
+import '../../commands/fterm_capability_context.dart';
+import '../../commands/fterm_descriptor_models.dart';
+import '../../commands/settings_descriptors.dart';
 import '../../workspace/fterm_workspace_controller.dart';
 
 /// Metadata describing one clickable category in the Blender-style left rail.
@@ -56,6 +59,15 @@ final class SettingsSearchItem {
   /// Whether this entry only renders on native Windows builds.
   final bool windowsOnly;
 
+  /// Declarative platform and capability visibility gate for this entry.
+  final FtermVisibility visibility;
+
+  /// Optional runtime feature flag required to surface this setting.
+  final String? featureFlag;
+
+  /// Optional runtime availability predicate evaluated against capabilities.
+  final bool Function(FtermCapabilityContext ctx)? isAvailable;
+
   /// Creates a searchable setting descriptor.
   const SettingsSearchItem({
     required this.id,
@@ -64,9 +76,39 @@ final class SettingsSearchItem {
     required this.panelTitle,
     required this.title,
     required this.keywords,
-    this.desktopOnly = false,
-    this.windowsOnly = false,
-  });
+    bool? desktopOnly,
+    bool? windowsOnly,
+    FtermVisibility? visibility,
+    this.featureFlag,
+    this.isAvailable,
+  }) : visibility =
+           visibility ??
+           ((windowsOnly ?? false)
+               ? .windowsDesktop
+               : ((desktopOnly ?? false) ? .desktopOnly : .always)),
+       desktopOnly =
+           desktopOnly ??
+           (visibility != null
+               ? visibility != .always
+               : (windowsOnly ?? false)),
+       windowsOnly = windowsOnly ?? (visibility == .windowsDesktop);
+
+  /// Maps a pure [SettingsSearchEntry] projected from declarative descriptors
+  /// into a [SettingsSearchItem].
+  factory SettingsSearchItem.fromEntry(SettingsSearchEntry entry) =>
+      SettingsSearchItem(
+        id: entry.id,
+        section: entry.section,
+        panelId: entry.panelId,
+        panelTitle: entry.panelTitle,
+        title: entry.title,
+        keywords: entry.keywords,
+        desktopOnly: entry.desktopOnly,
+        windowsOnly: entry.windowsOnly,
+        visibility: entry.visibility,
+        featureFlag: entry.featureFlag,
+        isAvailable: entry.isAvailable,
+      );
 }
 
 /// Matched panel group returned by [SettingsCatalog.search].
@@ -235,387 +277,19 @@ abstract final class SettingsCatalog {
     _ => true,
   };
 
-  static final String _themePresetKeywords = [
-    for (final preset in tui.TerminalColorTheme.presets) preset.id,
-  ].join(' ');
-
   /// Full unmodifiable list of searchable settings items across all sections
-  /// and panels.
+  /// and panels, projected directly from [allSettingDescriptors].
   static final List<SettingsSearchItem> allSearchItems =
       List<SettingsSearchItem>.unmodifiable(<SettingsSearchItem>[
-        // Interface
-        const SettingsSearchItem(
-          id: 'interface-dock-position',
-          section: .interface,
-          panelId: 'interface-tab-bar',
-          panelTitle: 'Tab Bar',
-          title: 'Tab Bar Position',
-          keywords: 'dock top left hidden chrome bar tabs layout',
-        ),
-        const SettingsSearchItem(
-          id: 'interface-auto-hide-tab',
-          section: .interface,
-          panelId: 'interface-tab-bar',
-          panelTitle: 'Tab Bar',
-          title: 'Auto-hide tab bar on single tab',
-          keywords: 'single tab hide compact minimal bar',
-        ),
-        const SettingsSearchItem(
-          id: 'interface-copy-on-select',
-          section: .interface,
-          panelId: 'interface-clipboard',
-          panelTitle: 'Clipboard & Selection',
-          title: 'Copy on mouse selection',
-          keywords: 'clipboard yank highlight drag mouse select',
-        ),
-        const SettingsSearchItem(
-          id: 'interface-osc52',
-          section: .interface,
-          panelId: 'interface-clipboard',
-          panelTitle: 'Clipboard & Selection',
-          title: 'Allow focused remote OSC 52 clipboard writes',
-          keywords: 'osc52 osc 52 remote clipboard security paste copy',
-        ),
-
-        // Themes
-        const SettingsSearchItem(
-          id: 'themes-appearance-mode',
-          section: .themes,
-          panelId: 'themes-appearance',
-          panelTitle: 'Theme & Appearance',
-          title: 'Appearance Mode',
-          keywords: 'system dark light brightness color mode',
-        ),
-        SettingsSearchItem(
-          id: 'themes-preset',
-          section: .themes,
-          panelId: 'themes-appearance',
-          panelTitle: 'Theme & Appearance',
-          title: 'Theme Preset',
-          keywords: 'color scheme palette theme $_themePresetKeywords',
-        ),
-        const SettingsSearchItem(
-          id: 'themes-font-size',
-          section: .themes,
-          panelId: 'themes-typography',
-          panelTitle: 'Typography',
-          title: 'Font Size',
-          keywords: 'text zoom pt points scale size typography font',
-        ),
-        const SettingsSearchItem(
-          id: 'themes-bg-opacity',
-          section: .themes,
-          panelId: 'themes-background',
-          panelTitle: 'Background',
-          title: 'Background Opacity',
-          keywords: 'transparency alpha translucent glass opacity',
-        ),
-        const SettingsSearchItem(
-          id: 'themes-wallpaper',
-          section: .themes,
-          panelId: 'themes-background',
-          panelTitle: 'Background',
-          title: 'Wallpaper',
-          keywords: 'background image png jpeg webp picture wallpaper',
-        ),
-
-        // Shaders
-        const SettingsSearchItem(
-          id: 'shaders-backend',
-          section: .shaders,
-          panelId: 'shaders-pipeline',
-          panelTitle: 'Pipeline & Actions',
-          title: 'Shader Backend',
-          keywords: 'gpu impeller webgl auto disabled backend shaders',
-        ),
-        const SettingsSearchItem(
-          id: 'shaders-actions',
-          section: .shaders,
-          panelId: 'shaders-pipeline',
-          panelTitle: 'Pipeline & Actions',
-          title: 'Shader Editor, Folder & Web GLSL Upload',
-          keywords:
-              'new shader tab open folder upload web glsl shadertoy ghostty '
-              'reload ctrl shift f5',
-        ),
-        const SettingsSearchItem(
-          id: 'shaders-bg-chain',
-          section: .shaders,
-          panelId: 'shaders-background',
-          panelTitle: 'Background Shaders',
-          title: 'Background Shader Chain',
-          keywords: 'wallpaper_wave background pass chain glsl order',
-        ),
-        const SettingsSearchItem(
-          id: 'shaders-fg-chain',
-          section: .shaders,
-          panelId: 'shaders-foreground',
-          panelTitle: 'Foreground Shaders',
-          title: 'Foreground Shader Chain',
-          keywords:
-              'crt scanline phosphor glow cursor_glow scanline_overlay '
-              'crt_lottes phosphor_glow retro_phosphor postprocess pass chain '
-              'glsl',
-        ),
-        const SettingsSearchItem(
-          id: 'shaders-custom-path',
-          section: .shaders,
-          panelId: 'shaders-custom-params',
-          panelTitle: 'Custom Shaders & Parameters',
-          title: 'Add Custom .glsl Path',
-          keywords: 'custom glsl file path shadertoy ghostty',
-          desktopOnly: true,
-        ),
-        const SettingsSearchItem(
-          id: 'shaders-params',
-          section: .shaders,
-          panelId: 'shaders-custom-params',
-          panelTitle: 'Custom Shaders & Parameters',
-          title: 'Shader Parameters (uParams0)',
-          keywords: 'uparams uniforms sliders intensity x y z',
-        ),
-        const SettingsSearchItem(
-          id: 'shaders-animation-mode',
-          section: .shaders,
-          panelId: 'shaders-playback',
-          panelTitle: 'Playback & Frame Pacing',
-          title: 'Shader Animation Mode',
-          keywords: 'animation focused always on activity static itime idle',
-        ),
-        const SettingsSearchItem(
-          id: 'shaders-max-fps',
-          section: .shaders,
-          panelId: 'shaders-playback',
-          panelTitle: 'Playback & Frame Pacing',
-          title: 'Max Shader FPS',
-          keywords: 'fps frame rate cap uncapped 120 60 30 battery integrated',
-        ),
-        const SettingsSearchItem(
-          id: 'shaders-cli-local-policy',
-          section: .shaders,
-          panelId: 'shaders-cli',
-          panelTitle: 'CLI Shaders & Transforms (ESC _ S)',
-          title: 'Local Pane Policy',
-          keywords:
-              'cli esc s shader transform presets prompt custom glsl trust',
-        ),
-        const SettingsSearchItem(
-          id: 'shaders-cli-remote-policy',
-          section: .shaders,
-          panelId: 'shaders-cli',
-          panelTitle: 'CLI Shaders & Transforms (ESC _ S)',
-          title: 'Remote Cast Policy',
-          keywords: 'cli esc s remote cast relay shader trust policy',
-        ),
-        const SettingsSearchItem(
-          id: 'shaders-cli-stacking',
-          section: .shaders,
-          panelId: 'shaders-cli',
-          panelTitle: 'CLI Shaders & Transforms (ESC _ S)',
-          title: 'Full-Pane CLI Shader Stacking',
-          keywords: 'cli before user replaces ask conflict stacking full pane',
-        ),
-        const SettingsSearchItem(
-          id: 'shaders-cli-dev-trust',
-          section: .shaders,
-          panelId: 'shaders-cli',
-          panelTitle: 'CLI Shaders & Transforms (ESC _ S)',
-          title: 'Dev Auto-Trust Local Custom GLSL',
-          keywords: 'dev auto trust custom glsl cli local',
-        ),
-        const SettingsSearchItem(
-          id: 'shaders-cli-trusted-hashes',
-          section: .shaders,
-          panelId: 'shaders-cli',
-          panelTitle: 'CLI Shaders & Transforms (ESC _ S)',
-          title: 'Trusted CLI GLSL Hashes',
-          keywords: 'sha256 trusted hashes reset clear cli glsl',
-        ),
-
-        // Keyboard
-        const SettingsSearchItem(
-          id: 'keyboard-meta-policy',
-          section: .keyboard,
-          panelId: 'keyboard-meta',
-          panelTitle: 'Meta / Cmd Key Policy',
-          title: 'Meta / Cmd Key Policy',
-          keywords: 'meta cmd command super auto pass through kitty keyboard',
-        ),
-        const SettingsSearchItem(
-          id: 'keyboard-ignored-chords',
-          section: .keyboard,
-          panelId: 'keyboard-passthrough',
-          panelTitle: 'Ignored Chords (Do Not Intercept)',
-          title: 'Ignored Passthrough Key Chords',
-          keywords:
-              'ignored passthrough shortcuts keybindings chord record preset '
-              'alt+f4 ctrl+shift+i',
-        ),
-        const SettingsSearchItem(
-          id: 'keyboard-macos-option',
-          section: .keyboard,
-          panelId: 'keyboard-host-keys',
-          panelTitle: 'Host & Platform Keys',
-          title: 'macOS Option key acts as Alt',
-          keywords: 'macos option alt meta dead key',
-        ),
-        const SettingsSearchItem(
-          id: 'keyboard-f12-shortcuts',
-          section: .keyboard,
-          panelId: 'keyboard-host-keys',
-          panelTitle: 'Host & Platform Keys',
-          title: 'Enable F12 host shortcuts (screenshot/atlas)',
-          keywords: 'f12 screenshot atlas reload host shortcut debug',
-        ),
-
-        // Shell (desktop)
-        const SettingsSearchItem(
-          id: 'shell-preset',
-          section: .shell,
-          panelId: 'shell-default',
-          panelTitle: 'Default Shell',
-          title: 'Shell Preset',
-          keywords:
-              'default zsh bash sh pwsh powershell cmd shell override terminal',
-          desktopOnly: true,
-        ),
-        const SettingsSearchItem(
-          id: 'shell-executable',
-          section: .shell,
-          panelId: 'shell-default',
-          panelTitle: 'Default Shell',
-          title: 'Shell Executable',
-          keywords: 'shell path binary executable /bin/zsh powershell pwsh cmd',
-          desktopOnly: true,
-        ),
-        const SettingsSearchItem(
-          id: 'shell-arguments',
-          section: .shell,
-          panelId: 'shell-default',
-          panelTitle: 'Default Shell',
-          title: 'Shell Arguments',
-          keywords: 'shell flags args arguments norc tmux startup',
-          desktopOnly: true,
-        ),
-        const SettingsSearchItem(
-          id: 'shell-login',
-          section: .shell,
-          panelId: 'shell-default',
-          panelTitle: 'Default Shell',
-          title: 'Run as login shell (-l)',
-          keywords: 'login shell -l profile environment',
-          desktopOnly: true,
-        ),
-
-        // System
-        const SettingsSearchItem(
-          id: 'system-perf-hud',
-          section: .system,
-          panelId: 'system-graphics',
-          panelTitle: 'Graphics & Performance',
-          title: 'Performance HUD (FPS • Ctrl+Shift+F9)',
-          keywords: 'perf hud fps vram frame timing overlay diagnostics',
-        ),
-        const SettingsSearchItem(
-          id: 'system-gpu-driver',
-          section: .system,
-          panelId: 'system-graphics',
-          panelTitle: 'Graphics & Performance',
-          title: 'Graphics Driver (Desktop GPU Adapter)',
-          keywords:
-              'gpu graphics adapter discrete integrated high performance '
-              'power saving dxgi windows restart',
-          desktopOnly: true,
-          windowsOnly: true,
-        ),
-        const SettingsSearchItem(
-          id: 'system-audio-mute',
-          section: .system,
-          panelId: 'system-sound',
-          panelTitle: 'Sound',
-          title: 'Mute terminal bell & APC audio',
-          keywords: 'sound audio bell beep apc mute silence',
-        ),
-        const SettingsSearchItem(
-          id: 'system-audio-volume',
-          section: .system,
-          panelId: 'system-sound',
-          panelTitle: 'Sound',
-          title: 'Output Volume',
-          keywords: 'sound audio output volume gain loudness slider',
-        ),
-
-        // Automation (desktop)
-        const SettingsSearchItem(
-          id: 'automation-enable',
-          section: .automation,
-          panelId: 'automation-driver',
-          panelTitle: 'HTTP Automation Driver',
-          title: 'Enable HTTP Automation Driver',
-          keywords: 'automation http server loopback driver enable api',
-          desktopOnly: true,
-        ),
-        const SettingsSearchItem(
-          id: 'automation-port',
-          section: .automation,
-          panelId: 'automation-network',
-          panelTitle: 'Network & Authentication',
-          title: 'Loopback Port',
-          keywords: 'port 127.0.0.1 localhost tcp automation http',
-          desktopOnly: true,
-        ),
-        const SettingsSearchItem(
-          id: 'automation-password',
-          section: .automation,
-          panelId: 'automation-network',
-          panelTitle: 'Network & Authentication',
-          title: 'Bearer Password',
-          keywords: 'bearer token password auth header regenerate copy secret',
-          desktopOnly: true,
-        ),
-        const SettingsSearchItem(
-          id: 'automation-pty-scope',
-          section: .automation,
-          panelId: 'automation-scope',
-          panelTitle: 'Terminal Access Scope',
-          title: 'Allow PTY input, shell spawning & screen readback',
-          keywords: 'pty input spawn readback mouse security automation',
-          desktopOnly: true,
-        ),
-
-        // Updates (desktop)
-        const SettingsSearchItem(
-          id: 'updates-check',
-          section: .updates,
-          panelId: 'updates-application',
-          panelTitle: 'Application Updates',
-          title: 'Check for Updates',
-          keywords: 'update check version release github download upgrade',
-          desktopOnly: true,
-        ),
-        const SettingsSearchItem(
-          id: 'updates-daily',
-          section: .updates,
-          panelId: 'updates-application',
-          panelTitle: 'Application Updates',
-          title: 'Check daily for updates',
-          keywords: 'daily automatic background update check',
-          desktopOnly: true,
-        ),
-        const SettingsSearchItem(
-          id: 'updates-prereleases',
-          section: .updates,
-          panelId: 'updates-application',
-          panelTitle: 'Application Updates',
-          title: 'Include pre-releases',
-          keywords: 'prerelease pre-release beta rc canary update',
-          desktopOnly: true,
-        ),
+        for (final entry in projectDescriptorsToSettingsSearchEntries(
+          allSettingDescriptors,
+        ))
+          SettingsSearchItem.fromEntry(entry),
       ]);
 
-  static final List<_IndexedSearchItem> _indexedSearchItems =
+  static List<_IndexedSearchItem> _indexItems(List<SettingsSearchItem> items) =>
       List<_IndexedSearchItem>.unmodifiable(<_IndexedSearchItem>[
-        for (final item in allSearchItems)
+        for (final item in items)
           (
             item: item,
             sectionMeta: metaFor(item.section),
@@ -626,14 +300,26 @@ abstract final class SettingsCatalog {
           ),
       ]);
 
+  static final List<_IndexedSearchItem> _indexedSearchItems = _indexItems(
+    allSearchItems,
+  );
+
   /// Executes a multi-token case-insensitive search across all visible
   /// sections and returns grouped panel matches plus per-section badge counts.
+  ///
+  /// When [capabilities] is provided, it is used directly; otherwise a
+  /// capability context is synthesized from [isWeb], [isDesktopHost],
+  /// [supportsUpdates], [isWindows], [platform], and [enabledFeatures].
   static SettingsSearchResult search(
     String rawQuery, {
-    required bool isWeb,
-    required bool isDesktopHost,
-    required bool supportsUpdates,
-    required bool isWindows,
+    FtermCapabilityContext? capabilities,
+    bool isWeb = false,
+    bool isDesktopHost = false,
+    bool supportsUpdates = false,
+    bool isWindows = false,
+    TargetPlatform? platform,
+    Set<String> enabledFeatures = const <String>{},
+    List<SettingsSearchItem>? items,
   }) {
     final tokens = <String>[
       for (final part in rawQuery.trim().toLowerCase().split(_whitespace))
@@ -647,23 +333,26 @@ abstract final class SettingsCatalog {
       );
     }
 
+    final resolvedCapabilities =
+        capabilities ??
+        FtermCapabilityContext(
+          isWeb: isWeb,
+          platform: platform ?? (isWindows ? .windows : .linux),
+          isDesktopHost: isDesktopHost,
+          supportsUpdates: supportsUpdates,
+          enabledFeatures: enabledFeatures,
+        );
+    final indexed = items == null ? _indexedSearchItems : _indexItems(items);
+
     final counts = <FtermSettingsSection, int>{};
     final panelItemIds = <String, Set<String>>{};
     final panelOrder = <String>[];
     final panelMeta = <String, (SettingsSectionMeta, String)>{};
     var total = 0;
 
-    for (final entry in _indexedSearchItems) {
+    for (final entry in indexed) {
       final item = entry.item;
-      if (!_itemVisible(
-        item,
-        isWeb: isWeb,
-        isDesktopHost: isDesktopHost,
-        supportsUpdates: supportsUpdates,
-        isWindows: isWindows,
-      )) {
-        continue;
-      }
+      if (!_itemVisible(item, capabilities: resolvedCapabilities)) continue;
       if (!_matchesAllTokens(entry.haystack, tokens)) continue;
 
       total++;
@@ -697,21 +386,26 @@ abstract final class SettingsCatalog {
 
   static bool _itemVisible(
     SettingsSearchItem item, {
-    required bool isWeb,
-    required bool isDesktopHost,
-    required bool supportsUpdates,
-    required bool isWindows,
+    required FtermCapabilityContext capabilities,
   }) {
     if (!_isSectionVisible(
       item.section,
-      isWeb: isWeb,
-      isDesktopHost: isDesktopHost,
-      supportsUpdates: supportsUpdates,
+      isWeb: capabilities.isWeb,
+      isDesktopHost: capabilities.isDesktopHost,
+      supportsUpdates: capabilities.supportsUpdates,
     )) {
       return false;
     }
-    if (item.windowsOnly && (isWeb || !isWindows)) return false;
-    if (item.desktopOnly && isWeb) return false;
+    if (!item.visibility.isVisible(capabilities)) return false;
+    if (item.windowsOnly && !capabilities.isWindowsDesktop) return false;
+    if (item.desktopOnly && capabilities.isWeb) return false;
+    if (item.featureFlag case final flag?
+        when !capabilities.isFeatureEnabled(flag)) {
+      return false;
+    }
+    if (item.isAvailable case final predicate? when !predicate(capabilities)) {
+      return false;
+    }
     return true;
   }
 

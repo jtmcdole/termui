@@ -4,7 +4,6 @@ import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 import 'package:termui_flutter/termui_flutter.dart'
     show
-        ShaderAnimationMode,
         ShaderBackendKind,
         ShaderCompileException,
         ShaderDiagnostic,
@@ -15,10 +14,28 @@ import 'package:termui_flutter/termui_flutter.dart'
         TerminalShaderPreset,
         TerminalShaderStage;
 
-import '../../settings_storage.dart';
+import '../../commands/fterm_capability_context.dart';
+import '../../commands/settings_descriptors.dart';
 import '../../workspace/fterm_workspace_controller.dart';
 import '../fterm_overlays.dart';
+import 'settings_descriptor_renderer.dart';
 import 'settings_primitives.dart';
+
+Widget _renderShaderSetting(
+  String id, {
+  required FtermWorkspaceController workspace,
+  required FtermOverlayPalette palette,
+  required FtermCapabilityContext capabilities,
+}) {
+  final descriptor = settingDescriptorById(id);
+  if (descriptor == null) return const SizedBox.shrink();
+  return buildSettingDescriptorWidget(
+    descriptor,
+    workspace: workspace,
+    palette: palette,
+    capabilities: capabilities,
+  );
+}
 
 /// Renders all collapsible panels for the **Shaders** sidebar section, or a
 /// single filtered panel when [SettingsPanelFilter.onlyPanelId] is supplied by
@@ -33,6 +50,12 @@ final class SettingsShadersSection extends StatefulWidget {
   /// Whether the host is running on Web/Wasm.
   final bool isWeb;
 
+  /// Optional platform override for hermetic testing.
+  final TargetPlatform? platformOverride;
+
+  /// Optional precomputed capability context shared from the parent overlay.
+  final FtermCapabilityContext? capabilities;
+
   /// Panel visibility, collapse state, and search-filter configuration.
   final SettingsPanelFilter filter;
 
@@ -42,6 +65,8 @@ final class SettingsShadersSection extends StatefulWidget {
     required this.workspace,
     required this.palette,
     required this.isWeb,
+    this.platformOverride,
+    this.capabilities,
     this.filter = const SettingsPanelFilter.showAll(),
   });
 
@@ -153,6 +178,13 @@ final class _SettingsShadersSectionState extends State<SettingsShadersSection> {
     final filter = widget.filter;
     final ws = widget.workspace;
     final palette = widget.palette;
+    final capabilities =
+        widget.capabilities ??
+        FtermCapabilityContext.fromWorkspace(
+          ws,
+          isWeb: widget.isWeb,
+          platform: widget.platformOverride ?? Theme.of(context).platform,
+        );
 
     return SettingsSpacedColumn(
       key: filter.onlyPanelId == null
@@ -163,7 +195,7 @@ final class _SettingsShadersSectionState extends State<SettingsShadersSection> {
           _ShadersPipelinePanel(
             workspace: ws,
             palette: palette,
-            isWeb: widget.isWeb,
+            capabilities: capabilities,
             filter: filter,
             showWebGlslForm: _showWebGlslForm,
             webNameCtrl: _webNameCtrl,
@@ -210,7 +242,7 @@ final class _SettingsShadersSectionState extends State<SettingsShadersSection> {
           _ShadersCustomParamsPanel(
             workspace: ws,
             palette: palette,
-            isWeb: widget.isWeb,
+            isWeb: capabilities.isWeb,
             filter: filter,
             primaryPass: _primaryActivePass(),
             customPathCtrl: _customPathCtrl,
@@ -224,10 +256,16 @@ final class _SettingsShadersSectionState extends State<SettingsShadersSection> {
           _ShadersPlaybackPanel(
             workspace: ws,
             palette: palette,
+            capabilities: capabilities,
             filter: filter,
           ),
         if (filter.showPanel('shaders-cli'))
-          _ShadersCliPanel(workspace: ws, palette: palette, filter: filter),
+          _ShadersCliPanel(
+            workspace: ws,
+            palette: palette,
+            capabilities: capabilities,
+            filter: filter,
+          ),
       ],
     );
   }
@@ -236,7 +274,7 @@ final class _SettingsShadersSectionState extends State<SettingsShadersSection> {
 final class _ShadersPipelinePanel extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
-  final bool isWeb;
+  final FtermCapabilityContext capabilities;
   final SettingsPanelFilter filter;
   final bool showWebGlslForm;
   final TextEditingController webNameCtrl;
@@ -251,7 +289,7 @@ final class _ShadersPipelinePanel extends StatelessWidget {
   const _ShadersPipelinePanel({
     required this.workspace,
     required this.palette,
-    required this.isWeb,
+    required this.capabilities,
     required this.filter,
     required this.showWebGlslForm,
     required this.webNameCtrl,
@@ -267,10 +305,10 @@ final class _ShadersPipelinePanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final activeKind = workspace.shaderController.backendKind;
-    final override = workspace.shaderBackendOverride;
     final hasError =
         workspace.lastShaderCompileError != null ||
         workspace.lastShaderAssetError != null;
+    final isWeb = capabilities.isWeb;
 
     return BlenderSettingsPanel(
       id: 'shaders-pipeline',
@@ -284,30 +322,11 @@ final class _ShadersPipelinePanel extends StatelessWidget {
         spacing: 8,
         children: [
           if (filter.showItem('shaders-backend'))
-            BlenderPropertyRow(
-              label: 'Shader Backend',
+            _renderShaderSetting(
+              'shaders-backend',
+              workspace: workspace,
               palette: palette,
-              control: BlenderSegmentedControl<bool>(
-                value: override == .disabled,
-                palette: palette,
-                options: const [
-                  BlenderSegmentedOption<bool>(
-                    key: ValueKey('settings-shader-backend-auto'),
-                    value: false,
-                    label: 'Auto',
-                  ),
-                  BlenderSegmentedOption<bool>(
-                    key: ValueKey('settings-shader-backend-disabled'),
-                    value: true,
-                    label: 'Disabled',
-                  ),
-                ],
-                onChanged: (disabled) => unawaited(
-                  workspace.setShaderBackendOverride(
-                    disabled ? .disabled : null,
-                  ),
-                ),
-              ),
+              capabilities: capabilities,
             ),
           if (hasError)
             _ShaderCompileErrorBanner(
@@ -480,11 +499,13 @@ final class _ShadersCustomParamsPanel extends StatelessWidget {
 final class _ShadersPlaybackPanel extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
+  final FtermCapabilityContext capabilities;
   final SettingsPanelFilter filter;
 
   const _ShadersPlaybackPanel({
     required this.workspace,
     required this.palette,
+    required this.capabilities,
     required this.filter,
   });
 
@@ -499,9 +520,19 @@ final class _ShadersPlaybackPanel extends StatelessWidget {
     child: SettingsSpacedColumn(
       children: [
         if (filter.showItem('shaders-animation-mode'))
-          _ShaderAnimationModeRow(workspace: workspace, palette: palette),
+          _renderShaderSetting(
+            'shaders-animation-mode',
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
         if (filter.showItem('shaders-max-fps'))
-          _MaxShaderFpsRow(workspace: workspace, palette: palette),
+          _renderShaderSetting(
+            'shaders-max-fps',
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
       ],
     ),
   );
@@ -510,11 +541,13 @@ final class _ShadersPlaybackPanel extends StatelessWidget {
 final class _ShadersCliPanel extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
+  final FtermCapabilityContext capabilities;
   final SettingsPanelFilter filter;
 
   const _ShadersCliPanel({
     required this.workspace,
     required this.palette,
+    required this.capabilities,
     required this.filter,
   });
 
@@ -529,6 +562,7 @@ final class _ShadersCliPanel extends StatelessWidget {
     child: _CliShaderPolicyBody(
       workspace: workspace,
       palette: palette,
+      capabilities: capabilities,
       filter: filter,
     ),
   );
@@ -1240,79 +1274,6 @@ final class _ShaderParamSliders extends StatelessWidget {
   }
 }
 
-final class _ShaderAnimationModeRow extends StatelessWidget {
-  final FtermWorkspaceController workspace;
-  final FtermOverlayPalette palette;
-
-  const _ShaderAnimationModeRow({
-    required this.workspace,
-    required this.palette,
-  });
-
-  static String _labelFor(ShaderAnimationMode mode) => switch (mode) {
-    .always => 'Always',
-    .focused => 'Focused',
-    .onActivity => 'On Activity',
-    .staticOnly => 'Static',
-  };
-
-  @override
-  Widget build(BuildContext context) => BlenderPropertyRow(
-    label: 'Animation Mode',
-    palette: palette,
-    control: BlenderSegmentedControl<ShaderAnimationMode>(
-      value: workspace.shaderAnimationMode,
-      palette: palette,
-      options: [
-        for (final mode in ShaderAnimationMode.values)
-          BlenderSegmentedOption<ShaderAnimationMode>(
-            key: ValueKey('settings-shader-anim-${mode.name}'),
-            value: mode,
-            label: _labelFor(mode),
-          ),
-      ],
-      onChanged: workspace.setShaderAnimationMode,
-    ),
-  );
-}
-
-final class _MaxShaderFpsRow extends StatelessWidget {
-  static const List<(int?, String, String)> _options = <(int?, String, String)>[
-    (null, 'auto', 'Uncapped'),
-    (120, '120', '120 FPS'),
-    (60, '60', '60 FPS'),
-    (30, '30', '30 FPS'),
-  ];
-
-  final FtermWorkspaceController workspace;
-  final FtermOverlayPalette palette;
-
-  const _MaxShaderFpsRow({required this.workspace, required this.palette});
-
-  @override
-  Widget build(BuildContext context) => BlenderPropertyRow(
-    label: 'Max Shader FPS',
-    palette: palette,
-    hint: Text(
-      'Cap to 60 or 120 FPS on integrated graphics for smoother pacing.',
-      style: TextStyle(color: palette.muted, fontSize: 10.5),
-    ),
-    control: BlenderSegmentedControl<int?>(
-      value: workspace.maxShaderFps,
-      palette: palette,
-      options: [
-        for (final (value, keySuffix, label) in _options)
-          BlenderSegmentedOption<int?>(
-            key: ValueKey('settings-max-shader-fps-$keySuffix'),
-            value: value,
-            label: label,
-          ),
-      ],
-      onChanged: workspace.setMaxShaderFps,
-    ),
-  );
-}
-
 final class _ShaderActionsRow extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final bool isWeb;
@@ -1462,143 +1423,52 @@ final class _WebGlslUploadForm extends StatelessWidget {
 final class _CliShaderPolicyBody extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
+  final FtermCapabilityContext capabilities;
   final SettingsPanelFilter filter;
 
   const _CliShaderPolicyBody({
     required this.workspace,
     required this.palette,
+    required this.capabilities,
     required this.filter,
   });
 
-  static const List<CliShaderPolicy> _remotePolicies = <CliShaderPolicy>[
-    .disabled,
-    .presetsAndTransforms,
-    .promptCustomGlsl,
-  ];
-
   @override
-  Widget build(BuildContext context) {
-    final localPolicy = workspace.localCliShaderPolicy;
-    return SettingsSpacedColumn(
-      key: const ValueKey('settings-cli-shader-policy-section'),
-      spacing: 8,
-      children: [
-        if (filter.showItem('shaders-cli-local-policy'))
-          _CliPolicyDropdownRow(
-            label: 'Local Pane Policy',
-            dropdownKey: const ValueKey('settings-local-cli-shader-policy'),
-            value: localPolicy,
-            policies: CliShaderPolicy.values,
-            palette: palette,
-            onChanged: workspace.setLocalCliShaderPolicy,
-          ),
-        if (filter.showItem('shaders-cli-remote-policy'))
-          _CliPolicyDropdownRow(
-            label: 'Remote Cast Policy',
-            dropdownKey: const ValueKey('settings-remote-cli-shader-policy'),
-            value: workspace.remoteCliShaderPolicy,
-            policies: _remotePolicies,
-            palette: palette,
-            onChanged: workspace.setRemoteCliShaderPolicy,
-          ),
-        if (filter.showItem('shaders-cli-stacking'))
-          _CliFullPaneStackingRow(workspace: workspace, palette: palette),
-        if (filter.showItem('shaders-cli-dev-trust'))
-          BlenderCheckboxRow(
-            label: 'Dev Auto-Trust GLSL',
-            caption: 'Auto-trust local custom CLI GLSL without prompting',
-            value: localPolicy == .allowLocalCustomGlsl,
-            controlKey: const ValueKey('settings-cli-dev-auto-trust'),
-            palette: palette,
-            onChanged: (enabled) => workspace.setLocalCliShaderPolicy(
-              enabled ? .allowLocalCustomGlsl : .promptCustomGlsl,
-            ),
-          ),
-        if (filter.showItem('shaders-cli-trusted-hashes'))
-          _CliTrustedHashesRow(workspace: workspace, palette: palette),
-      ],
-    );
-  }
-}
-
-final class _CliPolicyDropdownRow extends StatelessWidget {
-  final String label;
-  final Key dropdownKey;
-  final CliShaderPolicy value;
-  final List<CliShaderPolicy> policies;
-  final FtermOverlayPalette palette;
-  final ValueChanged<CliShaderPolicy> onChanged;
-
-  const _CliPolicyDropdownRow({
-    required this.label,
-    required this.dropdownKey,
-    required this.value,
-    required this.policies,
-    required this.palette,
-    required this.onChanged,
-  });
-
-  static String _policyLabel(CliShaderPolicy policy) => switch (policy) {
-    .disabled => 'Disabled',
-    .presetsAndTransforms => 'Presets & Transforms',
-    .promptCustomGlsl => 'Prompt Custom GLSL',
-    .allowLocalCustomGlsl => 'Allow Local GLSL (Dev)',
-  };
-
-  @override
-  Widget build(BuildContext context) => BlenderPropertyRow(
-    label: label,
-    palette: palette,
-    control: BlenderDropdown<CliShaderPolicy>(
-      dropdownKey: dropdownKey,
-      value: value,
-      palette: palette,
-      items: [
-        for (final p in policies)
-          DropdownMenuItem<CliShaderPolicy>(
-            value: p,
-            child: Text(_policyLabel(p), overflow: .ellipsis),
-          ),
-      ],
-      onChanged: (next) {
-        if (next != null) onChanged(next);
-      },
-    ),
-  );
-}
-
-final class _CliFullPaneStackingRow extends StatelessWidget {
-  final FtermWorkspaceController workspace;
-  final FtermOverlayPalette palette;
-
-  const _CliFullPaneStackingRow({
-    required this.workspace,
-    required this.palette,
-  });
-
-  static String _modeLabel(CliFullPaneShaderMode mode) => switch (mode) {
-    .cliBeforeUser => 'CLI Before User',
-    .cliReplacesUser => 'CLI Replaces User',
-    .askOnConflict => 'Ask on Conflict',
-  };
-
-  @override
-  Widget build(BuildContext context) => BlenderPropertyRow(
-    label: 'Full-Pane Stacking',
-    palette: palette,
-    control: BlenderSegmentedControl<CliFullPaneShaderMode>(
-      value: workspace.cliFullPaneShaderMode,
-      palette: palette,
-      options: [
-        for (final mode in CliFullPaneShaderMode.values)
-          BlenderSegmentedOption<CliFullPaneShaderMode>(
-            key: ValueKey('settings-cli-full-pane-mode-${mode.wireName}'),
-            value: mode,
-            label: _modeLabel(mode),
-          ),
-      ],
-      onChanged: workspace.setCliFullPaneShaderMode,
-    ),
+  Widget build(BuildContext context) => SettingsSpacedColumn(
+    key: const ValueKey('settings-cli-shader-policy-section'),
+    spacing: 8,
+    children: [
+      if (filter.showItem('shaders-cli-local-policy'))
+        _renderShaderSetting(
+          'shaders-cli-local-policy',
+          workspace: workspace,
+          palette: palette,
+          capabilities: capabilities,
+        ),
+      if (filter.showItem('shaders-cli-remote-policy'))
+        _renderShaderSetting(
+          'shaders-cli-remote-policy',
+          workspace: workspace,
+          palette: palette,
+          capabilities: capabilities,
+        ),
+      if (filter.showItem('shaders-cli-stacking'))
+        _renderShaderSetting(
+          'shaders-cli-stacking',
+          workspace: workspace,
+          palette: palette,
+          capabilities: capabilities,
+        ),
+      if (filter.showItem('shaders-cli-dev-trust'))
+        _renderShaderSetting(
+          'shaders-cli-dev-trust',
+          workspace: workspace,
+          palette: palette,
+          capabilities: capabilities,
+        ),
+      if (filter.showItem('shaders-cli-trusted-hashes'))
+        _CliTrustedHashesRow(workspace: workspace, palette: palette),
+    ],
   );
 }
 

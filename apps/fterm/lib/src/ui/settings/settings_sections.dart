@@ -3,15 +3,35 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:material_ui/material_ui.dart';
 import 'package:termui/termui.dart' as tui;
-import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 
+import '../../commands/fterm_capability_context.dart';
+import '../../commands/settings_descriptors.dart';
 import '../../file_drop_bridge.dart';
 import '../../settings_storage.dart';
 import '../../update/update_service.dart';
 import '../../update/update_view_model.dart';
 import '../../workspace/fterm_workspace_controller.dart';
 import '../fterm_overlays.dart';
+import 'settings_descriptor_renderer.dart';
 import 'settings_primitives.dart';
+
+Widget _renderSettingRow(
+  String id, {
+  required FtermWorkspaceController workspace,
+  required FtermOverlayPalette palette,
+  required FtermCapabilityContext capabilities,
+  VoidCallback? onBeforeWrite,
+}) {
+  final descriptor = settingDescriptorById(id);
+  if (descriptor == null) return const SizedBox.shrink();
+  return buildSettingDescriptorWidget(
+    descriptor,
+    workspace: workspace,
+    palette: palette,
+    capabilities: capabilities,
+    onBeforeWrite: onBeforeWrite,
+  );
+}
 
 /// Builds the collapsible panels for the **Interface** section (Tab Bar and
 /// Clipboard & Selection).
@@ -22,6 +42,15 @@ final class SettingsInterfaceSection extends StatelessWidget {
   /// Active overlay palette.
   final FtermOverlayPalette palette;
 
+  /// Whether running in Web mode.
+  final bool isWeb;
+
+  /// Optional platform override for hermetic testing.
+  final TargetPlatform? platformOverride;
+
+  /// Optional precomputed capability context shared from the parent overlay.
+  final FtermCapabilityContext? capabilities;
+
   /// Panel visibility, collapse state, and search-filter configuration.
   final SettingsPanelFilter filter;
 
@@ -30,141 +59,126 @@ final class SettingsInterfaceSection extends StatelessWidget {
     super.key,
     required this.workspace,
     required this.palette,
+    this.isWeb = false,
+    this.platformOverride,
+    this.capabilities,
     this.filter = const SettingsPanelFilter.showAll(),
   });
 
   @override
-  Widget build(BuildContext context) => SettingsSpacedColumn(
-    children: [
-      if (filter.showPanel('interface-tab-bar'))
-        _InterfaceTabBarPanel(
-          workspace: workspace,
-          palette: palette,
-          filter: filter,
-        ),
-      if (filter.showPanel('interface-clipboard'))
-        _InterfaceClipboardPanel(
-          workspace: workspace,
-          palette: palette,
-          filter: filter,
-        ),
-    ],
-  );
+  Widget build(BuildContext context) {
+    final resolvedCapabilities =
+        capabilities ??
+        FtermCapabilityContext.fromWorkspace(
+          workspace,
+          isWeb: isWeb,
+          platform: platformOverride ?? Theme.of(context).platform,
+        );
+    return SettingsSpacedColumn(
+      children: [
+        if (filter.showPanel('interface-tab-bar'))
+          _InterfaceTabBarPanel(
+            workspace: workspace,
+            palette: palette,
+            capabilities: resolvedCapabilities,
+            filter: filter,
+          ),
+        if (filter.showPanel('interface-clipboard'))
+          _InterfaceClipboardPanel(
+            workspace: workspace,
+            palette: palette,
+            capabilities: resolvedCapabilities,
+            filter: filter,
+          ),
+      ],
+    );
+  }
 }
 
 final class _InterfaceTabBarPanel extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
+  final FtermCapabilityContext capabilities;
   final SettingsPanelFilter filter;
 
   const _InterfaceTabBarPanel({
     required this.workspace,
     required this.palette,
+    required this.capabilities,
     required this.filter,
   });
 
-  static String _dockLabel(DockPosition pos) => switch (pos) {
-    .top => 'Top',
-    .left => 'Left',
-    .hidden => 'Hidden',
-  };
-
   @override
-  Widget build(BuildContext context) {
-    final wsSettings = workspace.workspaceSettings;
-    final prefs = workspace.preferences;
-    return BlenderSettingsPanel(
-      id: 'interface-tab-bar',
-      title: 'Tab Bar',
-      categoryBreadcrumb: filter.categoryBreadcrumb,
-      expanded: filter.panelExpanded('interface-tab-bar'),
-      onToggleExpanded: filter.toggleFor('interface-tab-bar'),
-      palette: palette,
-      child: SettingsSpacedColumn(
-        spacing: 8,
-        children: [
-          if (filter.showItem('interface-dock-position'))
-            BlenderPropertyRow(
-              label: 'Tab Bar Position',
-              palette: palette,
-              control: BlenderSegmentedControl<DockPosition>(
-                value: wsSettings.dockPosition,
-                palette: palette,
-                options: [
-                  for (final pos in DockPosition.values)
-                    BlenderSegmentedOption<DockPosition>(
-                      key: ValueKey('settings-dock-${pos.name}'),
-                      value: pos,
-                      label: _dockLabel(pos),
-                    ),
-                ],
-                onChanged: workspace.setDockPosition,
-              ),
-            ),
-          if (filter.showItem('interface-auto-hide-tab'))
-            BlenderCheckboxRow(
-              label: 'Auto-Hide Single Tab',
-              caption: 'Hide tab bar when only one tab is open',
-              value: prefs.autoHideSingleTab,
-              controlKey: const ValueKey('settings-auto-hide-single'),
-              palette: palette,
-              onChanged: (v) => workspace.updatePreferences(
-                prefs.copyWith(autoHideSingleTab: v),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => BlenderSettingsPanel(
+    id: 'interface-tab-bar',
+    title: 'Tab Bar',
+    categoryBreadcrumb: filter.categoryBreadcrumb,
+    expanded: filter.panelExpanded('interface-tab-bar'),
+    onToggleExpanded: filter.toggleFor('interface-tab-bar'),
+    palette: palette,
+    child: SettingsSpacedColumn(
+      spacing: 8,
+      children: [
+        if (filter.showItem('interface-dock-position'))
+          _renderSettingRow(
+            'interface-dock-position',
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
+        if (filter.showItem('interface-auto-hide-tab'))
+          _renderSettingRow(
+            'interface-auto-hide-tab',
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
+      ],
+    ),
+  );
 }
 
 final class _InterfaceClipboardPanel extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
+  final FtermCapabilityContext capabilities;
   final SettingsPanelFilter filter;
 
   const _InterfaceClipboardPanel({
     required this.workspace,
     required this.palette,
+    required this.capabilities,
     required this.filter,
   });
 
   @override
-  Widget build(BuildContext context) {
-    final wsSettings = workspace.workspaceSettings;
-    return BlenderSettingsPanel(
-      id: 'interface-clipboard',
-      title: 'Clipboard & Selection',
-      categoryBreadcrumb: filter.categoryBreadcrumb,
-      expanded: filter.panelExpanded('interface-clipboard'),
-      onToggleExpanded: filter.toggleFor('interface-clipboard'),
-      palette: palette,
-      child: SettingsSpacedColumn(
-        spacing: 8,
-        children: [
-          if (filter.showItem('interface-copy-on-select'))
-            BlenderCheckboxRow(
-              label: 'Copy on Selection',
-              caption: 'Automatically copy highlighted mouse selections',
-              value: wsSettings.copyOnSelect,
-              controlKey: const ValueKey('settings-copy-on-select'),
-              palette: palette,
-              onChanged: workspace.setCopyOnSelect,
-            ),
-          if (filter.showItem('interface-osc52'))
-            BlenderCheckboxRow(
-              label: 'Remote OSC 52 Writes',
-              caption: 'Allow focused remote sessions to write clipboard',
-              value: wsSettings.osc52Policy == .allowFocused,
-              controlKey: const ValueKey('settings-osc52-toggle'),
-              palette: palette,
-              onChanged: (enabled) =>
-                  workspace.setOsc52Policy(enabled ? .allowFocused : .deny),
-            ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => BlenderSettingsPanel(
+    id: 'interface-clipboard',
+    title: 'Clipboard & Selection',
+    categoryBreadcrumb: filter.categoryBreadcrumb,
+    expanded: filter.panelExpanded('interface-clipboard'),
+    onToggleExpanded: filter.toggleFor('interface-clipboard'),
+    palette: palette,
+    child: SettingsSpacedColumn(
+      spacing: 8,
+      children: [
+        if (filter.showItem('interface-copy-on-select'))
+          _renderSettingRow(
+            'interface-copy-on-select',
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
+        if (filter.showItem('interface-osc52'))
+          _renderSettingRow(
+            'interface-osc52',
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
+      ],
+    ),
+  );
 }
 
 /// Builds the collapsible panels for the **Themes** section (Theme &
@@ -179,6 +193,12 @@ final class SettingsThemesSection extends StatefulWidget {
   /// Whether running in Web mode.
   final bool isWeb;
 
+  /// Optional platform override for hermetic testing.
+  final TargetPlatform? platformOverride;
+
+  /// Optional precomputed capability context shared from the parent overlay.
+  final FtermCapabilityContext? capabilities;
+
   /// Panel visibility, collapse state, and search-filter configuration.
   final SettingsPanelFilter filter;
 
@@ -188,6 +208,8 @@ final class SettingsThemesSection extends StatefulWidget {
     required this.workspace,
     required this.palette,
     required this.isWeb,
+    this.platformOverride,
+    this.capabilities,
     this.filter = const SettingsPanelFilter.showAll(),
   });
 
@@ -253,6 +275,13 @@ final class _SettingsThemesSectionState extends State<SettingsThemesSection> {
     final filter = widget.filter;
     final ws = widget.workspace;
     final palette = widget.palette;
+    final capabilities =
+        widget.capabilities ??
+        FtermCapabilityContext.fromWorkspace(
+          ws,
+          isWeb: widget.isWeb,
+          platform: widget.platformOverride ?? Theme.of(context).platform,
+        );
 
     return SettingsSpacedColumn(
       children: [
@@ -260,6 +289,7 @@ final class _SettingsThemesSectionState extends State<SettingsThemesSection> {
           _ThemesAppearancePanel(
             workspace: ws,
             palette: palette,
+            capabilities: capabilities,
             filter: filter,
           ),
         if (filter.showPanel('themes-typography'))
@@ -272,7 +302,7 @@ final class _SettingsThemesSectionState extends State<SettingsThemesSection> {
           _ThemesBackgroundPanel(
             workspace: ws,
             palette: palette,
-            isWeb: widget.isWeb,
+            capabilities: capabilities,
             filter: filter,
             wallpaperController: _wallpaperCtrl,
             editingWallpaper: _editingWallpaper,
@@ -288,19 +318,15 @@ final class _SettingsThemesSectionState extends State<SettingsThemesSection> {
 final class _ThemesAppearancePanel extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
+  final FtermCapabilityContext capabilities;
   final SettingsPanelFilter filter;
 
   const _ThemesAppearancePanel({
     required this.workspace,
     required this.palette,
+    required this.capabilities,
     required this.filter,
   });
-
-  static String _appearanceLabel(ThemeAppearanceMode mode) => switch (mode) {
-    .system => 'System',
-    .dark => 'Dark',
-    .light => 'Light',
-  };
 
   void _selectPreset(String? id) {
     if (id == null) return;
@@ -315,7 +341,6 @@ final class _ThemesAppearancePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final themeSettings = workspace.workspaceSettings.themeSettings;
     final activeTheme = workspace.activeTerminalTheme;
     final presets = tui.TerminalColorTheme.presets;
     final selectedPresetId = presets.any((p) => p.id == activeTheme.id)
@@ -332,24 +357,11 @@ final class _ThemesAppearancePanel extends StatelessWidget {
       child: SettingsSpacedColumn(
         children: [
           if (filter.showItem('themes-appearance-mode'))
-            BlenderPropertyRow(
-              label: 'Appearance Mode',
+            _renderSettingRow(
+              'themes-appearance-mode',
+              workspace: workspace,
               palette: palette,
-              control: BlenderSegmentedControl<ThemeAppearanceMode>(
-                value: themeSettings.appearanceMode,
-                palette: palette,
-                options: [
-                  for (final mode in ThemeAppearanceMode.values)
-                    BlenderSegmentedOption<ThemeAppearanceMode>(
-                      key: ValueKey('settings-appearance-${mode.name}'),
-                      value: mode,
-                      label: _appearanceLabel(mode),
-                    ),
-                ],
-                onChanged: (mode) => workspace.setThemeSettings(
-                  themeSettings.copyWith(appearanceMode: mode),
-                ),
-              ),
+              capabilities: capabilities,
             ),
           if (filter.showItem('themes-preset'))
             BlenderPropertyRow(
@@ -405,7 +417,7 @@ final class _ThemesTypographyPanel extends StatelessWidget {
 final class _ThemesBackgroundPanel extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
-  final bool isWeb;
+  final FtermCapabilityContext capabilities;
   final SettingsPanelFilter filter;
   final TextEditingController wallpaperController;
   final bool editingWallpaper;
@@ -416,7 +428,7 @@ final class _ThemesBackgroundPanel extends StatelessWidget {
   const _ThemesBackgroundPanel({
     required this.workspace,
     required this.palette,
-    required this.isWeb,
+    required this.capabilities,
     required this.filter,
     required this.wallpaperController,
     required this.editingWallpaper,
@@ -436,21 +448,18 @@ final class _ThemesBackgroundPanel extends StatelessWidget {
     child: SettingsSpacedColumn(
       children: [
         if (filter.showItem('themes-bg-opacity'))
-          BlenderSliderRow(
-            label: 'Background Opacity',
-            value: workspace.backgroundOpacity,
-            valueLabel: '${(workspace.backgroundOpacity * 100).round()}%',
-            sliderKey: const ValueKey('settings-background-opacity-slider'),
-            valueKey: const ValueKey('settings-background-opacity-value'),
+          _renderSettingRow(
+            'themes-bg-opacity',
+            workspace: workspace,
             palette: palette,
-            onChanged: workspace.setBackgroundOpacity,
+            capabilities: capabilities,
           ),
         if (filter.showItem('themes-wallpaper'))
           _WallpaperPropertyRow(
             workspace: workspace,
             palette: palette,
             controller: wallpaperController,
-            isWeb: isWeb,
+            isWeb: capabilities.isWeb,
             isEditing: editingWallpaper,
             onToggleEdit: onToggleWallpaperEdit,
             onApply: onApplyWallpaper,
@@ -735,8 +744,14 @@ final class SettingsShellSection extends StatefulWidget {
   /// Active overlay palette.
   final FtermOverlayPalette palette;
 
+  /// Whether running on Web/Wasm.
+  final bool isWeb;
+
   /// Optional platform override for hermetic testing.
   final TargetPlatform? platformOverride;
+
+  /// Optional precomputed capability context shared from the parent overlay.
+  final FtermCapabilityContext? capabilities;
 
   /// Panel visibility, collapse state, and search-filter configuration.
   final SettingsPanelFilter filter;
@@ -746,7 +761,9 @@ final class SettingsShellSection extends StatefulWidget {
     super.key,
     required this.workspace,
     required this.palette,
+    this.isWeb = false,
     this.platformOverride,
+    this.capabilities,
     this.filter = const SettingsPanelFilter.showAll(),
   });
 
@@ -755,22 +772,6 @@ final class SettingsShellSection extends StatefulWidget {
 }
 
 final class _SettingsShellSectionState extends State<SettingsShellSection> {
-  static const List<(String id, String label, String? executable)>
-  _posixPresets = [
-    ('default', r'Default ($SHELL)', null),
-    ('zsh', 'zsh', 'zsh'),
-    ('bash', 'bash', 'bash'),
-    ('sh', 'sh', 'sh'),
-  ];
-
-  static const List<(String id, String label, String? executable)>
-  _windowsPresets = [
-    ('default', 'Default', null),
-    ('pwsh', 'pwsh', 'pwsh'),
-    ('powershell', 'PowerShell', 'powershell.exe'),
-    ('cmd', 'cmd', 'cmd.exe'),
-  ];
-
   late final TextEditingController _shellExecCtrl;
   late final TextEditingController _shellArgsCtrl;
 
@@ -818,10 +819,14 @@ final class _SettingsShellSectionState extends State<SettingsShellSection> {
     final ws = widget.workspace;
     final palette = widget.palette;
     final filter = widget.filter;
-    final prefs = ws.preferences;
-    final platform = widget.platformOverride ?? Theme.of(context).platform;
-    final isWindows = platform == .windows;
-    final presets = isWindows ? _windowsPresets : _posixPresets;
+    final capabilities =
+        widget.capabilities ??
+        FtermCapabilityContext.fromWorkspace(
+          ws,
+          isWeb: widget.isWeb,
+          platform: widget.platformOverride ?? Theme.of(context).platform,
+        );
+    final isWindows = capabilities.isWindows;
 
     return BlenderSettingsPanel(
       id: 'shell-default',
@@ -833,31 +838,11 @@ final class _SettingsShellSectionState extends State<SettingsShellSection> {
       child: SettingsSpacedColumn(
         children: [
           if (filter.showItem('shell-preset'))
-            BlenderPropertyRow(
-              label: 'Shell Preset',
+            _renderSettingRow(
+              'shell-preset',
+              workspace: ws,
               palette: palette,
-              hint: Text(
-                'Applies to newly opened tabs and split panes.',
-                style: TextStyle(color: palette.muted, fontSize: 10.5),
-              ),
-              control: BlenderSegmentedControl<String?>(
-                value: prefs.shellExecutable,
-                palette: palette,
-                options: [
-                  for (final preset in presets)
-                    BlenderSegmentedOption<String?>(
-                      key: ValueKey('settings-shell-preset-${preset.$1}'),
-                      value: preset.$3,
-                      label: preset.$2,
-                    ),
-                ],
-                onChanged: (selected) => ws.updatePreferences(
-                  ws.preferences.copyWith(
-                    shellExecutable: selected,
-                    clearShellExecutable: selected == null,
-                  ),
-                ),
-              ),
+              capabilities: capabilities,
             ),
           if (filter.showItem('shell-executable'))
             BlenderPropertyRow(
@@ -905,14 +890,11 @@ final class _SettingsShellSectionState extends State<SettingsShellSection> {
               ),
             ),
           if (filter.showItem('shell-login'))
-            BlenderCheckboxRow(
-              label: 'Login Shell (-l)',
-              caption: 'Launch POSIX shells with -l when arguments are empty',
-              value: prefs.loginShell,
-              controlKey: const ValueKey('settings-login-shell'),
+            _renderSettingRow(
+              'shell-login',
+              workspace: ws,
               palette: palette,
-              onChanged: (v) =>
-                  ws.updatePreferences(ws.preferences.copyWith(loginShell: v)),
+              capabilities: capabilities,
             ),
         ],
       ),
@@ -934,6 +916,9 @@ final class SettingsSystemSection extends StatelessWidget {
   /// Optional platform override for hermetic testing.
   final TargetPlatform? platformOverride;
 
+  /// Optional precomputed capability context shared from the parent overlay.
+  final FtermCapabilityContext? capabilities;
+
   /// Panel visibility, collapse state, and search-filter configuration.
   final SettingsPanelFilter filter;
 
@@ -944,14 +929,22 @@ final class SettingsSystemSection extends StatelessWidget {
     required this.palette,
     required this.isWeb,
     this.platformOverride,
+    this.capabilities,
     this.filter = const SettingsPanelFilter.showAll(),
   });
 
   @override
   Widget build(BuildContext context) {
-    final platform = platformOverride ?? Theme.of(context).platform;
+    final resolvedCapabilities =
+        capabilities ??
+        FtermCapabilityContext.fromWorkspace(
+          workspace,
+          isWeb: isWeb,
+          platform: platformOverride ?? Theme.of(context).platform,
+        );
     final showGpuDriver =
-        !isWeb && platform == .windows && filter.showItem('system-gpu-driver');
+        resolvedCapabilities.isWindowsDesktop &&
+        filter.showItem('system-gpu-driver');
     final showPerfHud = filter.showItem('system-perf-hud');
 
     return SettingsSpacedColumn(
@@ -961,6 +954,7 @@ final class SettingsSystemSection extends StatelessWidget {
           _SystemGraphicsPanel(
             workspace: workspace,
             palette: palette,
+            capabilities: resolvedCapabilities,
             filter: filter,
             showPerfHud: showPerfHud,
             showGpuDriver: showGpuDriver,
@@ -969,6 +963,7 @@ final class SettingsSystemSection extends StatelessWidget {
           _SystemSoundPanel(
             workspace: workspace,
             palette: palette,
+            capabilities: resolvedCapabilities,
             filter: filter,
           ),
       ],
@@ -979,6 +974,7 @@ final class SettingsSystemSection extends StatelessWidget {
 final class _SystemGraphicsPanel extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
+  final FtermCapabilityContext capabilities;
   final SettingsPanelFilter filter;
   final bool showPerfHud;
   final bool showGpuDriver;
@@ -986,6 +982,7 @@ final class _SystemGraphicsPanel extends StatelessWidget {
   const _SystemGraphicsPanel({
     required this.workspace,
     required this.palette,
+    required this.capabilities,
     required this.filter,
     required this.showPerfHud,
     required this.showGpuDriver,
@@ -1002,16 +999,18 @@ final class _SystemGraphicsPanel extends StatelessWidget {
     child: SettingsSpacedColumn(
       children: [
         if (showPerfHud)
-          BlenderCheckboxRow(
-            label: 'Performance HUD',
-            caption: 'Show live FPS & frame timing overlay (Ctrl+Shift+F9)',
-            value: workspace.showPerfHud,
-            controlKey: const ValueKey('settings-perf-hud-switch'),
+          _renderSettingRow(
+            'system-perf-hud',
+            workspace: workspace,
             palette: palette,
-            onChanged: workspace.setShowPerfHud,
+            capabilities: capabilities,
           ),
         if (showGpuDriver)
-          _GpuDriverPreferenceRow(workspace: workspace, palette: palette),
+          _GpuDriverPreferenceRow(
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
       ],
     ),
   );
@@ -1020,52 +1019,44 @@ final class _SystemGraphicsPanel extends StatelessWidget {
 final class _SystemSoundPanel extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
+  final FtermCapabilityContext capabilities;
   final SettingsPanelFilter filter;
 
   const _SystemSoundPanel({
     required this.workspace,
     required this.palette,
+    required this.capabilities,
     required this.filter,
   });
 
   @override
-  Widget build(BuildContext context) {
-    final prefs = workspace.preferences;
-    return BlenderSettingsPanel(
-      id: 'system-sound',
-      title: 'Sound',
-      categoryBreadcrumb: filter.categoryBreadcrumb,
-      expanded: filter.panelExpanded('system-sound'),
-      onToggleExpanded: filter.toggleFor('system-sound'),
-      palette: palette,
-      child: SettingsSpacedColumn(
-        spacing: 8,
-        children: [
-          if (filter.showItem('system-audio-mute'))
-            BlenderCheckboxRow(
-              label: 'Mute Terminal Audio',
-              caption: 'Silence terminal bell & APC synthesized audio',
-              value: prefs.audioMuted,
-              controlKey: const ValueKey('settings-audio-mute'),
-              palette: palette,
-              onChanged: (v) =>
-                  workspace.updatePreferences(prefs.copyWith(audioMuted: v)),
-            ),
-          if (filter.showItem('system-audio-volume'))
-            BlenderSliderRow(
-              label: 'Output Volume',
-              value: prefs.audioVolume,
-              valueLabel: '${(prefs.audioVolume * 100).round()}%',
-              sliderKey: const ValueKey('settings-audio-volume-slider'),
-              valueKey: const ValueKey('settings-audio-volume-value'),
-              palette: palette,
-              onChanged: (v) =>
-                  workspace.updatePreferences(prefs.copyWith(audioVolume: v)),
-            ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => BlenderSettingsPanel(
+    id: 'system-sound',
+    title: 'Sound',
+    categoryBreadcrumb: filter.categoryBreadcrumb,
+    expanded: filter.panelExpanded('system-sound'),
+    onToggleExpanded: filter.toggleFor('system-sound'),
+    palette: palette,
+    child: SettingsSpacedColumn(
+      spacing: 8,
+      children: [
+        if (filter.showItem('system-audio-mute'))
+          _renderSettingRow(
+            'system-audio-mute',
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
+        if (filter.showItem('system-audio-volume'))
+          _renderSettingRow(
+            'system-audio-volume',
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
+      ],
+    ),
+  );
 }
 
 /// Formats active local shells and live broadcasts into a concise human phrase.
@@ -1140,19 +1131,14 @@ final class _ActiveSessionRestartConfirm extends StatelessWidget {
 }
 
 final class _GpuDriverPreferenceRow extends StatefulWidget {
-  static const List<(GpuDriverPreference, String)> _options =
-      <(GpuDriverPreference, String)>[
-        (.auto, 'Auto'),
-        (.highPerformance, 'High Performance'),
-        (.powerSaving, 'Power Saving'),
-      ];
-
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
+  final FtermCapabilityContext capabilities;
 
   const _GpuDriverPreferenceRow({
     required this.workspace,
     required this.palette,
+    required this.capabilities,
   });
 
   @override
@@ -1189,27 +1175,16 @@ final class _GpuDriverPreferenceRowState
     return SettingsSpacedColumn(
       spacing: 8,
       children: [
-        BlenderPropertyRow(
-          label: 'GPU Adapter',
+        _renderSettingRow(
+          'system-gpu-driver',
+          workspace: ws,
           palette: palette,
-          control: BlenderSegmentedControl<GpuDriverPreference>(
-            value: current,
-            palette: palette,
-            options: [
-              for (final (pref, label) in _GpuDriverPreferenceRow._options)
-                BlenderSegmentedOption<GpuDriverPreference>(
-                  key: ValueKey('settings-gpu-driver-${pref.name}'),
-                  value: pref,
-                  label: label,
-                ),
-            ],
-            onChanged: (pref) {
-              if (_awaitingRestartConfirm) {
-                setState(() => _awaitingRestartConfirm = false);
-              }
-              ws.setGpuDriverPreference(pref);
-            },
-          ),
+          capabilities: widget.capabilities,
+          onBeforeWrite: () {
+            if (_awaitingRestartConfirm) {
+              setState(() => _awaitingRestartConfirm = false);
+            }
+          },
         ),
         if (ws.gpuDriverRestartRequired)
           _GpuDriverRestartControls(
@@ -1313,6 +1288,15 @@ final class SettingsUpdatesSection extends StatefulWidget {
   /// External URL launcher for release links.
   final UrlOpener onOpenUrl;
 
+  /// Whether running on Web/Wasm.
+  final bool isWeb;
+
+  /// Optional platform override for hermetic testing.
+  final TargetPlatform? platformOverride;
+
+  /// Optional precomputed capability context shared from the parent overlay.
+  final FtermCapabilityContext? capabilities;
+
   /// Panel visibility, collapse state, and search-filter configuration.
   final SettingsPanelFilter filter;
 
@@ -1322,6 +1306,9 @@ final class SettingsUpdatesSection extends StatefulWidget {
     required this.workspace,
     required this.palette,
     required this.onOpenUrl,
+    this.isWeb = false,
+    this.platformOverride,
+    this.capabilities,
     this.filter = const SettingsPanelFilter.showAll(),
   });
 
@@ -1349,12 +1336,20 @@ final class _SettingsUpdatesSectionState extends State<SettingsUpdatesSection> {
   @override
   Widget build(BuildContext context) {
     final vm = widget.workspace.updateViewModel;
+    final capabilities =
+        widget.capabilities ??
+        FtermCapabilityContext.fromWorkspace(
+          widget.workspace,
+          isWeb: widget.isWeb,
+          platform: widget.platformOverride ?? Theme.of(context).platform,
+        );
     return ListenableBuilder(
       listenable: vm,
       builder: (_, _) => _UpdatesApplicationPanel(
         workspace: widget.workspace,
         vm: vm,
         palette: widget.palette,
+        capabilities: capabilities,
         onOpenUrl: widget.onOpenUrl,
         filter: widget.filter,
         awaitingRestartConfirm: _awaitingRestartConfirm,
@@ -1370,6 +1365,7 @@ final class _UpdatesApplicationPanel extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final UpdateViewModel vm;
   final FtermOverlayPalette palette;
+  final FtermCapabilityContext capabilities;
   final UrlOpener onOpenUrl;
   final SettingsPanelFilter filter;
   final bool awaitingRestartConfirm;
@@ -1381,6 +1377,7 @@ final class _UpdatesApplicationPanel extends StatelessWidget {
     required this.workspace,
     required this.vm,
     required this.palette,
+    required this.capabilities,
     required this.onOpenUrl,
     required this.filter,
     required this.awaitingRestartConfirm,
@@ -1391,7 +1388,6 @@ final class _UpdatesApplicationPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final prefs = workspace.preferences;
     final isBusy = vm.status == .checking || vm.status == .downloading;
     return BlenderSettingsPanel(
       id: 'updates-application',
@@ -1432,26 +1428,18 @@ final class _UpdatesApplicationPanel extends StatelessWidget {
               ),
             ),
           if (filter.showItem('updates-daily'))
-            BlenderCheckboxRow(
-              label: 'Automatic Check',
-              caption: 'Check daily for updates',
-              value: prefs.updateCheckMode == .daily,
-              controlKey: const ValueKey('settings-update-daily'),
+            _renderSettingRow(
+              'updates-daily',
+              workspace: workspace,
               palette: palette,
-              onChanged: (daily) => workspace.updatePreferences(
-                prefs.copyWith(updateCheckMode: daily ? .daily : .manual),
-              ),
+              capabilities: capabilities,
             ),
           if (filter.showItem('updates-prereleases'))
-            BlenderCheckboxRow(
-              label: 'Pre-Releases',
-              caption: 'Include pre-release builds (rc / beta)',
-              value: prefs.includePrereleases,
-              controlKey: const ValueKey('settings-update-prereleases'),
+            _renderSettingRow(
+              'updates-prereleases',
+              workspace: workspace,
               palette: palette,
-              onChanged: (inc) => workspace.updatePreferences(
-                prefs.copyWith(includePrereleases: inc),
-              ),
+              capabilities: capabilities,
             ),
           if (vm.statusMessage case final infoMsg?)
             Text(

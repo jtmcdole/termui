@@ -5,6 +5,8 @@ import 'package:flutter/services.dart'
 import 'package:material_ui/material_ui.dart';
 
 import '../../automation/automation_models.dart';
+import '../../commands/fterm_descriptor_models.dart';
+import '../../commands/settings_descriptors.dart';
 import '../fterm_overlays.dart';
 import 'settings_primitives.dart';
 
@@ -405,12 +407,15 @@ final class _AutomationEnableSection extends StatelessWidget {
         palette.muted,
       ),
     };
+    final enableDescriptor = settingDescriptorById(
+      'automation-enable',
+    ) as FtermToggleSettingDescriptor;
     return BlenderCheckboxRow(
-      label: 'Enable HTTP Driver',
+      label: enableDescriptor.settingsLabel,
       caption: statusText,
       captionColor: statusColor,
       captionKey: const ValueKey('automation-status-label'),
-      controlKey: const ValueKey('automation-enable-switch'),
+      controlKey: enableDescriptor.controlKey,
       value: isRunning,
       palette: palette,
       onChanged: isSupported && !isToggling ? onChanged : null,
@@ -642,41 +647,50 @@ final class _AutomationPtyScopeSection extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => SettingsSpacedColumn(
-    spacing: 8,
-    children: [
-      BlenderCheckboxRow(
-        label: 'Allow PTY Access',
-        caption: 'Allow PTY input, shell spawning & screen readback',
-        controlKey: const ValueKey('automation-allow-pty-checkbox'),
-        value: allowPty,
-        palette: palette,
-        onChanged: enabled ? onChanged : null,
-      ),
-      Container(
-        key: const ValueKey('automation-pty-warning'),
-        padding: const .symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: palette.warning.withValues(alpha: 0.12),
-          borderRadius: .circular(6),
-          border: .all(color: palette.warning.withValues(alpha: 0.45)),
+  Widget build(BuildContext context) {
+    final ptyDescriptor = settingDescriptorById(
+      'automation-pty-scope',
+    ) as FtermToggleSettingDescriptor;
+    return SettingsSpacedColumn(
+      spacing: 8,
+      children: [
+        BlenderCheckboxRow(
+          label: ptyDescriptor.settingsLabel,
+          caption: ptyDescriptor.settingsCaption,
+          controlKey: ptyDescriptor.controlKey,
+          value: allowPty,
+          palette: palette,
+          onChanged: enabled ? onChanged : null,
         ),
-        child: Row(
-          crossAxisAlignment: .start,
-          children: [
-            Icon(Icons.warning_amber_rounded, size: 15, color: palette.warning),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Warning: Enabling PTY access lets local clients with the '
-                'Bearer token type into shells, spawn commands, send mouse '
-                'input, and read visible terminal text. Resets off on restart.',
-                style: TextStyle(color: palette.warning, fontSize: 11),
+        Container(
+          key: const ValueKey('automation-pty-warning'),
+          padding: const .symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: palette.warning.withValues(alpha: 0.12),
+            borderRadius: .circular(6),
+            border: .all(color: palette.warning.withValues(alpha: 0.45)),
+          ),
+          child: Row(
+            crossAxisAlignment: .start,
+            children: [
+              Icon(
+                Icons.warning_amber_rounded,
+                size: 15,
+                color: palette.warning,
               ),
-            ),
-          ],
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Warning: Enabling PTY access lets local clients with the '
+                  'Bearer token type into shells, spawn commands, send mouse '
+                  'input, and read visible terminal text. Resets off on restart.',
+                  style: TextStyle(color: palette.warning, fontSize: 11),
+                ),
+              ),
+            ],
+          ),
         ),
-      ),
-    ],
-  );
+      ],
+    );
+  }
 }
