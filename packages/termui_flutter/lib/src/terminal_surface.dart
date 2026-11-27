@@ -3677,6 +3677,18 @@ final class _KittyGpuImageCache {
     _scheduleImageDisposal(evicted);
   }
 
+  bool _isStaleDecodedImage(
+    KittyImageRegistry registry,
+    KittyImageData data,
+    KittyImageData? previousData,
+  ) {
+    final currentData = registry.lookupImage(data.imageId);
+    if (currentData == null) return true;
+    return previousData != null &&
+        identical(previousData, currentData) &&
+        !identical(previousData, data);
+  }
+
   void _onImageDecoded(
     KittyImageRegistry registry,
     KittyImageData data,
@@ -3689,6 +3701,10 @@ final class _KittyGpuImageCache {
     }
     final slot = (registry, data.imageId);
     final previousData = _dataBySlot[slot];
+    if (_isStaleDecodedImage(registry, data, previousData)) {
+      decoded.dispose();
+      return;
+    }
     if (previousData != null && previousData != data) {
       final superseded = images.remove(previousData);
       if (superseded != null && !identical(superseded, decoded)) {

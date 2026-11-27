@@ -1945,6 +1945,63 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         ], uploadRawRgba: (_, _, _) => null),
         isNull,
       );
+
+      // Full cache: an uncached miss preceding an already-cached LRU PNG quad
+      // must NOT self-evict the later cached quad in the same frame.
+      cache.clear();
+      cache.store(img1, 'lru_png', cacheSlot: ('reg', 1));
+      cache.store(img2, 'mru_other', cacheSlot: ('reg', 2));
+      final sameFrame = cache.resolveQuads(<GpuKittyQuad>[
+        makeQuad(img3, rawRgbaPixels: raw3, cacheSlot: ('reg', 3)),
+        makeQuad(img1, cacheSlot: ('reg', 1)),
+      ], uploadRawRgba: upload);
+      expect(sameFrame, isNotNull);
+      expect(sameFrame![1], equals('lru_png'));
+      expect(cache.contains(img1), isTrue);
+      expect(cache.contains(img3), isTrue);
+      expect(cache.contains(img2), isFalse);
+
+      // Straight RGBA pixels with alpha < 255 are premultiplied before upload,
+      // while fully opaque pixels pass through unchanged without mutating input.
+      cache.clear();
+      ByteData? uploadedBytes;
+      final translucent = Uint8List.fromList(<int>[
+        200, 100, 50, 128, // ~50% alpha -> premul ~100, 50, 25, 128
+        255, 0, 255, 0, // 0% alpha -> 0, 0, 0, 0
+        10, 20, 30, 255, // 100% alpha -> unchanged
+        255, 255, 255, 255,
+      ]);
+      final translucentRes = cache.resolveQuads(
+        <GpuKittyQuad>[makeQuad(img1, rawRgbaPixels: translucent)],
+        uploadRawRgba: (_, _, bytes) {
+          uploadedBytes = bytes;
+          return 'premul_tex';
+        },
+      );
+      expect(translucentRes, equals(<String>['premul_tex']));
+      final premulView = uploadedBytes!.buffer.asUint8List(
+        uploadedBytes!.offsetInBytes,
+        uploadedBytes!.lengthInBytes,
+      );
+      expect(
+        premulView.sublist(0, 12),
+        equals(<int>[100, 50, 25, 128, 0, 0, 0, 0, 10, 20, 30, 255]),
+      );
+      // Caller's input buffer must not be mutated in place.
+      expect(translucent.sublist(0, 4), equals(<int>[200, 100, 50, 128]));
+
+      final opaque = Uint8List.fromList(List<int>.filled(16, 255));
+      ByteData? opaqueUploaded;
+      cache.resolveQuads(
+        <GpuKittyQuad>[makeQuad(img2, rawRgbaPixels: opaque)],
+        uploadRawRgba: (_, _, bytes) {
+          opaqueUploaded = bytes;
+          return 'opaque_tex';
+        },
+      );
+      expect(opaqueUploaded!.lengthInBytes, equals(16));
+      opaque[0] = 42;
+      expect(opaqueUploaded!.getUint8(0), equals(42));
     });
   });
 }

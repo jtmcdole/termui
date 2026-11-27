@@ -1463,5 +1463,119 @@ void main() {
         expect(activePainter.kittyImages.containsKey(firstData), isFalse);
       },
     );
+
+    testWidgets(
+      'TerminalSurface discards late decodes for deleted or superseded Kitty image versions',
+      (tester) async {
+        final registry = KittyImageRegistry();
+        final terminal = FlutterTerminal();
+        addTearDown(terminal.dispose);
+        late void Function(Buffer) drawFrame;
+
+        await tester.pumpWidget(
+          _testApp(
+            home: SizedBox(
+              width: 300,
+              height: 200,
+              child: Terminal(
+                terminal: terminal,
+                onRun: (_, onDraw) async {
+                  drawFrame = onDraw;
+                },
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        TuiAtlasPainter? readPainter() {
+          final finder = find.descendant(
+            of: find.byType(PrivateTuiView),
+            matching: find.byType(CustomPaint),
+          );
+          if (finder.evaluate().isEmpty) return null;
+          return tester.widget<CustomPaint>(finder).painter! as TuiAtlasPainter;
+        }
+
+        Buffer buildKittyBuffer() {
+          final buf = Buffer(4, 2)
+            ..registerKittyRegistry(const tui_geom.Rect(0, 0, 4, 2), registry);
+          buf.setAttributes(
+            0,
+            0,
+            char: kittyPlaceholderCell(0, 0),
+            fg: 0xFF000001,
+            bg: 0xFF000000,
+            modifiers: Modifier.kittyPlaceholder,
+          );
+          return buf;
+        }
+
+        // Start decoding a large V1 image, then immediately delete it before
+        // decode completes; the late decode must be discarded rather than cached.
+        final deletedData = KittyImageData(
+          imageId: 1,
+          pixelWidth: 64,
+          pixelHeight: 64,
+          rgbaPixels: Uint8List(64 * 64 * 4)..fillRange(0, 64 * 64 * 4, 255),
+          gridCols: 2,
+          gridRows: 1,
+          version: 1,
+        );
+        registry.registerImage(deletedData);
+        drawFrame(buildKittyBuffer());
+        await tester.pump();
+        registry.clearImages();
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pumpAndSettle();
+        expect(readPainter()?.kittyImages.containsKey(deletedData), isFalse);
+
+        // Start decoding large V2, then immediately supersede with small V3;
+        // even if V3 finishes before V2, V2 must not evict V3.
+        final slowV2 = KittyImageData(
+          imageId: 1,
+          pixelWidth: 128,
+          pixelHeight: 128,
+          rgbaPixels: Uint8List(128 * 128 * 4)
+            ..fillRange(0, 128 * 128 * 4, 180),
+          gridCols: 2,
+          gridRows: 1,
+          version: 2,
+        );
+        final fastV3 = KittyImageData(
+          imageId: 1,
+          pixelWidth: 2,
+          pixelHeight: 2,
+          rgbaPixels: Uint8List(2 * 2 * 4)..fillRange(0, 16, 240),
+          gridCols: 2,
+          gridRows: 1,
+          version: 3,
+        );
+        registry.registerImage(slowV2);
+        drawFrame(buildKittyBuffer());
+        await tester.pump();
+        registry.registerImage(fastV3);
+        drawFrame(buildKittyBuffer());
+        await tester.pump();
+        for (var attempt = 0; attempt < 100; attempt++) {
+          if (readPainter()?.kittyImages.containsKey(fastV3) ?? false) break;
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 5)),
+          );
+          await tester.pump();
+        }
+        // Give any still-in-flight V2 decode time to arrive and verify V3 stays.
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pumpAndSettle();
+        final activePainter = readPainter()!;
+        expect(activePainter.kittyImages.length, equals(1));
+        expect(activePainter.kittyImages.containsKey(fastV3), isTrue);
+        expect(activePainter.kittyImages.containsKey(slowV2), isFalse);
+      },
+    );
   });
 }

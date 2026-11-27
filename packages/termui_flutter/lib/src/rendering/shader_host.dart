@@ -1860,37 +1860,69 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
             wallpaperImage: wallpaper,
             kittyImages: kittyImages,
           )
-          .then((ready) {
-            if (!mounted ||
-                generation != _directPrepareGeneration ||
-                !identical(_directBackend, backend)) {
-              return;
-            }
-            _directPrepareInFlight = false;
-            _syncTicker();
-            if (!ready) return;
-            _lastPrimedAtlas = atlasImage;
-            _lastPrimedWallpaper = wallpaper;
-            _lastPrimedKittyImages = Set<ui.Image>.identity()
-              ..addAll(kittyImages);
-            _directPrimingSucceededWithoutFrame = true;
-            if (_directFallbackReason == _DirectFallbackReason.priming) {
-              _directFallbackReason = _DirectFallbackReason.none;
-              if (_directFallbackActive) {
-                setState(() {
-                  _directFallbackActive = false;
-                });
-              }
-            }
-            _frameNotifier.notify();
-          })
-          .catchError((Object _) {
-            if (mounted && generation == _directPrepareGeneration) {
-              _directPrepareInFlight = false;
-              _syncTicker();
-            }
-          }),
+          .then(
+            (ready) => _handleDirectPrepareComplete(
+              backend: backend,
+              generation: generation,
+              ready: ready,
+              atlasImage: atlasImage,
+              wallpaper: wallpaper,
+              kittyImages: kittyImages,
+            ),
+          )
+          .catchError((Object _) => _handleDirectPrepareError(generation)),
     );
+  }
+
+  void _handleDirectPrepareComplete({
+    required DirectTerminalShaderBackend backend,
+    required int generation,
+    required bool ready,
+    required ui.Image atlasImage,
+    required ui.Image? wallpaper,
+    required List<ui.Image> kittyImages,
+  }) {
+    if (!mounted || generation != _directPrepareGeneration) {
+      return;
+    }
+    _directPrepareInFlight = false;
+    _syncTicker();
+    if (!identical(_directBackend, backend)) {
+      if (_directFallbackReason == _DirectFallbackReason.priming) {
+        _directFallbackReason = _DirectFallbackReason.none;
+      }
+      setState(() {});
+      _frameNotifier.notify();
+      return;
+    }
+    if (!ready) {
+      if (_directFallbackActive) {
+        _frameNotifier.notify();
+      }
+      return;
+    }
+    _lastPrimedAtlas = atlasImage;
+    _lastPrimedWallpaper = wallpaper;
+    _lastPrimedKittyImages = Set<ui.Image>.identity()..addAll(kittyImages);
+    _directPrimingSucceededWithoutFrame = true;
+    if (_directFallbackReason == _DirectFallbackReason.priming) {
+      _directFallbackReason = _DirectFallbackReason.none;
+      if (_directFallbackActive) {
+        setState(() {
+          _directFallbackActive = false;
+        });
+      }
+    }
+    _frameNotifier.notify();
+  }
+
+  void _handleDirectPrepareError(int generation) {
+    if (!mounted || generation != _directPrepareGeneration) return;
+    _directPrepareInFlight = false;
+    _syncTicker();
+    if (_directFallbackActive) {
+      _frameNotifier.notify();
+    }
   }
 
   void _enterDirectFallbackPostFrame(_DirectFallbackReason reason) {

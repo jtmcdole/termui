@@ -251,11 +251,14 @@ final class KittyTextureUploadCache<T extends Object> {
   /// Resolves textures for all [quads], synchronously uploading cache misses
   /// via [uploadRawRgba] when [GpuKittyQuad.rawRgbaPixels] is available.
   ///
-  /// Cache hits also bind [GpuKittyQuad.cacheSlot] so primed non-RGBA textures
-  /// (such as PNGs) participate in slot-based eviction. Returns `null` if any
-  /// quad is uncached and lacks valid raw RGBA pixels or if [uploadRawRgba]
-  /// returns `null`; textures uploaded for earlier quads in [quads] remain
-  /// cached on partial failure.
+  /// Straight RGBA8888 buffers containing translucent pixels (`alpha < 255`)
+  /// are converted to premultiplied RGBA8888 before calling [uploadRawRgba] so
+  /// uploaded textures match `ui.ImageByteFormat.rawRgba` under premultiplied
+  /// source-over blending. Cache hits also bind [GpuKittyQuad.cacheSlot] so
+  /// primed non-RGBA textures (such as PNGs) participate in slot-based
+  /// eviction. Returns `null` if any quad is uncached and lacks valid raw RGBA
+  /// pixels or if [uploadRawRgba] returns `null`; textures uploaded for
+  /// earlier quads in [quads] remain cached on partial failure.
   List<T>? resolveQuads(
     List<GpuKittyQuad> quads, {
     required T? Function(int width, int height, ByteData rgbaBytes)
@@ -264,7 +267,8 @@ final class KittyTextureUploadCache<T extends Object> {
     if (quads.isEmpty) return <T>[];
     final resolved = <T>[];
     var ensuredCapacity = false;
-    for (final quad in quads) {
+    for (var i = 0; i < quads.length; i++) {
+      final quad = quads[i];
       var tex = _touch(quad.image);
       if (tex != null) {
         _bindSlot(quad.image, quad.cacheSlot);
@@ -275,6 +279,7 @@ final class KittyTextureUploadCache<T extends Object> {
       if (validBytes == null) return null;
       if (!ensuredCapacity) {
         ensureCapacity(_countDistinctImages(quads));
+        _touchRemainingQuads(quads, i + 1);
         ensuredCapacity = true;
       }
       tex = uploadRawRgba(quad.image.width, quad.image.height, validBytes);
@@ -283,6 +288,12 @@ final class KittyTextureUploadCache<T extends Object> {
       resolved.add(tex);
     }
     return resolved;
+  }
+
+  void _touchRemainingQuads(List<GpuKittyQuad> quads, int startIndex) {
+    for (var j = startIndex; j < quads.length; j++) {
+      _touch(quads[j].image);
+    }
   }
 
   T? _touch(ui.Image image) {
@@ -320,7 +331,33 @@ final class KittyTextureUploadCache<T extends Object> {
     if (width <= 0 || height <= 0) return null;
     final expectedBytes = width * height * 4;
     if (raw.length < expectedBytes) return null;
-    return ByteData.sublistView(raw, 0, expectedBytes);
+    return _premultiplyStraightRgbaIfNeeded(
+      ByteData.sublistView(raw, 0, expectedBytes),
+    );
+  }
+
+  static ByteData _premultiplyStraightRgbaIfNeeded(ByteData straight) {
+    final src = straight.buffer.asUint8List(
+      straight.offsetInBytes,
+      straight.lengthInBytes,
+    );
+    var hasTranslucency = false;
+    for (var i = 3; i < src.length; i += 4) {
+      if (src[i] != 255) {
+        hasTranslucency = true;
+        break;
+      }
+    }
+    if (!hasTranslucency) return straight;
+    final premul = Uint8List(src.length);
+    for (var i = 0; i < src.length; i += 4) {
+      final a = src[i + 3];
+      premul[i] = (src[i] * a + 127) ~/ 255;
+      premul[i + 1] = (src[i + 1] * a + 127) ~/ 255;
+      premul[i + 2] = (src[i + 2] * a + 127) ~/ 255;
+      premul[i + 3] = a;
+    }
+    return ByteData.sublistView(premul);
   }
 
   /// Clears all cached textures and restores [capacity] to its initial bound.
