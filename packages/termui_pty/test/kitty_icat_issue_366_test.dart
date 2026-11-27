@@ -46,7 +46,7 @@ void main() {
 
   group('Issue #366 kitten icat and multi-row Kitty image regressions', () {
     test(
-      'DetectSupport capability queries accept direct (t=d) including unpadded base64 and reject t=t, t=s, t=f',
+      'DetectSupport capability queries accept direct (t=d) including unpadded base64 and validate t=t, t=s, t=f',
       () {
         final replies = <String>[];
         final terminal = VirtualTerminal(
@@ -91,19 +91,35 @@ void main() {
         expect(replies, isNot(contains('\x1b_Gi=2;OK\x1b\\')));
         expect(replies, isNot(contains('\x1b_Gi=3;OK\x1b\\')));
         expect(replies, isNot(contains('\x1b_Gi=4;OK\x1b\\')));
+        // Unsafe t=t path (missing tty-graphics-protocol) and unsupported t=f return EINVAL;
+        // missing t=s shm object returns ENOENT on Linux (EINVAL elsewhere).
         expect(replies, contains(startsWith('\x1b_Gi=2;EINVAL:')));
-        expect(replies, contains(startsWith('\x1b_Gi=3;EINVAL:')));
+        expect(
+          replies,
+          contains(
+            Platform.isLinux
+                ? startsWith('\x1b_Gi=3;ENOENT:')
+                : startsWith('\x1b_Gi=3;EINVAL:'),
+          ),
+        );
         expect(replies, contains(startsWith('\x1b_Gi=4;EINVAL:')));
         expect(terminal.imageRegistry.registeredImageIds, isEmpty);
 
-        // Non-direct t=s transmit must also be rejected rather than reading filename bytes as pixels.
+        // Missing t=s transmit must fail cleanly rather than reading filename bytes as pixels.
         replies.clear();
         terminal.writeString(
           '\x1b_Ga=T,t=s,s=1,v=1,f=24,i=5,q=1;$shmNameB64\x1b\\',
         );
         expect(terminal.imageRegistry.lookupImage(5), isNull);
         expect(terminal.buffer.getCharacter(0, 0), equals(' '));
-        expect(replies, contains(startsWith('\x1b_Gi=5;EINVAL:')));
+        expect(
+          replies,
+          contains(
+            Platform.isLinux
+                ? startsWith('\x1b_Gi=5;ENOENT:')
+                : startsWith('\x1b_Gi=5;EINVAL:'),
+          ),
+        );
       },
     );
 

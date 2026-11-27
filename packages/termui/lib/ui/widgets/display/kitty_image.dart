@@ -333,16 +333,23 @@ String kittyPlaceholderCell(int row, int col, {int imageIdMsb = 0}) {
 }
 
 /// Parses a Kitty Unicode placeholder grapheme into its `(row, col, imageIdMsb)` tile coordinates,
-/// or returns `null` if [grapheme] is not a valid `U+10EEEE` placeholder cell.
+/// or returns `null` if [grapheme] is not a valid `U+10EEEE` placeholder cell with at least a row diacritic.
+///
+/// For 1-diacritic shorthand cells (`U+10EEEE` + row diacritic), `col` defaults to `0`
+/// and `imageIdMsb` is `null`.
 ({int row, int col, int? imageIdMsb})? parseKittyPlaceholderCell(
   String grapheme,
 ) {
-  if (grapheme.length < 4 || !grapheme.startsWith(kittyPlaceholderChar)) {
+  if (grapheme.length < 3 || !grapheme.startsWith(kittyPlaceholderChar)) {
     return null;
   }
   final row = _diacriticToIndex[grapheme.codeUnitAt(2)];
+  if (row == null) return null;
+  if (grapheme.length == 3) {
+    return (row: row, col: 0, imageIdMsb: null);
+  }
   final col = _diacriticToIndex[grapheme.codeUnitAt(3)];
-  if (row == null || col == null) return null;
+  if (col == null) return null;
   int? imageIdMsb;
   if (grapheme.length >= 5) {
     imageIdMsb = _diacriticToIndex[grapheme.codeUnitAt(4)];

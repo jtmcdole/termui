@@ -107,10 +107,16 @@ void main() {
           equals(hostImg.rgbaPixels),
         );
 
-        // Child delete-all (a=d,d=a) never wipes host global registry and never emits OK.
+        // Lowercase a=d,d=a clears placements on screen while preserving stored image data.
         final replies = <String>[];
         childA.onReply = replies.add;
         childA.writeString('\x1b_Ga=d,d=a,i=1\x1b\\');
+        expect(replies, isEmpty);
+        expect(childA.buffer.getCharacter(0, 0), equals(' '));
+        expect(childA.imageRegistry.lookupImage(1), isNotNull);
+
+        // Uppercase a=d,d=A frees scoped image data without touching host global registry.
+        childA.writeString('\x1b_Ga=d,d=A\x1b\\');
         expect(replies, isEmpty);
         expect(childA.imageRegistry.lookupImage(1), isNull);
         expect(
@@ -383,7 +389,7 @@ void main() {
         expect(terminal.imageRegistry.lookupImage(7)?.version, equals(1));
 
         final revBeforeDelete = terminal.imageRegistryRevision;
-        terminal.writeString('\x1b_Ga=d,d=i,i=7\x1b\\');
+        terminal.writeString('\x1b_Ga=d,d=I,i=7\x1b\\');
         expect(terminal.imageRegistryRevision, greaterThan(revBeforeDelete));
         expect(terminal.imageRegistry.lookupImage(7), isNull);
 
@@ -549,6 +555,277 @@ void main() {
             KittyImageRegistry.global,
           ),
           isTrue,
+        );
+      },
+    );
+
+    test(
+      'Bare a=d / d=a and d=i clear placements without freeing image data for subsequent a=p, while d=A / d=I free data',
+      () {
+        final replies = <String>[];
+        final vt = VirtualTerminal(width: 10, height: 5, onReply: replies.add);
+        final pxB64 = base64Encode(Uint8List.fromList([255, 0, 0, 255]));
+
+        // Transmit image 1 and 2 (separate transmit + place flow).
+        vt.writeString('\x1b_Gf=32,s=1,v=1,i=1;$pxB64\x1b\\');
+        vt.writeString('\x1b_Gf=32,s=1,v=1,i=2;$pxB64\x1b\\');
+        expect(vt.imageRegistry.lookupImage(1), isNotNull);
+        expect(vt.imageRegistry.lookupImage(2), isNotNull);
+
+        // Bare a=d (defaults to d=a) clears placements but MUST preserve stored data so a=p succeeds.
+        replies.clear();
+        vt.writeString('\x1b_Ga=d\x1b\\');
+        vt.writeString('\x1b[1;1H\x1b_Ga=p,i=1,c=4,r=2,C=1\x1b\\');
+        expect(replies, equals(['\x1b_Gi=1;OK\x1b\\']));
+        expect(vt.imageRegistry.lookupImage(1)?.gridCols, equals(4));
+        expect(vt.imageRegistry.lookupImage(1)?.gridRows, equals(2));
+        expect(
+          vt.buffer.getCharacter(0, 0),
+          equals(kittyPlaceholderCell(0, 0)),
+        );
+        expect(
+          vt.buffer.getCharacter(3, 1),
+          equals(kittyPlaceholderCell(1, 3)),
+        );
+
+        // Place image 2 on row 3, then d=i,i=1 clears only image 1's cells and keeps image 1 in registry.
+        vt.writeString('\x1b[4;1H\x1b_Ga=p,i=2,c=2,r=1,C=1\x1b\\');
+        vt.writeString('\x1b_Ga=d,d=i,i=1\x1b\\');
+        expect(vt.buffer.getCharacter(0, 0), equals(' '));
+        expect(
+          vt.buffer.getCharacter(0, 3),
+          equals(kittyPlaceholderCell(0, 0)),
+        );
+        expect(vt.imageRegistry.lookupImage(1), isNotNull);
+
+        // Uppercase d=I,i=2 clears image 2's cells AND frees its stored data.
+        vt.writeString('\x1b_Ga=d,d=I,i=2\x1b\\');
+        expect(vt.buffer.getCharacter(0, 3), equals(' '));
+        expect(vt.imageRegistry.lookupImage(2), isNull);
+        expect(vt.imageRegistry.lookupImage(1), isNotNull);
+
+        // 32-bit imageId (> 0xFFFFFF) direct placement + bare U+10EEEE cells clear all columns on d=i.
+        const id32 = 0x12000042;
+        vt.writeString('\x1b_Gf=32,s=1,v=1,i=$id32,a=t;$pxB64\x1b\\');
+        vt.writeString('\x1b[2;1H\x1b_Ga=p,i=$id32,c=3,r=1,C=1\x1b\\');
+        vt.writeString('\x1b_Ga=d,d=i,i=$id32\x1b\\');
+        expect(vt.buffer.getCharacter(0, 1), equals(' '));
+        expect(vt.buffer.getCharacter(1, 1), equals(' '));
+        expect(vt.buffer.getCharacter(2, 1), equals(' '));
+
+        // d=A clears images without aborting unrelated in-flight m=1 uploads.
+        final mid = pxB64.length ~/ 2;
+        vt.writeString(
+          '\x1b_Ga=t,i=90,f=32,s=1,v=1,m=1;${pxB64.substring(0, mid)}\x1b\\',
+        );
+        vt.writeString('\x1b_Ga=d,d=A\x1b\\');
+        expect(vt.imageRegistry.lookupImage(1), isNull);
+        vt.writeString('\x1b_Gm=0;${pxB64.substring(mid)}\x1b\\');
+        expect(vt.imageRegistry.lookupImage(90), isNotNull);
+      },
+    );
+
+    test(
+      'Supports local temp file (t=t) and Linux POSIX shared memory (t=s) with O=/S= slicing, security checks, and unlink',
+      () {
+        final replies = <String>[];
+        final vt = VirtualTerminal(width: 10, height: 5, onReply: replies.add);
+        final rgba = Uint8List.fromList([10, 20, 30, 255]);
+
+        // 1. t=t temp file with S=0 (protocol default -> read to EOF) unlinks after read.
+        final tmpPath =
+            '${Directory.systemTemp.path}/tty-graphics-protocol-termui-test-$pid.rgba';
+        final tmpFile = File(tmpPath)..writeAsBytesSync(rgba);
+        addTearDown(() {
+          if (tmpFile.existsSync()) tmpFile.deleteSync();
+        });
+        final tmpB64 = base64Encode(utf8.encode(tmpPath));
+        vt.writeString(
+          '\x1b_Ga=T,f=32,s=1,v=1,i=81,t=t,S=0,c=2,r=1;$tmpB64\x1b\\',
+        );
+        expect(replies, contains('\x1b_Gi=81;OK\x1b\\'));
+        expect(vt.imageRegistry.lookupImage(81)?.rgbaPixels, equals(rgba));
+        expect(tmpFile.existsSync(), isFalse);
+
+        // 2. t=t with O= offset and S= size slices exact bytes.
+        replies.clear();
+        final padded = Uint8List.fromList([0, 0, ...rgba, 99]);
+        final slicePath =
+            '${Directory.systemTemp.path}/tty-graphics-protocol-slice-$pid.rgba';
+        final sliceFile = File(slicePath)..writeAsBytesSync(padded);
+        addTearDown(() {
+          if (sliceFile.existsSync()) sliceFile.deleteSync();
+        });
+        final sliceB64 = base64Encode(utf8.encode(slicePath));
+        vt.writeString(
+          '\x1b_Ga=t,f=32,s=1,v=1,i=83,t=t,O=2,S=4;$sliceB64\x1b\\',
+        );
+        expect(replies, contains('\x1b_Gi=83;OK\x1b\\'));
+        expect(vt.imageRegistry.lookupImage(83)?.rgbaPixels, equals(rgba));
+        expect(sliceFile.existsSync(), isFalse);
+
+        // 3. Missing t=t file returns ENOENT; traversal and intermediate symlink return EINVAL.
+        replies.clear();
+        final missingPath =
+            '${Directory.systemTemp.path}/tty-graphics-protocol-missing-$pid.rgba';
+        vt.writeString(
+          '\x1b_Ga=t,f=32,s=1,v=1,i=84,t=t;${base64Encode(utf8.encode(missingPath))}\x1b\\',
+        );
+        expect(replies, contains(startsWith('\x1b_Gi=84;ENOENT:')));
+
+        final traversalPath =
+            '${Directory.systemTemp.path}/tty-graphics-protocol/..\\../etc/passwd';
+        vt.writeString(
+          '\x1b_Ga=t,f=32,s=1,v=1,i=85,t=t;${base64Encode(utf8.encode(traversalPath))}\x1b\\',
+        );
+        expect(replies, contains(startsWith('\x1b_Gi=85;EINVAL:')));
+
+        if (!Platform.isWindows) {
+          final outsideDir = Directory.systemTemp.createTempSync(
+            'termui_outside_',
+          );
+          final outsideSub = Directory('${outsideDir.path}/sub')..createSync();
+          final outsideFile = File('${outsideSub.path}/secret.rgba')
+            ..writeAsBytesSync(rgba);
+          final linkPath =
+              '${Directory.systemTemp.path}/tty-graphics-protocol-link-$pid';
+          final link = Link(linkPath)..createSync('/etc');
+          addTearDown(() {
+            if (link.existsSync()) link.deleteSync();
+            if (outsideDir.existsSync()) outsideDir.deleteSync(recursive: true);
+          });
+          // Intermediate symlink pointing outside allowed temp dir must be rejected and NOT deleted.
+          final viaLink = '$linkPath/hosts';
+          vt.writeString(
+            '\x1b_Ga=t,f=32,s=1,v=1,i=86,t=t;${base64Encode(utf8.encode(viaLink))}\x1b\\',
+          );
+          expect(replies, contains(startsWith('\x1b_Gi=86;EINVAL:')));
+
+          // Direct symlink leaf must also be rejected without deleting target.
+          final leafLinkPath =
+              '${Directory.systemTemp.path}/tty-graphics-protocol-leaf-$pid.rgba';
+          final leafLink = Link(leafLinkPath)..createSync(outsideFile.path);
+          addTearDown(() {
+            if (leafLink.existsSync()) leafLink.deleteSync();
+          });
+          vt.writeString(
+            '\x1b_Ga=t,f=32,s=1,v=1,i=87,t=t;${base64Encode(utf8.encode(leafLinkPath))}\x1b\\',
+          );
+          expect(replies, contains(startsWith('\x1b_Gi=87;EINVAL:')));
+          expect(outsideFile.existsSync(), isTrue);
+        }
+
+        // 4. t=s POSIX shared memory on Linux (/dev/shm/<name>).
+        if (Platform.isLinux && Directory('/dev/shm').existsSync()) {
+          replies.clear();
+          final shmName = '/termui-kitty-test-$pid';
+          final shmFile = File('/dev/shm/termui-kitty-test-$pid')
+            ..writeAsBytesSync(rgba);
+          addTearDown(() {
+            if (shmFile.existsSync()) shmFile.deleteSync();
+          });
+          final shmB64 = base64Encode(utf8.encode(shmName));
+          vt.writeString('\x1b_Ga=t,f=32,s=1,v=1,i=82,t=s;$shmB64\x1b\\');
+          expect(replies, contains('\x1b_Gi=82;OK\x1b\\'));
+          expect(vt.imageRegistry.lookupImage(82)?.rgbaPixels, equals(rgba));
+          expect(shmFile.existsSync(), isFalse);
+        }
+      },
+    );
+
+    test(
+      'Supports repeated metadata on m= continuation, p= placements, I= image numbers, d=r/R, single-axis c=, 4K PNGs, and unknown a= errors',
+      () {
+        final replies = <String>[];
+        final vt = VirtualTerminal(
+          width: 20,
+          height: 10,
+          cellPixelWidth: 8,
+          cellPixelHeight: 16,
+          onReply: replies.add,
+        );
+        final rgba = Uint8List.fromList([11, 22, 33, 255]);
+        final b64 = base64Encode(rgba);
+        final mid = b64.length ~/ 2;
+
+        // 1. Continuation chunk repeating metadata (f=32,t=d,p=5) must NOT abort upload.
+        vt.writeString(
+          '\x1b_Ga=t,i=110,p=5,f=32,s=1,v=1,t=d,m=1;${b64.substring(0, mid)}\x1b\\',
+        );
+        vt.writeString(
+          '\x1b_Gi=110,p=5,f=32,t=d,m=0;${b64.substring(mid)}\x1b\\',
+        );
+        expect(replies, contains('\x1b_Gi=110,p=5;OK\x1b\\'));
+        expect(vt.imageRegistry.lookupImage(110)?.rgbaPixels, equals(rgba));
+
+        // 2. Placement ID p= in a=p reply and selective d=I,i=,p= deletion.
+        replies.clear();
+        vt.writeString('\x1b_Ga=p,i=110,p=1,c=2,r=1,C=1\x1b\\');
+        vt.writeString('\x1b_Ga=p,i=110,p=2,c=2,r=1,C=1\x1b\\');
+        expect(replies, contains('\x1b_Gi=110,p=1;OK\x1b\\'));
+        expect(replies, contains('\x1b_Gi=110,p=2;OK\x1b\\'));
+        // Deleting only p=1 must keep image 110 because p=2 still exists.
+        vt.writeString('\x1b_Ga=d,d=I,i=110,p=1\x1b\\');
+        expect(vt.imageRegistry.lookupImage(110), isNotNull);
+        // Deleting p=2 leaves 0 placements -> image 110 is freed.
+        vt.writeString('\x1b_Ga=d,d=I,i=110,p=2\x1b\\');
+        expect(vt.imageRegistry.lookupImage(110), isNull);
+
+        // 3. I= image number: replies i=<auto>,I=7;OK, supports a=p,I=7 and d=N,I=7.
+        replies.clear();
+        vt.writeString('\x1b_Ga=t,I=7,f=32,s=1,v=1;$b64\x1b\\');
+        expect(replies.single, matches(RegExp(r'^\x1b_Gi=\d+,I=7;OK\x1b\\$')));
+        replies.clear();
+        vt.writeString('\x1b_Ga=p,I=7,c=2,r=1,C=1\x1b\\');
+        expect(replies.single, matches(RegExp(r'^\x1b_Gi=\d+,I=7;OK\x1b\\$')));
+        vt.writeString('\x1b_Ga=d,d=N,I=7\x1b\\');
+        replies.clear();
+        vt.writeString('\x1b_Ga=p,I=7,c=2,r=1,C=1\x1b\\');
+        expect(replies, contains('\x1b_GI=7;ENOENT:image not found\x1b\\'));
+
+        // Specifying both i= and I= returns EINVAL.
+        replies.clear();
+        vt.writeString('\x1b_Ga=t,i=111,I=8,f=32,s=1,v=1;$b64\x1b\\');
+        expect(
+          replies,
+          contains(startsWith('\x1b_Gi=111,I=8;EINVAL:cannot specify both')),
+        );
+
+        // 4. Single-axis c= preserves aspect ratio using cell pixel size (8x16).
+        final png1000 = base64Encode(_minimalPngBytes(1000, 1000));
+        vt.writeString('\x1b_Ga=t,i=120,f=100,c=20;$png1000\x1b\\');
+        expect(vt.imageRegistry.lookupImage(120)?.gridCols, equals(20));
+        expect(vt.imageRegistry.lookupImage(120)?.gridRows, equals(10));
+
+        // 5. 4K PNG (3840x2160 = 8.3 MP) is accepted under raised 16 MP cap.
+        final png4k = base64Encode(_minimalPngBytes(3840, 2160));
+        vt.writeString('\x1b_Ga=t,i=121,f=100;$png4k\x1b\\');
+        expect(vt.imageRegistry.lookupImage(121)?.pixelWidth, equals(3840));
+        expect(vt.imageRegistry.lookupImage(121)?.pixelHeight, equals(2160));
+
+        // 6. d=R range delete removes ids 120..121.
+        vt.writeString('\x1b_Ga=d,d=R,x=120,y=121\x1b\\');
+        expect(vt.imageRegistry.lookupImage(120), isNull);
+        expect(vt.imageRegistry.lookupImage(121), isNull);
+
+        // 7. d=a preserves U=1 virtual placements and their placeholder text cells.
+        vt.writeString('\x1b_Ga=T,U=1,i=130,f=32,s=1,v=1,c=2,r=1;$b64\x1b\\');
+        vt.writeString(
+          '\x1b[1;1H\x1b[38;2;0;0;130m${kittyPlaceholderCell(0, 0)}$kittyPlaceholderChar\x1b[39m',
+        );
+        vt.writeString('\x1b_Ga=d,d=a\x1b\\');
+        expect(vt.imageRegistry.lookupImage(130), isNotNull);
+        expect(
+          vt.buffer.getCharacter(0, 0),
+          equals(kittyPlaceholderCell(0, 0)),
+        );
+
+        // 8. Unsupported action replies EINVAL:unsupported action.
+        replies.clear();
+        vt.writeString('\x1b_Ga=f,i=140;$b64\x1b\\');
+        expect(
+          replies,
+          equals(['\x1b_Gi=140;EINVAL:unsupported action\x1b\\']),
         );
       },
     );

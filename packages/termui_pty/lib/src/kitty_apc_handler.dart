@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:termui/termui.dart';
 
+import 'kitty_medium_stub.dart' if (dart.library.io) 'kitty_medium_io.dart';
 import 'zlib_decoder_stub.dart' if (dart.library.io) 'zlib_decoder_io.dart';
 
 final class _PayloadTooLargeException implements Exception {
@@ -11,6 +13,14 @@ final class _PayloadTooLargeException implements Exception {
 
 final class _InvalidPayloadException implements Exception {
   const _InvalidPayloadException();
+}
+
+final class _MediumNotFoundException implements Exception {
+  const _MediumNotFoundException();
+}
+
+final class _UnsupportedMediumException implements Exception {
+  const _UnsupportedMediumException();
 }
 
 final class _BoundedByteSink extends ByteConversionSinkBase {
@@ -52,14 +62,34 @@ final class _CountingByteSink extends ByteConversionSinkBase {
   void close() {}
 }
 
+final class _KittyPlacement {
+  final int imageId;
+  final int placementId;
+  final int cols;
+  final int rows;
+  final bool isVirtual;
+
+  const _KittyPlacement({
+    required this.imageId,
+    required this.placementId,
+    required this.cols,
+    required this.rows,
+    required this.isVirtual,
+  });
+}
+
 final class _PendingUpload {
   final int imageId;
+  final int explicitNumber;
   final String action;
+  final String medium;
   final int format;
   final int width;
   final int height;
   final int? cols;
   final int? rows;
+  final int dataOffset;
+  final int? dataSize;
   final bool compressed;
   final int quiet;
   final bool advanceCursor;
@@ -74,12 +104,16 @@ final class _PendingUpload {
 
   _PendingUpload({
     required this.imageId,
+    required this.explicitNumber,
     required this.action,
+    required this.medium,
     required this.format,
     required this.width,
     required this.height,
     required this.cols,
     required this.rows,
+    required this.dataOffset,
+    required this.dataSize,
     required this.compressed,
     required this.quiet,
     required this.advanceCursor,
@@ -97,8 +131,8 @@ final class KittyApcHandler {
   static const int _maxBase64PerUpload = 16 * 1024 * 1024;
   static const int _maxTotalPendingBase64 = 32 * 1024 * 1024;
   static const int _maxInflatedBytes = 16 * 1024 * 1024;
-  static const int _maxDimension = 4096;
-  static const int _maxTotalPixels = 4_194_304;
+  static const int _maxDimension = 8192;
+  static const int _maxTotalPixels = 16_777_216;
   static const List<int> _pngSignature = [
     0x89,
     0x50,
@@ -121,10 +155,17 @@ final class KittyApcHandler {
   final void Function(int cols, int rows, int imageId, bool advanceCursor)
   onPlaceVirtual;
 
+  /// Callback invoked when `a=d` deletes visible placements on the active screen.
+  /// When `imageId` is `null`, all Kitty placeholder cells are cleared;
+  /// otherwise only placements matching `imageId` are cleared.
+  final void Function(int? imageId)? onClearPlacements;
+
   /// Callback returning the live terminal cell dimensions in pixels `(width, height)`.
   final (int width, int height) Function() cellPixelSize;
 
   final Map<int, _PendingUpload> _pendingUploads = {};
+  final Map<(int, int), _KittyPlacement> _placements = {};
+  final Map<int, int> _imageNumberToId = {};
   int _totalPendingBase64 = 0;
   int? _lastActiveUploadId;
   int _nextAutoId = 0x80000001;
@@ -135,11 +176,14 @@ final class KittyApcHandler {
     required this.onReply,
     required this.onPlaceVirtual,
     required this.cellPixelSize,
+    this.onClearPlacements,
   });
 
-  /// Clears all pending chunked uploads and wipes [registry].
+  /// Clears all pending chunked uploads, placements, and wipes [registry].
   void reset() {
     _pendingUploads.clear();
+    _placements.clear();
+    _imageNumberToId.clear();
     _totalPendingBase64 = 0;
     _lastActiveUploadId = null;
     registry.clearImages();
@@ -156,8 +200,12 @@ final class KittyApcHandler {
     final dataPart = semiIdx >= 0 ? clean.substring(semiIdx + 1) : '';
 
     final control = _parseControlPart(controlPart);
-    final pendingContinuation =
-        !control.containsKey('a') && !_hasNewUploadMetadata(control)
+    final explicitId = _parsePositiveId(control['i']);
+    final allowContinuation =
+        !control.containsKey('a') &&
+        (!_hasNewUploadMetadata(control) ||
+            (explicitId > 0 && control.containsKey('m')));
+    final pendingContinuation = allowContinuation
         ? _resolveActiveContinuation(control)
         : null;
     final action = pendingContinuation?.action ?? (control['a'] ?? 't');
@@ -172,6 +220,14 @@ final class KittyApcHandler {
         _handlePlace(control, quiet);
       case 'd':
         _handleDelete(control);
+      default:
+        final prefix = _resolveReplyPrefix(
+          explicitId,
+          _parsePositiveId(control['I']),
+          placementId: _parsePositiveId(control['p']),
+          isQuery: true,
+        );
+        _replyError(prefix, quiet, 'EINVAL:unsupported action');
     }
   }
 
@@ -194,16 +250,42 @@ final class KittyApcHandler {
     return map;
   }
 
-  static int _parsePositiveId(String? raw) {
+  static int? _parseOptionalPositiveInt(String? raw) {
     final parsed = int.tryParse(raw ?? '');
-    if (parsed == null || parsed <= 0) return 0;
-    return parsed & 0xFFFFFFFF;
+    return (parsed != null && parsed > 0) ? parsed : null;
   }
 
-  static String? _resolveReplyPrefix(int explicitId, int explicitNumber) {
-    if (explicitId > 0) return 'i=$explicitId';
-    if (explicitNumber > 0) return 'I=$explicitNumber';
-    return null;
+  static int _parsePositiveId(String? raw) {
+    final parsed = int.tryParse(raw ?? '');
+    if (parsed == null || parsed <= 0 || parsed > 0xFFFFFFFF) return 0;
+    return parsed;
+  }
+
+  static bool _isOutOfRangeUint32(String? raw) {
+    if (raw == null) return false;
+    final parsed = int.tryParse(raw);
+    return parsed == null || parsed < 0 || parsed > 0xFFFFFFFF;
+  }
+
+  static String? _resolveReplyPrefix(
+    int imageId,
+    int explicitNumber, {
+    int placementId = 0,
+    bool isQuery = false,
+  }) {
+    final String? base;
+    if (explicitNumber > 0) {
+      base = isQuery
+          ? 'I=$explicitNumber'
+          : (imageId > 0
+                ? 'i=$imageId,I=$explicitNumber'
+                : 'I=$explicitNumber');
+    } else if (imageId > 0) {
+      base = 'i=$imageId';
+    } else {
+      return null;
+    }
+    return placementId > 0 ? '$base,p=$placementId' : base;
   }
 
   int _allocateAutoId() {
@@ -224,10 +306,13 @@ final class KittyApcHandler {
     }
   }
 
-  static bool _isDirectMedium(Map<String, String> control) =>
-      switch (control['t']) {
-        null || 'd' => true,
-        _ => false,
+  static String _parseMedium(Map<String, String> control) =>
+      control['t'] ?? 'd';
+
+  static bool _isSupportedMedium(Map<String, String> control) =>
+      switch (_parseMedium(control)) {
+        'd' => true,
+        final medium => platformSupportsKittyMedium(medium),
       };
 
   /// Returns whether [format] is a supported Kitty Graphics `f=` transmission code:
@@ -254,7 +339,15 @@ final class KittyApcHandler {
     Map<String, String> control,
     int format,
   ) {
-    if (!_isDirectMedium(control)) {
+    if (_isOutOfRangeUint32(control['i']) ||
+        _isOutOfRangeUint32(control['I'])) {
+      return 'EINVAL:invalid id';
+    }
+    if (_parsePositiveId(control['i']) > 0 &&
+        _parsePositiveId(control['I']) > 0) {
+      return 'EINVAL:cannot specify both i and I';
+    }
+    if (!_isSupportedMedium(control)) {
       return 'EINVAL:unsupported transmission medium';
     }
     if (!_isSupportedFormat(format)) {
@@ -272,10 +365,25 @@ final class KittyApcHandler {
       control.containsKey('f') ||
       control.containsKey('t') ||
       control.containsKey('o') ||
+      control.containsKey('O') ||
+      control.containsKey('S') ||
       control.containsKey('c') ||
       control.containsKey('r') ||
       control.containsKey('U') ||
       control.containsKey('p');
+
+  static int? _parseDataSize(String? raw) {
+    if (raw == null) return null;
+    final parsed = int.tryParse(raw);
+    if (parsed == null) return -1;
+    // Per Kitty spec, S=0 means read the entire payload (same as omitted).
+    return parsed == 0 ? null : parsed;
+  }
+
+  static int _parseDataOffset(String? raw) {
+    if (raw == null) return 0;
+    return int.tryParse(raw) ?? -1;
+  }
 
   static Uint8List _decodeBase64Payload(String raw) {
     final cleaned = raw.replaceAll(_whitespaceRegex, '');
@@ -321,18 +429,28 @@ final class KittyApcHandler {
     );
 
     if (!isMore && !canContinue) {
-      final replyPrefix = _resolveReplyPrefix(explicitId, explicitNumber);
+      final replyPrefix = _resolveReplyPrefix(
+        explicitId,
+        explicitNumber,
+        placementId: _parsePositiveId(control['p']),
+        isQuery: true,
+      );
       final format = _parseFormat(control);
       final validationError = _resolveValidationError(control, format);
       if (validationError != null) {
         _replyError(replyPrefix, quiet, validationError);
         return;
       }
+      final dataSize = _parseDataSize(control['S']);
+      final dataOffset = _parseDataOffset(control['O']);
       _verifyQueryBytes(
         replyPrefix,
         quiet,
         dataPart,
+        medium: _parseMedium(control),
         compressed: control['o'] == 'z',
+        dataOffset: dataOffset,
+        dataSize: dataSize,
       );
       return;
     }
@@ -357,39 +475,195 @@ final class KittyApcHandler {
       pending.replyPrefix,
       quiet,
       pending.base64Data.toString(),
+      medium: pending.medium,
       compressed: pending.compressed,
+      dataOffset: pending.dataOffset,
+      dataSize: pending.dataSize,
     );
+  }
+
+  static Uint8List _readMediumBytes(
+    String medium,
+    Uint8List decoded, {
+    required int dataOffset,
+    required int? dataSize,
+  }) {
+    if (medium == 'd') return decoded;
+    return switch (readPlatformKittyMedium(
+      medium,
+      decoded,
+      maxBytes: _maxInflatedBytes,
+      offset: dataOffset,
+      size: dataSize,
+    )) {
+      KittyMediumReadOk(:final bytes) => bytes,
+      KittyMediumReadNotFound() => throw const _MediumNotFoundException(),
+      KittyMediumReadTooLarge() => throw const _PayloadTooLargeException(),
+      KittyMediumReadInvalid() => throw const _InvalidPayloadException(),
+      KittyMediumReadUnsupported() => throw const _UnsupportedMediumException(),
+    };
+  }
+
+  void _replyPayloadError(String? replyPrefix, int quiet, Object error) {
+    final message = switch (error) {
+      _MediumNotFoundException() => 'ENOENT:file not found',
+      _UnsupportedMediumException() => 'EINVAL:unsupported transmission medium',
+      _PayloadTooLargeException() => 'EFBIG:payload too large',
+      _ => 'EINVAL:invalid payload',
+    };
+    _replyError(replyPrefix, quiet, message);
   }
 
   void _verifyQueryBytes(
     String? replyPrefix,
     int quiet,
     String base64Payload, {
+    required String medium,
     required bool compressed,
+    required int dataOffset,
+    required int? dataSize,
   }) {
     try {
       final decoded = _decodeBase64Payload(base64Payload);
-      if (compressed && decoded.isNotEmpty) {
-        _validateZlibBytes(decoded);
+      final payloadBytes = _readMediumBytes(
+        medium,
+        decoded,
+        dataOffset: dataOffset,
+        dataSize: dataSize,
+      );
+      if (compressed && payloadBytes.isNotEmpty) {
+        _validateZlibBytes(payloadBytes);
       }
       _replyOk(replyPrefix, quiet);
-    } on _PayloadTooLargeException {
-      _replyError(replyPrefix, quiet, 'EFBIG:payload too large');
-    } on Object {
-      _replyError(replyPrefix, quiet, 'EINVAL:invalid payload');
+    } on Exception catch (e) {
+      _replyPayloadError(replyPrefix, quiet, e);
+    }
+  }
+
+  bool _hasRemainingPlacements(int imageId) {
+    for (final key in _placements.keys) {
+      if (key.$1 == imageId) return true;
+    }
+    return false;
+  }
+
+  void _deleteImagePlacements(
+    int imageId, {
+    required int placementId,
+    required bool freeData,
+  }) {
+    var clearedDirect = false;
+    final toRemove = <(int, int)>[];
+    for (final entry in _placements.entries) {
+      if (entry.key.$1 != imageId) continue;
+      if (placementId > 0 && entry.key.$2 != placementId) continue;
+      toRemove.add(entry.key);
+      if (!entry.value.isVirtual) clearedDirect = true;
+    }
+    for (final key in toRemove) {
+      _placements.remove(key);
+    }
+    final clearLegacyUntracked =
+        placementId == 0 &&
+        toRemove.isEmpty &&
+        !_hasRemainingPlacements(imageId);
+    if (clearedDirect || clearLegacyUntracked) {
+      onClearPlacements?.call(imageId);
+    }
+    if (freeData && !_hasRemainingPlacements(imageId)) {
+      registry.unregisterImage(imageId);
+      _removePendingUpload(imageId);
+      _imageNumberToId.removeWhere((_, id) => id == imageId);
+    }
+  }
+
+  void _evictUnreferencedImages({required bool hasVirtual}) {
+    if (!hasVirtual) {
+      registry.clearImages();
+      _imageNumberToId.clear();
+      return;
+    }
+    final toEvict = [
+      for (final id in registry.registeredImageIds)
+        if (!_hasRemainingPlacements(id)) id,
+    ];
+    for (final id in toEvict) {
+      registry.unregisterImage(id);
+      _imageNumberToId.removeWhere((_, mapped) => mapped == id);
+    }
+  }
+
+  void _deleteAllDirectPlacements({required bool freeData}) {
+    var hasVirtual = false;
+    final directImageIds = <int>{};
+    final toRemove = <(int, int)>[];
+    for (final entry in _placements.entries) {
+      if (entry.value.isVirtual) {
+        hasVirtual = true;
+      } else {
+        directImageIds.add(entry.key.$1);
+        toRemove.add(entry.key);
+      }
+    }
+    for (final key in toRemove) {
+      _placements.remove(key);
+    }
+    if (!hasVirtual) {
+      onClearPlacements?.call(null);
+    } else {
+      for (final id in directImageIds) {
+        onClearPlacements?.call(id);
+      }
+    }
+    if (freeData) {
+      _evictUnreferencedImages(hasVirtual: hasVirtual);
+    }
+  }
+
+  void _deleteImageRange(int minId, int maxId, {required bool freeData}) {
+    if (minId <= 0 || maxId < minId) return;
+    final targets = [
+      for (final id in registry.registeredImageIds)
+        if (id >= minId && id <= maxId) id,
+    ];
+    for (final id in targets) {
+      _deleteImagePlacements(id, placementId: 0, freeData: freeData);
     }
   }
 
   void _handleDelete(Map<String, String> control) {
     final deleteTarget = control['d'] ?? 'a';
     final imageId = _parsePositiveId(control['i']);
-    if (deleteTarget == 'a' || deleteTarget == 'A') {
-      reset();
-      return;
-    }
-    if (imageId > 0) {
-      registry.unregisterImage(imageId);
-      _removePendingUpload(imageId);
+    final placementId = _parsePositiveId(control['p']);
+    switch (deleteTarget) {
+      case 'a' || 'A':
+        _deleteAllDirectPlacements(freeData: deleteTarget == 'A');
+      case 'i' || 'I':
+        if (imageId > 0) {
+          _deleteImagePlacements(
+            imageId,
+            placementId: placementId,
+            freeData: deleteTarget == 'I',
+          );
+        }
+      case 'n' || 'N':
+        final number = _parsePositiveId(control['I']);
+        final mappedId = number > 0 ? _imageNumberToId[number] : null;
+        if (mappedId != null) {
+          _deleteImagePlacements(
+            mappedId,
+            placementId: placementId,
+            freeData: deleteTarget == 'N',
+          );
+        }
+      case 'r' || 'R':
+        _deleteImageRange(
+          _parsePositiveId(control['x']),
+          _parsePositiveId(control['y']),
+          freeData: deleteTarget == 'R',
+        );
+      default:
+        break;
     }
   }
 
@@ -427,15 +701,21 @@ final class KittyApcHandler {
     Map<String, String> control,
     int explicitId,
   ) {
-    if (existing == null || _hasNewUploadMetadata(control)) return false;
+    if (existing == null) return false;
     final hasExplicitAction = control.containsKey('a');
     if (explicitId > 0) {
-      return explicitId == existing.imageId &&
+      final matchesExisting =
+          explicitId == existing.imageId &&
           existing.hasAddressableId &&
           (!hasExplicitAction || existing.action == action);
+      if (!matchesExisting) return false;
+      // Per Kitty spec, continuation chunks (carrying m=1 or m=0) may repeat
+      // metadata keys like f=, p=, s=, v=, t=; ignore them while m= is active.
+      return control.containsKey('m') || !_hasNewUploadMetadata(control);
     }
+    if (_hasNewUploadMetadata(control)) return false;
     final explicitNumber = _parsePositiveId(control['I']);
-    if (explicitNumber > 0 && existing.replyPrefix != 'I=$explicitNumber') {
+    if (explicitNumber > 0 && existing.explicitNumber != explicitNumber) {
       return false;
     }
     return !hasExplicitAction ||
@@ -455,29 +735,37 @@ final class KittyApcHandler {
     _evictUnreachableAnonymousUploads();
 
     final explicitNumber = _parsePositiveId(control['I']);
+    final placementId = _parsePositiveId(control['p']);
     final hasAddressableId = explicitId > 0;
     final imageId = hasAddressableId ? explicitId : _allocateAutoId();
     _removePendingUpload(imageId);
     _evictOldestUploadIfNeeded();
 
     final format = _parseFormat(control);
-    final parsedCols = int.tryParse(control['c'] ?? '');
-    final parsedRows = int.tryParse(control['r'] ?? '');
     final created = _PendingUpload(
       imageId: imageId,
+      explicitNumber: explicitNumber,
       action: action,
+      medium: _parseMedium(control),
       format: format,
       width: int.tryParse(control['s'] ?? '0') ?? 0,
       height: int.tryParse(control['v'] ?? '0') ?? 0,
-      cols: (parsedCols != null && parsedCols > 0) ? parsedCols : null,
-      rows: (parsedRows != null && parsedRows > 0) ? parsedRows : null,
+      cols: _parseOptionalPositiveInt(control['c']),
+      rows: _parseOptionalPositiveInt(control['r']),
+      dataOffset: _parseDataOffset(control['O']),
+      dataSize: _parseDataSize(control['S']),
       compressed: control['o'] == 'z',
       quiet: quiet,
       advanceCursor: (int.tryParse(control['C'] ?? '0') ?? 0) != 1,
       virtual: (int.tryParse(control['U'] ?? '0') ?? 0) == 1,
-      placementId: int.tryParse(control['p'] ?? '0') ?? 0,
+      placementId: placementId,
       hasAddressableId: hasAddressableId,
-      replyPrefix: _resolveReplyPrefix(explicitId, explicitNumber),
+      replyPrefix: _resolveReplyPrefix(
+        hasAddressableId || explicitNumber > 0 ? imageId : 0,
+        explicitNumber,
+        placementId: placementId,
+        isQuery: action == 'q',
+      ),
       validationError: _resolveValidationError(control, format),
     );
     _pendingUploads[imageId] = created;
@@ -556,6 +844,18 @@ final class KittyApcHandler {
           ? rawData.copyWith(version: existing.version + 1)
           : rawData;
       registry.registerImage(imageData);
+      if (pending.explicitNumber > 0) {
+        _imageNumberToId[pending.explicitNumber] = pending.imageId;
+      }
+      if (pending.action == 'T' || pending.virtual) {
+        _placements[(pending.imageId, pending.placementId)] = _KittyPlacement(
+          imageId: pending.imageId,
+          placementId: pending.placementId,
+          cols: imageData.gridCols,
+          rows: imageData.gridRows,
+          isVirtual: pending.virtual,
+        );
+      }
       if (pending.action == 'T' && !pending.virtual) {
         onPlaceVirtual(
           imageData.gridCols,
@@ -565,16 +865,20 @@ final class KittyApcHandler {
         );
       }
       _replyOk(pending.replyPrefix, quiet);
-    } on _PayloadTooLargeException {
-      _replyError(pending.replyPrefix, quiet, 'EFBIG:payload too large');
-    } on Object {
-      _replyError(pending.replyPrefix, quiet, 'EINVAL:invalid payload');
+    } on Exception catch (e) {
+      _replyPayloadError(pending.replyPrefix, quiet, e);
     }
   }
 
   static Uint8List _decodePayloadBytes(_PendingUpload pending) {
     final decoded = _decodeBase64Payload(pending.base64Data.toString());
-    return pending.compressed ? _inflateZlibBytes(decoded) : decoded;
+    final payloadBytes = _readMediumBytes(
+      pending.medium,
+      decoded,
+      dataOffset: pending.dataOffset,
+      dataSize: pending.dataSize,
+    );
+    return pending.compressed ? _inflateZlibBytes(payloadBytes) : payloadBytes;
   }
 
   KittyImageData _buildImageData(_PendingUpload pending, Uint8List rawBytes) =>
@@ -592,18 +896,49 @@ final class KittyApcHandler {
       height <= _maxDimension &&
       width * height <= _maxTotalPixels;
 
+  (int cols, int rows) _resolvePlacementGrid(
+    int? reqCols,
+    int? reqRows,
+    int pixelWidth,
+    int pixelHeight,
+  ) {
+    final (rawCellW, rawCellH) = cellPixelSize();
+    final cellW = math.max(1, rawCellW);
+    final cellH = math.max(1, rawCellH);
+    final maxSpan = kittyDiacritics.length;
+    if (reqCols != null && reqRows != null) {
+      return (reqCols.clamp(1, maxSpan), reqRows.clamp(1, maxSpan));
+    }
+    if (reqCols != null) {
+      final cols = reqCols.clamp(1, maxSpan);
+      final rows = ((cols * cellW * pixelHeight) / (pixelWidth * cellH))
+          .round()
+          .clamp(1, maxSpan);
+      return (cols, rows);
+    }
+    if (reqRows != null) {
+      final rows = reqRows.clamp(1, maxSpan);
+      final cols = ((rows * cellH * pixelWidth) / (pixelHeight * cellW))
+          .round()
+          .clamp(1, maxSpan);
+      return (cols, rows);
+    }
+    return (
+      ((pixelWidth + cellW - 1) ~/ cellW).clamp(1, maxSpan),
+      ((pixelHeight + cellH - 1) ~/ cellH).clamp(1, maxSpan),
+    );
+  }
+
   (int cols, int rows) _resolveUploadGrid(
     _PendingUpload pending,
     int pixelWidth,
     int pixelHeight,
-  ) {
-    final (cellW, cellH) = cellPixelSize();
-    final maxSpan = kittyDiacritics.length;
-    return (
-      (pending.cols ?? ((pixelWidth + cellW - 1) ~/ cellW)).clamp(1, maxSpan),
-      (pending.rows ?? ((pixelHeight + cellH - 1) ~/ cellH)).clamp(1, maxSpan),
-    );
-  }
+  ) => _resolvePlacementGrid(
+    pending.cols,
+    pending.rows,
+    pixelWidth,
+    pixelHeight,
+  );
 
   KittyImageData _buildPngImageData(
     _PendingUpload pending,
@@ -722,43 +1057,62 @@ final class KittyApcHandler {
     return rgba;
   }
 
+  int _resolveTargetImageId(int explicitId, int explicitNumber) {
+    if (explicitId > 0) return explicitId;
+    if (explicitNumber > 0) return _imageNumberToId[explicitNumber] ?? 0;
+    return 0;
+  }
+
   void _handlePlace(Map<String, String> control, int quiet) {
-    final imageId = _parsePositiveId(control['i']);
+    final explicitId = _parsePositiveId(control['i']);
+    final explicitNumber = _parsePositiveId(control['I']);
+    final placementId = _parsePositiveId(control['p']);
+    if (explicitId > 0 && explicitNumber > 0) {
+      final errPrefix = _resolveReplyPrefix(
+        explicitId,
+        0,
+        placementId: placementId,
+      );
+      _replyError(errPrefix, quiet, 'EINVAL:cannot specify both i and I');
+      return;
+    }
+    final imageId = _resolveTargetImageId(explicitId, explicitNumber);
     final replyPrefix = _resolveReplyPrefix(
       imageId,
-      _parsePositiveId(control['I']),
+      explicitNumber,
+      placementId: placementId,
     );
-    final data = registry.lookupImage(imageId);
+    final data = imageId > 0 ? registry.lookupImage(imageId) : null;
     if (data == null) {
       _replyError(replyPrefix, quiet, 'ENOENT:image not found');
       return;
     }
 
-    final parsedCols = int.tryParse(control['c'] ?? '');
-    final parsedRows = int.tryParse(control['r'] ?? '');
-    final cols = (parsedCols != null && parsedCols > 0)
-        ? parsedCols
-        : data.gridCols;
-    final rows = (parsedRows != null && parsedRows > 0)
-        ? parsedRows
-        : data.gridRows;
-    final isVirtual = (int.tryParse(control['U'] ?? '0') ?? 0) == 1;
-    if (isVirtual) {
-      if (cols != data.gridCols || rows != data.gridRows) {
-        registry.registerImage(
-          data.copyWith(
-            gridCols: cols,
-            gridRows: rows,
-            version: data.version + 1,
-          ),
-        );
-      }
-      _replyOk(replyPrefix, quiet);
-      return;
+    final reqCols = _parseOptionalPositiveInt(control['c']);
+    final reqRows = _parseOptionalPositiveInt(control['r']);
+    final (cols, rows) = (reqCols != null || reqRows != null)
+        ? _resolvePlacementGrid(
+            reqCols,
+            reqRows,
+            data.pixelWidth,
+            data.pixelHeight,
+          )
+        : (data.gridCols, data.gridRows);
+    if (cols != data.gridCols || rows != data.gridRows) {
+      registry.registerImage(data.copyWith(gridCols: cols, gridRows: rows));
     }
-
-    final advanceCursor = (int.tryParse(control['C'] ?? '0') ?? 0) != 1;
-    onPlaceVirtual(cols, rows, imageId, advanceCursor);
+    final isVirtual = (int.tryParse(control['U'] ?? '0') ?? 0) == 1;
+    _placements[(imageId, placementId)] = _KittyPlacement(
+      imageId: imageId,
+      placementId: placementId,
+      cols: cols,
+      rows: rows,
+      isVirtual: isVirtual,
+    );
+    if (!isVirtual) {
+      final advanceCursor = (int.tryParse(control['C'] ?? '0') ?? 0) != 1;
+      onPlaceVirtual(cols, rows, imageId, advanceCursor);
+    }
     _replyOk(replyPrefix, quiet);
   }
 }

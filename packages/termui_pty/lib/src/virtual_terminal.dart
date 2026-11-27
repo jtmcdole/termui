@@ -797,6 +797,7 @@ final class VirtualTerminal implements TerminalHandler {
     registry: imageRegistry,
     onReply: (reply) => onReply?.call(reply),
     onPlaceVirtual: _placeVirtualImage,
+    onClearPlacements: _clearKittyPlacements,
     cellPixelSize: () => (_cellPixelWidth, _cellPixelHeight),
   );
 
@@ -918,6 +919,49 @@ final class VirtualTerminal implements TerminalHandler {
     cursorY = y;
     cursorX = startX;
     _advanceCursorAfterPrint(validCols);
+  }
+
+  void _clearKittyPlacements(int? imageId) {
+    final active = buffer;
+    for (var y = 0; y < height; y++) {
+      _clearKittyPlacementsInRow(active, y, imageId);
+    }
+  }
+
+  void _clearKittyPlacementsInRow(Buffer active, int y, int? imageId) {
+    var activeImageId = 0;
+    var activeUnderline = 0;
+    final rowBase = y * width;
+    for (var x = 0; x < width; x++) {
+      final cellIdx = rowBase + x;
+      if (!Modifier.has(
+        active.attributes[cellIdx * 3 + 2],
+        Modifier.kittyPlaceholder,
+      )) {
+        activeImageId = 0;
+        activeUnderline = 0;
+        continue;
+      }
+      final cellChar = active.getCharacter(x, y);
+      final cellFg = active.attributes[cellIdx * 3];
+      final cellUnderline = active.getUnderlineColor(x, y);
+      final inherits =
+          activeImageId != 0 &&
+          cellUnderline == activeUnderline &&
+          (cellChar == kittyPlaceholderChar ||
+              (cellChar.length == 3 &&
+                  cellChar.startsWith(kittyPlaceholderChar))) &&
+          extractKittyCellImageId(cellChar, cellFg) ==
+              (activeImageId & 0xFFFFFF);
+      final cellId = inherits
+          ? activeImageId
+          : extractKittyCellImageId(cellChar, cellFg);
+      activeImageId = cellId;
+      activeUnderline = cellUnderline;
+      if (imageId == null || cellId == imageId) {
+        _resetSplitCell(active, cellIdx);
+      }
+    }
   }
 
   void _writeKittyImageRow(
