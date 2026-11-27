@@ -1821,6 +1821,16 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         img4.dispose();
       });
 
+      // Rejects non-positive initialCapacity with RangeError.
+      expect(
+        () => KittyTextureUploadCache<String>(initialCapacity: 0),
+        throwsRangeError,
+      );
+      expect(
+        () => KittyTextureUploadCache<String>(initialCapacity: -1),
+        throwsRangeError,
+      );
+
       final cache = KittyTextureUploadCache<String>(initialCapacity: 2);
       var uploadCount = 0;
       String? upload(int w, int h, ByteData bytes) {
@@ -1860,19 +1870,59 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       expect(cache.contains(img1), isFalse);
       expect(cache.contains(img2), isTrue);
 
+      // Primed textures without an initial slot bind cacheSlot on cache hit
+      // so replacing that slot later evicts the primed texture.
+      cache.store(img3, 'primed_png_v1');
+      expect(
+        cache.resolveQuads(<GpuKittyQuad>[
+          makeQuad(img3, cacheSlot: ('reg', 99)),
+        ], uploadRawRgba: upload),
+        equals(<String>['primed_png_v1']),
+      );
+      cache.store(img4, 'primed_png_v2');
+      expect(
+        cache.resolveQuads(<GpuKittyQuad>[
+          makeQuad(img4, cacheSlot: ('reg', 99)),
+        ], uploadRawRgba: upload),
+        equals(<String>['primed_png_v2']),
+      );
+      expect(cache.contains(img3), isFalse);
+      expect(cache.contains(img4), isTrue);
+
       // Distinct slots beyond initialCapacity evict oldest LRU entry.
-      final raw3 = Uint8List.fromList(List<int>.filled(16, 33));
-      final raw4 = Uint8List.fromList(List<int>.filled(16, 44));
+      cache.clear();
+      cache.store(img2, 'manual_2', cacheSlot: ('reg', 1));
       cache.store(img3, 'manual_3', cacheSlot: ('reg', 2));
       expect(cache.length, equals(2));
-      expect(cache.touch(img2), equals('tex_2_2x2_16'));
+      expect(
+        cache.resolveQuads(<GpuKittyQuad>[
+          makeQuad(img2, cacheSlot: ('reg', 1)),
+        ], uploadRawRgba: upload),
+        equals(<String>['manual_2']),
+      );
       cache.store(img4, 'manual_4', cacheSlot: ('reg', 3));
       expect(cache.length, equals(2));
       expect(cache.contains(img3), isFalse);
       expect(cache.contains(img2), isTrue);
       expect(cache.contains(img4), isTrue);
 
+      // Unuploadable misses do not prematurely inflate capacity.
+      cache.clear();
+      expect(cache.length, equals(0));
+      expect(cache.capacity, equals(2));
+      expect(
+        cache.resolveQuads(<GpuKittyQuad>[
+          makeQuad(img1),
+          makeQuad(img2),
+          makeQuad(img3),
+        ], uploadRawRgba: upload),
+        isNull,
+      );
+      expect(cache.capacity, equals(2));
+
       // Single frame referencing more distinct images than capacity expands it.
+      final raw3 = Uint8List.fromList(List<int>.filled(16, 33));
+      final raw4 = Uint8List.fromList(List<int>.filled(16, 44));
       final expanded = cache.resolveQuads(<GpuKittyQuad>[
         makeQuad(img1, rawRgbaPixels: raw1, cacheSlot: ('reg', 10)),
         makeQuad(img3, rawRgbaPixels: raw3, cacheSlot: ('reg', 11)),
@@ -1881,16 +1931,8 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       expect(expanded, hasLength(3));
       expect(cache.capacity, equals(3));
 
-      // Missing rawRgbaPixels, short buffer, or failed upload returns null.
+      // Short buffer or failed upload returns null.
       cache.clear();
-      expect(cache.length, equals(0));
-      expect(cache.capacity, equals(2));
-      expect(
-        cache.resolveQuads(<GpuKittyQuad>[
-          makeQuad(img1),
-        ], uploadRawRgba: upload),
-        isNull,
-      );
       expect(
         cache.resolveQuads(<GpuKittyQuad>[
           makeQuad(img1, rawRgbaPixels: Uint8List(4)),
