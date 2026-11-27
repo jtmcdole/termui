@@ -11,6 +11,47 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - [`fterm` - `v0.8.0`](#fterm---v080)
+
+Packages with other changes:
+
+ - [`termui_cast_protocol` - `v0.4.1`](#termui_cast_protocol---v041)
+ - [`termui_cast_server` - `v0.4.2`](#termui_cast_server---v042)
+ - [`termui_caster_cli` - `v0.4.1`](#termui_caster_cli---v041)
+ - [`termui_cast_client_core` - `v0.5.1`](#termui_cast_client_core---v051)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_cast_server` - `v0.4.2`
+ - `termui_caster_cli` - `v0.4.1`
+ - `termui_cast_client_core` - `v0.5.1`
+
+---
+
+#### `fterm` - `v0.8.0`
+
+ - **FEAT**(fterm): add VS Code-style Command Palette with scrollback jump and search (#486).
+ - **FEAT**(fterm): overhaul Settings modal with Blender-style sidebar, panels, and search (#485).
+ - **FEAT**(fterm): wire HTTP automation v1 router, OpenAPI spec, ConPTY fix, and sizzle director (#483).
+ - **FEAT**(fterm): add loopback HTTP automation server, screen search, and Settings tab (#482).
+ - **FEAT**(fterm): add automation driver contracts, CLI flags, and Win32 window bounds (#481).
+ - **BREAKING** **REFACTOR**(fterm): unify command, setting, and shortcut descriptors (#487).
+
+#### `termui_cast_protocol` - `v0.4.1`
+
+ - **FIX**(cast_protocol): prevent premature sub.cancel() from leaking Dart 5s WebSocket close timer (#479).
+
+
+## 2026-11-27
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - There are no breaking changes in this release.
 
 Packages with other changes:
