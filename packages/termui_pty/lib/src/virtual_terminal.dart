@@ -760,6 +760,19 @@ final class VirtualTerminal implements TerminalHandler {
   /// Callback invoked with full Kitty `OSC 99` metadata (`id`, `a=report`, `c=1`).
   void Function(Osc99Notification notification)? onOsc99Notification;
 
+  /// Callback invoked when the active `OSC 22` mouse cursor shape changes.
+  void Function(String? shape)? onMouseCursorChanged;
+
+  static const int _maxPointerShapeStackDepth = 64;
+  static const int _maxOsc22QueryTokens = 64;
+  static const int _maxOsc99IdLength = 128;
+  static final RegExp _osc22ValidShapeRegex = RegExp(r'^[a-z0-9_-]{1,64}$');
+  final List<String?> _pointerShapeStack = [];
+
+  /// Active `OSC 22` mouse cursor shape name (e.g. `'pointer'`), or `null` for default.
+  String? get mouseCursorShape =>
+      _pointerShapeStack.isEmpty ? null : _pointerShapeStack.last;
+
   /// Callback invoked when the terminal receives a `BEL` (`0x07`) control character.
   void Function()? onBell;
 
@@ -779,15 +792,22 @@ final class VirtualTerminal implements TerminalHandler {
 
   static final RegExp _osc99UnsafeIdChars = RegExp(r'[^a-zA-Z0-9_.\-]');
 
+  static String _sanitizeOsc99Id(String id) {
+    final cleaned = id.replaceAll(_osc99UnsafeIdChars, '');
+    return cleaned.length <= _maxOsc99IdLength
+        ? cleaned
+        : cleaned.substring(0, _maxOsc99IdLength);
+  }
+
   /// Emits a Kitty `OSC 99` activation event reply (`\x1b]99;i=<id>;\x1b\\`) via [onReply].
   void reportNotificationActivated(String id) {
-    final safeId = id.replaceAll(_osc99UnsafeIdChars, '');
+    final safeId = _sanitizeOsc99Id(id);
     onReply?.call('\x1b]99;i=$safeId;\x1b\\');
   }
 
   /// Emits a Kitty `OSC 99` close event reply (`\x1b]99;i=<id>:p=close;\x1b\\`) via [onReply].
   void reportNotificationClosed(String id) {
-    final safeId = id.replaceAll(_osc99UnsafeIdChars, '');
+    final safeId = _sanitizeOsc99Id(id);
     onReply?.call('\x1b]99;i=$safeId:p=close;\x1b\\');
   }
 
@@ -840,6 +860,7 @@ final class VirtualTerminal implements TerminalHandler {
     Duration? syncSafetyTimeout = _defaultSyncSafetyTimeout,
     this.onReply,
     this.onNotification,
+    this.onMouseCursorChanged,
     this.onBell,
     this.onAudioEvent,
     this.onShaderEvent,
@@ -1074,6 +1095,7 @@ final class VirtualTerminal implements TerminalHandler {
     _syncSafetyTimer?.cancel();
     _syncSafetyTimer = null;
     _pendingOsc99.clear();
+    _pointerShapeStack.clear();
     _kittyApcHandler.reset();
     _audioApcHandler.reset();
     _primaryShaderState.reset();
@@ -1177,6 +1199,11 @@ final class VirtualTerminal implements TerminalHandler {
     _syncSafetyTimer?.cancel();
     _syncSafetyTimer = null;
     _pendingOsc99.clear();
+    final previousCursorShape = mouseCursorShape;
+    _pointerShapeStack.clear();
+    if (previousCursorShape != null) {
+      onMouseCursorChanged?.call(null);
+    }
     _graphemeClusterMode = false;
     _primaryKittyKbFlags = 0;
     _primaryKittyKbStack.clear();
@@ -3243,6 +3270,8 @@ final class VirtualTerminal implements TerminalHandler {
         _handleOsc9(payload);
       case 10 || 11 || 12:
         _handleDynamicColorOsc(command, payload);
+      case 22:
+        _handleOsc22(payload);
       case 52:
         _handleOsc52(payload);
       case 99:
@@ -3287,13 +3316,14 @@ final class VirtualTerminal implements TerminalHandler {
   /// Active terminal color scheme used for `CSI ? 996 n` and `DECSET 2031`.
   TerminalBrightness get colorScheme => _colorScheme;
 
-  /// Updates [colorScheme] and notifies subscribers if mode `2031` is enabled.
+  /// Updates [colorScheme] and notifies listeners (and subscribers if mode `2031` is enabled).
   void setColorScheme(TerminalBrightness scheme) {
     if (_colorScheme == scheme) return;
     _colorScheme = scheme;
     if (_colorSchemeReporting) {
       _replyColorScheme();
     }
+    _notifyListeners();
   }
 
   Color _resolveIndexedColor(int index) {
@@ -3436,6 +3466,91 @@ final class VirtualTerminal implements TerminalHandler {
     };
   }
 
+  void _handleOsc22(String payload) {
+    if (payload.startsWith('?')) {
+      _replyOsc22Query(payload.substring(1));
+      return;
+    }
+    final before = mouseCursorShape;
+    if (payload.startsWith('>')) {
+      _pushOsc22Shapes(payload.substring(1));
+    } else if (payload.startsWith('<')) {
+      if (_pointerShapeStack.isNotEmpty) {
+        _pointerShapeStack.removeLast();
+      }
+    } else {
+      final raw = payload.startsWith('=') ? payload.substring(1) : payload;
+      _setOsc22Shape(raw);
+    }
+    final after = mouseCursorShape;
+    if (after != before) {
+      _markDirty();
+      onMouseCursorChanged?.call(after);
+    }
+  }
+
+  void _replyOsc22Query(String queryBody) {
+    if (queryBody.isEmpty) {
+      onReply?.call('\x1b]22;\x1b\\');
+      return;
+    }
+    final results = <String>[];
+    final tokens = queryBody.split(',');
+    final count = math.min(tokens.length, _maxOsc22QueryTokens);
+    for (var i = 0; i < count; i++) {
+      final token = tokens[i].trim();
+      if (token == '__current__') {
+        results.add(
+          mouseCursorShape ?? (_pointerShapeStack.isEmpty ? '0' : 'default'),
+        );
+      } else {
+        results.add(MousePointer.fromOsc22Name(token) != null ? '1' : '0');
+      }
+    }
+    onReply?.call('\x1b]22;${results.join(',')}\x1b\\');
+  }
+
+  static ({bool valid, String? value}) _parseOsc22Shape(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty || trimmed == 'default') {
+      return (valid: true, value: null);
+    }
+    if (!_osc22ValidShapeRegex.hasMatch(trimmed)) {
+      return (valid: false, value: null);
+    }
+    return (valid: true, value: trimmed);
+  }
+
+  void _pushOsc22Shapes(String namesPart) {
+    for (final raw in namesPart.split(',')) {
+      final parsed = _parseOsc22Shape(raw);
+      if (!parsed.valid) continue;
+      if (_pointerShapeStack.length >= _maxPointerShapeStackDepth) {
+        _pointerShapeStack.removeAt(0);
+      }
+      _pointerShapeStack.add(parsed.value);
+    }
+  }
+
+  void _setOsc22Shape(String raw) {
+    final parsed = _parseOsc22Shape(raw);
+    if (!parsed.valid) return;
+    final normalized = parsed.value;
+    if (normalized == null) {
+      if (_pointerShapeStack.length <= 1) {
+        _pointerShapeStack.clear();
+      } else {
+        _pointerShapeStack[_pointerShapeStack.length - 1] = null;
+      }
+      return;
+    }
+    if (_pointerShapeStack.isEmpty) {
+      _pointerShapeStack.add(normalized);
+    } else {
+      _pointerShapeStack[_pointerShapeStack.length - 1] = normalized;
+    }
+  }
+
   void _handleOsc99(String payload) {
     final semi = payload.indexOf(';');
     if (semi < 0) {
@@ -3457,6 +3572,14 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _processKittyOsc99(String metaPart, String bodyPart) {
     final meta = _parseOsc99Meta(metaPart);
+    if (meta.payloadType == '?') {
+      final safeId = _sanitizeOsc99Id(meta.id);
+      final idPrefix = safeId.isEmpty ? '' : 'i=$safeId:';
+      onReply?.call(
+        '\x1b]99;${idPrefix}p=?;a=report:c=1:p=title,body,close,?\x1b\\',
+      );
+      return;
+    }
     if (meta.payloadType == 'close') {
       _pendingOsc99.remove(meta.id);
       return;

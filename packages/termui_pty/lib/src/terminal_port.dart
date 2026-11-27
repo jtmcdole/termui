@@ -81,6 +81,9 @@ final class TerminalPortModes {
   /// Active Kitty keyboard protocol progressive enhancement flags (`CSI > flags u`).
   final int kittyKeyboardFlags;
 
+  /// Active `OSC 22` mouse cursor shape name (e.g. `'pointer'`), or `null` for default.
+  final String? mouseCursorShape;
+
   /// Creates an immutable terminal modes snapshot.
   const TerminalPortModes({
     this.mouseTracking = false,
@@ -92,6 +95,7 @@ final class TerminalPortModes {
     this.alternateScroll = true,
     this.focusReporting = false,
     this.kittyKeyboardFlags = 0,
+    this.mouseCursorShape,
   });
 
   /// Default inactive terminal modes.
@@ -109,7 +113,8 @@ final class TerminalPortModes {
           other.appCursorKeys == appCursorKeys &&
           other.alternateScroll == alternateScroll &&
           other.focusReporting == focusReporting &&
-          other.kittyKeyboardFlags == kittyKeyboardFlags;
+          other.kittyKeyboardFlags == kittyKeyboardFlags &&
+          other.mouseCursorShape == mouseCursorShape;
 
   @override
   int get hashCode => Object.hash(
@@ -122,6 +127,7 @@ final class TerminalPortModes {
     alternateScroll,
     focusReporting,
     kittyKeyboardFlags,
+    mouseCursorShape,
   );
 }
 
