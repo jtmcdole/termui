@@ -38,17 +38,21 @@ final class GpuKittyQuad {
   /// Decoded Kitty GPU image to sample.
   final ui.Image image;
 
-  /// Optional CPU-side tightly-packed RGBA8888 pixel buffer matching [image].
+  /// Optional CPU-side straight (unpremultiplied) RGBA8888 pixel buffer
+  /// matching [image]'s dimensions (at least `image.width * image.height * 4`
+  /// bytes).
   ///
-  /// Populated when the quad resolves directly to an exact `formatRgba32`
-  /// [KittyImageData] entry with matching dimensions so host-visible GPU
-  /// backends (such as Windows Impeller OpenGL ES) can upload directly via
-  /// `Texture.overwrite` without invoking `ui.Image.toByteData()` on the
-  /// Flutter IO thread.
+  /// When provided, direct GPU backends may upload pixels synchronously without
+  /// reading back [image]. Callers must not mutate the buffer after creating
+  /// this quad.
   final Uint8List? rawRgbaPixels;
 
-  /// Optional stable `(KittyImageRegistry, imageId)` slot key allowing GPU
-  /// texture caches to evict superseded versions of the same Kitty image ID.
+  /// Optional immutable key with stable value equality (`==` and `hashCode`)
+  /// identifying the logical Kitty image slot (for example, a `(registry,
+  /// imageId)` record).
+  ///
+  /// GPU texture caches use this key to evict superseded versions when a
+  /// logical image slot is replaced.
   final Object? cacheSlot;
 
   /// Destination X origin in physical pixels.
