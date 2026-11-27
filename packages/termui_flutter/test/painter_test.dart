@@ -311,6 +311,76 @@ void main() {
     );
   });
 
+  test('TuiAtlasPainter renders bare U+10EEEE continuation cells across subpixel fallback runs', () async {
+    final atlas = await GlyphAtlasGenerator.generate(
+      fontSize: 16.0,
+      fontFamily: 'Roboto Mono',
+    );
+    addTearDown(() => atlas.image.dispose());
+
+    // 2x1 KittyImage: col 0 is pure cyan (0, 255, 255), col 1 is pure magenta (255, 0, 255).
+    final rgba = Uint8List.fromList([
+      0, 255, 255, 255, // col 0
+      255, 0, 255, 255, // col 1
+    ]);
+    const imageId = 0x1235;
+    KittyImageRegistry.register(
+      KittyImageData(
+        imageId: imageId,
+        pixelWidth: 2,
+        pixelHeight: 1,
+        rgbaPixels: rgba,
+        gridCols: 2,
+        gridRows: 1,
+      ),
+    );
+    addTearDown(() => KittyImageRegistry.unregister(imageId));
+
+    final buffer = Buffer(2, 1);
+    buffer.setAttributes(
+      0,
+      0,
+      char: kittyPlaceholderCell(0, 0),
+      fg: 0xFF000000 | imageId,
+      bg: 0xFF000000,
+      modifiers: Modifier.kittyPlaceholder,
+    );
+    buffer.setAttributes(
+      1,
+      0,
+      char: kittyPlaceholderChar,
+      fg: 0xFF000000 | imageId,
+      bg: 0xFF000000,
+      modifiers: Modifier.kittyPlaceholder,
+    );
+
+    final painter = TuiAtlasPainter(
+      buffer: buffer,
+      atlas: atlas,
+      fontFamily: 'Roboto Mono',
+      fallbackPainters: {},
+      onMissingGlyphs: (_) {},
+    );
+
+    final w = (atlas.cellWidth * 2).ceil();
+    final h = atlas.cellHeight.ceil();
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    painter.paint(canvas, Size(w.toDouble(), h.toDouble()));
+    final picture = recorder.endRecording();
+    final img = await picture.toImage(w, h);
+    addTearDown(img.dispose);
+    final bytes = (await img.toByteData(format: ui.ImageByteFormat.rawRgba))!;
+
+    // Sample center of col 1: must be magenta (255, 0, 255), proving bare U+10EEEE painted.
+    final cx = (atlas.cellWidth * 1.5).floor();
+    final cy = (atlas.cellHeight * 0.5).floor();
+    final off = (cy * w + cx) * 4;
+    expect(bytes.getUint8(off), greaterThan(200));
+    expect(bytes.getUint8(off + 1), lessThan(50));
+    expect(bytes.getUint8(off + 2), greaterThan(200));
+  });
+
   test('TuiAtlasPainter renders KittyImage U+10EEEE placeholders and respects cell occlusion', () async {
     final atlas = await GlyphAtlasGenerator.generate(
       fontSize: 16.0,

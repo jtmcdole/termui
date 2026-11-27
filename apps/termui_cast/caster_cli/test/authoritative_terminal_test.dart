@@ -1125,8 +1125,8 @@ void _defineV5ProtocolAndKittyTests(SessionId sessionId) {
       check(removeDelta.kittyRemovals).isNotNull();
       check(removeDelta.kittyRemovals!).deepEquals([10]);
 
-      // Delete all images (d=a) -> emits clearKittyImages: true.
-      auth.writeOutput(utf8.encode('\x1b_Ga=d,d=a,q=2\x1b\\'));
+      // Delete all images (d=A) -> emits clearKittyImages: true.
+      auth.writeOutput(utf8.encode('\x1b_Ga=d,d=A,q=2\x1b\\'));
       final clearDelta = (auth.takeNextFrame()! as BufferDeltaFrame).delta;
       check(clearDelta.clearKittyImages).isTrue();
 
@@ -1174,7 +1174,7 @@ void _defineV5ProtocolAndKittyTests(SessionId sessionId) {
       final pxCyan = base64Encode(Uint8List.fromList([0, 255, 255, 255]));
       auth.writeOutput(
         utf8.encode(
-          '\x1b_Ga=d,d=i,i=21,q=2\x1b\\'
+          '\x1b_Ga=d,d=I,i=21,q=2\x1b\\'
           '\x1b_Gi=21,s=1,v=1,a=t,t=d,f=32,q=2;$pxCyan\x1b\\',
         ),
       );
@@ -1233,7 +1233,7 @@ void _defineV5ProtocolAndKittyTests(SessionId sessionId) {
       final b64ZlibLargeB = base64Encode(zlib.encode(largeRgbaB));
       auth.writeOutput(
         utf8.encode(
-          '\x1b_Ga=d,d=i,i=99,q=2\x1b\\'
+          '\x1b_Ga=d,d=I,i=99,q=2\x1b\\'
           '\x1b_Gi=99,s=1025,v=1024,a=t,t=d,f=32,o=z,q=2;$b64ZlibLargeB\x1b\\',
         ),
       );
@@ -1266,7 +1266,7 @@ void _defineV5ProtocolAndKittyTests(SessionId sessionId) {
       check(replayedFirst.imageId).equals(99);
 
       // Deleting id=99 via a=d cancels any remaining pending chunks and emits removal.
-      auth.writeOutput(utf8.encode('\x1b_Ga=d,d=i,i=99,q=2\x1b\\'));
+      auth.writeOutput(utf8.encode('\x1b_Ga=d,d=I,i=99,q=2\x1b\\'));
       final removeLarge = (auth.takeNextFrame()! as BufferDeltaFrame).delta;
       check(removeLarge.kittyRemovals).isNotNull().deepEquals([99]);
       check(auth.hasPendingKittyChunks).isFalse();
@@ -1284,7 +1284,7 @@ void _defineV5ProtocolAndKittyTests(SessionId sessionId) {
       check(auth.hasPendingKittyChunks).isFalse();
       auth.takeSnapshot();
       check(auth.hasPendingKittyChunks).isTrue();
-      auth.writeOutput(utf8.encode('\x1b_Ga=d,d=i,i=98,q=2\x1b\\'));
+      auth.writeOutput(utf8.encode('\x1b_Ga=d,d=I,i=98,q=2\x1b\\'));
       auth.takeNextFrame();
 
       // Truly invalid / >16 MiB textures registered directly log once, skip cleanly, and recover.
@@ -1303,8 +1303,8 @@ void _defineV5ProtocolAndKittyTests(SessionId sessionId) {
       rawVt.imageRegistry.registerImage(
         KittyImageData(
           imageId: 99,
-          pixelWidth: 2049,
-          pixelHeight: 2048,
+          pixelWidth: 4097,
+          pixelHeight: 4096,
           rgbaPixels: Uint8List(16),
           gridCols: 1,
           gridRows: 1,

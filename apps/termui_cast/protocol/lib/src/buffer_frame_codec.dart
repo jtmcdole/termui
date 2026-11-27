@@ -167,8 +167,8 @@ const int _maxTitleBytes = 512;
 const int _maxTokenOrErrorBytes = 4096;
 const int _maxClipboardBytes = 1_048_576;
 const int _maxKittyImagesPerFrame = 1024;
-const int _maxKittyImageDimension = 4096;
-const int _maxKittyImageTotalPixels = 4_194_304;
+const int _maxKittyImageDimension = 8192;
+const int _maxKittyImageTotalPixels = 16_777_216;
 const int _maxKittyImageGridSpan = 512;
 const int _maxKittyChunkCount = 256;
 const int _minPngBytes = 24;
@@ -236,7 +236,7 @@ abstract final class BufferFrameCodec {
   static const int maxTitleBytes = _maxTitleBytes;
 
   /// Maximum decoded or wire byte size for a single chunked Kitty image (`16 MiB`).
-  static const int maxKittyImageBytes = _maxKittyImageTotalPixels * 4;
+  static const int maxKittyImageBytes = 16 * 1024 * 1024;
 
   /// Maximum wire payload bytes per [KittyImageChunkFrame] (`512 KiB`).
   static const int maxKittyChunkBytes = 524_288;

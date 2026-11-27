@@ -3,9 +3,9 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/style.dart';
 import 'package:termui/ui/widgets/display/kitty_image.dart';
 
+import 'kitty_run_helper.dart';
 import 'shader_backend.dart';
 import 'staging_cache.dart';
 
@@ -255,7 +255,6 @@ final class GpuAtlasBatchBuilder {
   static const double _italicTranslateXFactor = 0.14;
   static const double _italicSkewSlopeX = -0.18;
   static const double _boldItalicOffsetLogical = 0.6;
-  static const double _kittyTileOverlapLogical = 0.25;
   static const int _defaultOutOfBoundsDimArgb = 0x80000000;
   static const int _lightBorderArgb = 0x33FFFFFF;
   static const int _darkBorderArgb = 0x33000000;
@@ -657,7 +656,7 @@ final class GpuAtlasBatchBuilder {
     while (index < count) {
       final char = staged.fallbackChars[index];
       final mods = staged.fallbackAttrs[index << 2];
-      if (!_isKittyCell(char, mods)) {
+      if (!isKittyPlaceholderCell(char, mods)) {
         hasCanvasOnly = true;
         index++;
         continue;
@@ -722,38 +721,29 @@ final class GpuAtlasBatchBuilder {
       return (nextIndex: index + 1, quad: null, needsCanvasFallback: false);
     }
 
+    final endIdx = measureKittyRunEnd(
+      staged: staged,
+      buffer: buffer,
+      startIndex: index,
+      data: data,
+      imageId: imageId,
+      gridRow: gridRow,
+      startGridCol: gridCol,
+      tileRow: coords.row,
+      startTileCol: coords.col,
+    );
+    final runCols = endIdx - index;
+
     final gpuImage = kittyImages[data] ?? kittyImagesById[(registry, imageId)];
     if (gpuImage == null) {
       final needsSubpixelCanvas = data.format != KittyImageData.formatPng;
       return (
-        nextIndex: index + 1,
+        nextIndex: endIdx,
         quad: null,
         needsCanvasFallback: needsSubpixelCanvas,
       );
     }
 
-    final count = staged.fallbackCount;
-    var endIdx = index + 1;
-    var lastTileCol = coords.col;
-    var lastGridCol = gridCol;
-    while (endIdx < count &&
-        _isNextKittyRunCell(
-          staged: staged,
-          buffer: buffer,
-          index: endIdx,
-          data: data,
-          imageId: imageId,
-          expectedGridRow: gridRow,
-          expectedGridCol: lastGridCol + 1,
-          expectedTileRow: coords.row,
-          expectedTileCol: lastTileCol + 1,
-        )) {
-      lastTileCol++;
-      lastGridCol++;
-      endIdx++;
-    }
-
-    final runCols = lastTileCol - coords.col + 1;
     final u0 = coords.col / data.gridCols;
     final v0 = coords.row / data.gridRows;
     final u1 = (coords.col + runCols) / data.gridCols;
@@ -765,8 +755,8 @@ final class GpuAtlasBatchBuilder {
         image: gpuImage,
         dstX: x * dpr,
         dstY: y * dpr,
-        dstWidth: (runCols * w + _kittyTileOverlapLogical) * dpr,
-        dstHeight: (h + _kittyTileOverlapLogical) * dpr,
+        dstWidth: (runCols * w + kittyTileOverlapLogical) * dpr,
+        dstHeight: (h + kittyTileOverlapLogical) * dpr,
         u0: u0,
         v0: v0,
         u1: u1,
@@ -774,42 +764,6 @@ final class GpuAtlasBatchBuilder {
       ),
       needsCanvasFallback: false,
     );
-  }
-
-  static bool _isKittyCell(String char, int modifiers) =>
-      Modifier.has(modifiers, Modifier.kittyPlaceholder) ||
-      (char.length >= 2 && char.startsWith(kittyPlaceholderChar));
-
-  static bool _isNextKittyRunCell({
-    required StagingBufferSet staged,
-    required Buffer buffer,
-    required int index,
-    required KittyImageData data,
-    required int imageId,
-    required int expectedGridRow,
-    required int expectedGridCol,
-    required int expectedTileRow,
-    required int expectedTileCol,
-  }) {
-    final char = staged.fallbackChars[index];
-    final aBase = index << 2;
-    if (!_isKittyCell(char, staged.fallbackAttrs[aBase])) return false;
-    final gBase = index << 1;
-    final gridCol = staged.fallbackGridCoords[gBase];
-    final gridRow = staged.fallbackGridCoords[gBase + 1];
-    if (gridRow != expectedGridRow || gridCol != expectedGridCol) return false;
-    final coords = parseKittyPlaceholderCell(char);
-    if (coords == null ||
-        coords.row != expectedTileRow ||
-        coords.col != expectedTileCol) {
-      return false;
-    }
-    final nextId = extractKittyCellImageId(
-      char,
-      staged.fallbackAttrs[aBase + 1],
-    );
-    if (nextId != imageId) return false;
-    return identical(buffer.lookupKittyImage(gridCol, gridRow, nextId), data);
   }
 
   void _appendOutOfBoundsDimming({

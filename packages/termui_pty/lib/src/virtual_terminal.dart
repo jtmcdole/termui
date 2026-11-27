@@ -793,11 +793,28 @@ final class VirtualTerminal implements TerminalHandler {
 
   final Map<String, _PendingOsc99> _pendingOsc99 = {};
 
+  /// Whether local Kitty Graphics Protocol transmission media (`t=t` temp files
+  /// and, unless [allowLocalKittyShm] overrides it, `t=s` POSIX shared memory)
+  /// are permitted on this terminal.
+  ///
+  /// Defaults to `false` so untrusted or remote PTY streams cannot read or
+  /// unlink local temp/shared-memory files unless explicitly opted in.
+  final bool allowLocalKittyMedia;
+
+  /// Whether POSIX shared-memory (`t=s`) transmission is permitted.
+  ///
+  /// Defaults to [allowLocalKittyMedia]. Pass `allowLocalKittyMedia: true` with
+  /// `allowLocalKittyShm: false` to allow only `t=t` temp files.
+  final bool allowLocalKittyShm;
+
   late final KittyApcHandler _kittyApcHandler = KittyApcHandler(
     registry: imageRegistry,
     onReply: (reply) => onReply?.call(reply),
     onPlaceVirtual: _placeVirtualImage,
+    onClearPlacements: _clearKittyPlacements,
     cellPixelSize: () => (_cellPixelWidth, _cellPixelHeight),
+    allowLocalMedia: allowLocalKittyMedia,
+    allowLocalShm: allowLocalKittyShm,
   );
 
   late final AudioApcHandler _audioApcHandler = AudioApcHandler(
@@ -827,7 +844,10 @@ final class VirtualTerminal implements TerminalHandler {
     this.onAudioEvent,
     this.onShaderEvent,
     this.shaderCapabilitiesProvider,
-  }) : width = math.max(1, width),
+    this.allowLocalKittyMedia = false,
+    bool? allowLocalKittyShm,
+  }) : allowLocalKittyShm = allowLocalKittyShm ?? allowLocalKittyMedia,
+       width = math.max(1, width),
        _colorScheme =
            colorScheme ?? theme?.brightness ?? TerminalBrightness.dark,
        height = math.max(1, height),
@@ -862,7 +882,13 @@ final class VirtualTerminal implements TerminalHandler {
     }
   }
 
-  void _placeVirtualImage(int cols, int rows, int imageId, bool advanceCursor) {
+  void _placeVirtualImage(
+    int cols,
+    int rows,
+    int imageId,
+    bool advanceCursor,
+    int placementId,
+  ) {
     if (advanceCursor) {
       _resolvePendingWrapBeforeWrite();
     }
@@ -876,6 +902,7 @@ final class VirtualTerminal implements TerminalHandler {
     final totalRows = math.max(1, math.min(rows, kittyDiacritics.length));
     final fgArgb = 0xFF00_0000 | (maskedId & 0xFF_FFFF);
     final imageIdMsb = (maskedId >>> 24) & 0xFF;
+    final ulArgb = _kittyDirectPlacementTag | (placementId & 0xFF_FFFF);
 
     if (!advanceCursor) {
       final startY = cursorY.clamp(0, height - 1);
@@ -888,6 +915,7 @@ final class VirtualTerminal implements TerminalHandler {
           validCols,
           fgArgb,
           imageIdMsb,
+          ulArgb,
         );
       }
       return;
@@ -912,12 +940,83 @@ final class VirtualTerminal implements TerminalHandler {
           break;
         }
       }
-      _writeKittyImageRow(startX, y, r, validCols, fgArgb, imageIdMsb);
+      _writeKittyImageRow(startX, y, r, validCols, fgArgb, imageIdMsb, ulArgb);
     }
 
     cursorY = y;
     cursorX = startX;
     _advanceCursorAfterPrint(validCols);
+  }
+
+  static const int _kittyDirectPlacementTag = 0xFE00_0000;
+
+  static bool _matchesClearUnderline(
+    int cellUnderline,
+    int? placementId,
+    bool directOnly,
+  ) {
+    final isDirect = (cellUnderline & 0xFF00_0000) == _kittyDirectPlacementTag;
+    if (directOnly && !isDirect) return false;
+    if (placementId == null) return true;
+    final masked = placementId & 0xFF_FFFF;
+    if (directOnly) return cellUnderline == (_kittyDirectPlacementTag | masked);
+    return cellUnderline == (_kittyDirectPlacementTag | masked) ||
+        (placementId > 0 && cellUnderline == (0xFF00_0000 | masked));
+  }
+
+  void _clearKittyPlacements(
+    int? imageId, {
+    int? placementId,
+    bool directOnly = false,
+  }) {
+    final active = buffer;
+    for (var y = 0; y < height; y++) {
+      _clearKittyPlacementsInRow(active, y, imageId, placementId, directOnly);
+    }
+  }
+
+  void _clearKittyPlacementsInRow(
+    Buffer active,
+    int y,
+    int? imageId,
+    int? placementId,
+    bool directOnly,
+  ) {
+    var activeImageId = 0;
+    var activeUnderline = 0;
+    final rowBase = y * width;
+    for (var x = 0; x < width; x++) {
+      final cellIdx = rowBase + x;
+      if (!Modifier.has(
+        active.attributes[cellIdx * 3 + 2],
+        Modifier.kittyPlaceholder,
+      )) {
+        activeImageId = 0;
+        activeUnderline = 0;
+        continue;
+      }
+      final cellChar = active.getCharacter(x, y);
+      final cellFg = active.attributes[cellIdx * 3];
+      final cellUnderline = active.getUnderlineColor(x, y);
+      final inherits =
+          activeImageId != 0 &&
+          cellUnderline == activeUnderline &&
+          (cellChar == kittyPlaceholderChar ||
+              (cellChar.length == 3 &&
+                  cellChar.startsWith(kittyPlaceholderChar))) &&
+          extractKittyCellImageId(cellChar, cellFg) ==
+              (activeImageId & 0xFFFFFF);
+      final cellId = inherits
+          ? activeImageId
+          : extractKittyCellImageId(cellChar, cellFg);
+      activeImageId = cellId;
+      activeUnderline = cellUnderline;
+      final matchesId = imageId == null || cellId == imageId;
+      if (matchesId &&
+          _matchesClearUnderline(cellUnderline, placementId, directOnly)) {
+        _resetSplitCell(active, cellIdx);
+      }
+    }
   }
 
   void _writeKittyImageRow(
@@ -927,6 +1026,7 @@ final class VirtualTerminal implements TerminalHandler {
     int validCols,
     int fgArgb,
     int imageIdMsb,
+    int underlineColor,
   ) {
     for (var c = 0; c < validCols; c++) {
       buffer.setAttributes(
@@ -936,7 +1036,7 @@ final class VirtualTerminal implements TerminalHandler {
         fg: fgArgb,
         bg: 0,
         modifiers: Modifier.kittyPlaceholder,
-        underlineColor: 0,
+        underlineColor: underlineColor,
         uri: '',
         blend: false,
       );

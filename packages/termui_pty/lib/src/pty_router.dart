@@ -135,6 +135,7 @@ final class PtyRouter {
     TerminalColorTheme? theme,
     Color? defaultCursorColor,
     TerminalBrightness? colorScheme,
+    bool allowLocalKittyMedia = false,
   }) {
     if (_disposed) {
       throw StateError('PtyRouter has been disposed.');
@@ -171,6 +172,7 @@ final class PtyRouter {
       theme: theme,
       defaultCursorColor: defaultCursorColor,
       colorScheme: colorScheme,
+      allowLocalKittyMedia: allowLocalKittyMedia,
       onDispose: () => _sessions.remove(sessionId),
     );
     _sessions[sessionId] = session;
@@ -263,6 +265,7 @@ final class PtyRouterSession {
     required TerminalColorTheme? theme,
     required Color? defaultCursorColor,
     required TerminalBrightness? colorScheme,
+    required bool allowLocalKittyMedia,
     required void Function() onDispose,
   }) : _onDispose = onDispose,
        terminal = VirtualTerminal(
@@ -278,6 +281,7 @@ final class PtyRouterSession {
          theme: theme,
          defaultCursorColor: defaultCursorColor,
          colorScheme: colorScheme,
+         allowLocalKittyMedia: allowLocalKittyMedia,
        ) {
     _syncFullShadowState();
     terminal

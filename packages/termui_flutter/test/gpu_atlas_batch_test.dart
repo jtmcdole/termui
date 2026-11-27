@@ -300,6 +300,143 @@ void main() {
       },
     );
 
+    test('merges 1-diacritic and bare U+10EEEE continuation cells into a full-width Kitty quad', () async {
+      final gpuImage = await _makeTestImage(64, 32);
+      addTearDown(gpuImage.dispose);
+
+      const imageId = 100;
+      final kittyData = KittyImageData(
+        imageId: imageId,
+        pixelWidth: 64,
+        pixelHeight: 32,
+        rgbaPixels: Uint8List(64 * 32 * 4),
+        gridCols: 4,
+        gridRows: 2,
+      );
+      final registry = KittyImageRegistry()..registerImage(kittyData);
+      final buffer = Buffer(6, 2)
+        ..registerKittyRegistry(const tui_geo.Rect(0, 0, 6, 2), registry);
+
+      final staged = StagingBufferSet()..ensureGridCapacity(2, 12);
+      // Column 0 uses 1-diacritic shorthand (row 0, implicit col 0); columns 1..3 are bare U+10EEEE.
+      final row0Shorthand =
+          '$kittyPlaceholderChar${String.fromCharCode(kittyDiacritics[0])}';
+      for (var i = 0; i < 4; i++) {
+        staged.addFallbackCell(
+          char: i == 0 ? row0Shorthand : kittyPlaceholderChar,
+          gridCol: i,
+          gridRow: 0,
+          modifiers: Modifier.kittyPlaceholder,
+          fgArgb: 0xFF000000 | imageId,
+          bgArgb: 0xFF000000,
+          resolvedFg: 0xFF000000 | imageId,
+          x: i * 10.0,
+          y: 0.0,
+          w: 10.0,
+          h: 20.0,
+        );
+      }
+
+      final builder = GpuAtlasBatchBuilder();
+      final batch = builder.build(
+        staged: staged,
+        buffer: buffer,
+        logicalSize: const ui.Size(60.0, 40.0),
+        devicePixelRatio: 1.0,
+        cellWidth: 10.0,
+        cellHeight: 20.0,
+        atlasPhysWidth: 256.0,
+        atlasPhysHeight: 256.0,
+        fgScaleBlock: 0.5,
+        overhangFgPhysical: 0.0,
+        overhangFgLogical: 0.0,
+        defaultBackgroundArgb: 0x00000000,
+        stagingGeneration: 1,
+        kittyImages: <KittyImageData, ui.Image>{kittyData: gpuImage},
+        kittyImagesById: const <(KittyImageRegistry, int), ui.Image>{},
+      );
+
+      expect(batch.hasCanvasOnlyContent, isFalse);
+      expect(batch.kittyQuads, hasLength(1));
+      final quad = batch.kittyQuads.single;
+      expect(quad.dstX, closeTo(0.0, 1e-4));
+      expect(quad.dstWidth, closeTo(40.25, 1e-4));
+      expect(quad.u0, closeTo(0.0, 1e-5));
+      expect(quad.u1, closeTo(1.0, 1e-5));
+    });
+
+    test('merges mid-row 1-diacritic continuations and splits runs across distinct underlineColor placement IDs', () async {
+      final gpuImage = await _makeTestImage(64, 32);
+      addTearDown(gpuImage.dispose);
+
+      const imageId = 0x12000064;
+      final kittyData = KittyImageData(
+        imageId: imageId,
+        pixelWidth: 64,
+        pixelHeight: 32,
+        rgbaPixels: Uint8List(64 * 32 * 4),
+        gridCols: 4,
+        gridRows: 2,
+      );
+      final registry = KittyImageRegistry()..registerImage(kittyData);
+      final buffer = Buffer(6, 2)
+        ..registerKittyRegistry(const tui_geo.Rect(0, 0, 6, 2), registry);
+      buffer.setUnderlineColor(0, 0, 0xFF000001);
+      buffer.setUnderlineColor(1, 0, 0xFF000001);
+      buffer.setUnderlineColor(2, 0, 0xFF000002);
+      buffer.setUnderlineColor(3, 0, 0xFF000002);
+
+      final row0Shorthand =
+          '$kittyPlaceholderChar${String.fromCharCode(kittyDiacritics[0])}';
+      final staged = StagingBufferSet()..ensureGridCapacity(2, 12);
+      final chars = [
+        kittyPlaceholderCell(0, 0, imageIdMsb: 0x12),
+        row0Shorthand,
+        kittyPlaceholderCell(0, 0, imageIdMsb: 0x12),
+        kittyPlaceholderChar,
+      ];
+      for (var i = 0; i < 4; i++) {
+        staged.addFallbackCell(
+          char: chars[i],
+          gridCol: i,
+          gridRow: 0,
+          modifiers: Modifier.kittyPlaceholder,
+          fgArgb: 0xFF000000 | (imageId & 0xFFFFFF),
+          bgArgb: 0xFF000000,
+          resolvedFg: 0xFF000000 | (imageId & 0xFFFFFF),
+          x: i * 10.0,
+          y: 0.0,
+          w: 10.0,
+          h: 20.0,
+        );
+      }
+
+      final builder = GpuAtlasBatchBuilder();
+      final batch = builder.build(
+        staged: staged,
+        buffer: buffer,
+        logicalSize: const ui.Size(60.0, 40.0),
+        devicePixelRatio: 1.0,
+        cellWidth: 10.0,
+        cellHeight: 20.0,
+        atlasPhysWidth: 256.0,
+        atlasPhysHeight: 256.0,
+        fgScaleBlock: 0.5,
+        overhangFgPhysical: 0.0,
+        overhangFgLogical: 0.0,
+        defaultBackgroundArgb: 0x00000000,
+        stagingGeneration: 1,
+        kittyImages: <KittyImageData, ui.Image>{kittyData: gpuImage},
+        kittyImagesById: const <(KittyImageRegistry, int), ui.Image>{},
+      );
+
+      expect(batch.kittyQuads, hasLength(2));
+      expect(batch.kittyQuads[0].dstWidth, closeTo(20.25, 1e-4));
+      expect(batch.kittyQuads[0].u1, closeTo(0.5, 1e-5));
+      expect(batch.kittyQuads[1].dstX, closeTo(20.0, 1e-4));
+      expect(batch.kittyQuads[1].dstWidth, closeTo(20.25, 1e-4));
+    });
+
     test('flags hasCanvasOnlyContent for non-Kitty fallback, raw subpixel Kitty, ligatures, and composingText', () {
       final buffer = Buffer(4, 2);
       final builder = GpuAtlasBatchBuilder();

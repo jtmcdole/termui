@@ -19,6 +19,7 @@ import 'atlas.dart';
 import 'atlas_quad_table.dart';
 import 'cell_transform_painter.dart';
 import 'gpu_atlas_batch.dart';
+import 'kitty_run_helper.dart';
 import 'staging_cache.dart';
 
 /// Reusable per-frame typed sink for writing visual overrides across hovered
@@ -1420,10 +1421,6 @@ final class TuiAtlasPainter extends CustomPainter {
     return char.length >= 2 && char.startsWith(kittyPlaceholderChar);
   }
 
-  bool _isKittyCell(String char, int modifiers) =>
-      Modifier.has(modifiers, Modifier.kittyPlaceholder) ||
-      (char.length >= 2 && char.startsWith(kittyPlaceholderChar));
-
   void _stageSingleCell(
     StagingBufferSet dst,
     StagingCacheInternals internals,
@@ -2382,7 +2379,7 @@ final class TuiAtlasPainter extends CustomPainter {
     required double screenY,
     required _AtlasGeometry geo,
   }) {
-    final isKitty = _isKittyCell(char, modifiers);
+    final isKitty = isKittyPlaceholderCell(char, modifiers);
     if (!isKitty) {
       dst.addMissingGlyph(char);
       dst.addMissingStyledGlyph(char, variantIndex);
@@ -2495,7 +2492,7 @@ final class TuiAtlasPainter extends CustomPainter {
     while (i < count) {
       final char = staged.fallbackChars[i];
       final mods = staged.fallbackAttrs[i << 2];
-      if (_isKittyCell(char, mods)) {
+      if (isKittyPlaceholderCell(char, mods)) {
         i = _paintKittyCellOrRun(canvas, _kittyPaint, staged, i);
         continue;
       }
@@ -2640,42 +2637,38 @@ final class TuiAtlasPainter extends CustomPainter {
       return index + 1;
     }
 
+    final endIdx = measureKittyRunEnd(
+      staged: staged,
+      buffer: buffer,
+      startIndex: index,
+      data: data,
+      imageId: imageId,
+      gridRow: gridRow,
+      startGridCol: gridCol,
+      tileRow: coords.row,
+      startTileCol: coords.col,
+    );
+    final runCols = endIdx - index;
+
     final gpuImage = kittyImages[data] ?? kittyImagesById[(registry, imageId)];
     if (gpuImage == null) {
-      _paintKittySubpixels(
-        canvas,
-        paint,
-        x,
-        y,
-        w,
-        h,
-        data,
-        coords.row,
-        coords.col,
-      );
-      return index + 1;
+      for (var i = 0; i < runCols; i++) {
+        final cellBase = (index + i) << 2;
+        _paintKittySubpixels(
+          canvas,
+          paint,
+          staged.fallbackRects[cellBase],
+          staged.fallbackRects[cellBase + 1],
+          staged.fallbackRects[cellBase + 2],
+          staged.fallbackRects[cellBase + 3],
+          data,
+          coords.row,
+          coords.col + i,
+        );
+      }
+      return endIdx;
     }
 
-    final count = staged.fallbackCount;
-    var endIdx = index + 1;
-    var lastTileCol = coords.col;
-    var lastGridCol = gridCol;
-    while (endIdx < count &&
-        _isNextKittyRunCell(
-          staged,
-          endIdx,
-          data: data,
-          imageId: imageId,
-          expectedGridRow: gridRow,
-          expectedGridCol: lastGridCol + 1,
-          expectedTileRow: coords.row,
-          expectedTileCol: lastTileCol + 1,
-        )) {
-      lastTileCol++;
-      lastGridCol++;
-      endIdx++;
-    }
-    final runCols = lastTileCol - coords.col + 1;
     final tileW = gpuImage.width / data.gridCols;
     final tileH = gpuImage.height / data.gridRows;
     paint.color = const Color(0xFFFFFFFF);
@@ -2687,41 +2680,15 @@ final class TuiAtlasPainter extends CustomPainter {
         runCols * tileW,
         tileH,
       ),
-      Rect.fromLTWH(x, y, runCols * w + 0.25, h + 0.25),
+      Rect.fromLTWH(
+        x,
+        y,
+        runCols * w + kittyTileOverlapLogical,
+        h + kittyTileOverlapLogical,
+      ),
       paint,
     );
     return endIdx;
-  }
-
-  bool _isNextKittyRunCell(
-    StagingBufferSet staged,
-    int index, {
-    required KittyImageData data,
-    required int imageId,
-    required int expectedGridRow,
-    required int expectedGridCol,
-    required int expectedTileRow,
-    required int expectedTileCol,
-  }) {
-    final char = staged.fallbackChars[index];
-    final aBase = index << 2;
-    if (!_isKittyCell(char, staged.fallbackAttrs[aBase])) return false;
-    final gBase = index << 1;
-    final gridCol = staged.fallbackGridCoords[gBase];
-    final gridRow = staged.fallbackGridCoords[gBase + 1];
-    if (gridRow != expectedGridRow || gridCol != expectedGridCol) return false;
-    final coords = parseKittyPlaceholderCell(char);
-    if (coords == null ||
-        coords.row != expectedTileRow ||
-        coords.col != expectedTileCol) {
-      return false;
-    }
-    final nextId = extractKittyCellImageId(
-      char,
-      staged.fallbackAttrs[aBase + 1],
-    );
-    if (nextId != imageId) return false;
-    return identical(buffer.lookupKittyImage(gridCol, gridRow, nextId), data);
   }
 
   void _paintKittySubpixels(

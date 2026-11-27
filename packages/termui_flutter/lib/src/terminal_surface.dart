@@ -3600,7 +3600,7 @@ final class _KittyGpuImageCache {
   static bool _isValidPngPayload(KittyImageData data) {
     final w = data.pixelWidth;
     final h = data.pixelHeight;
-    if (w <= 0 || w > 4096 || h <= 0 || h > 4096 || w * h > 4194304) {
+    if (w <= 0 || w > 8192 || h <= 0 || h > 8192 || w * h > 16777216) {
       return false;
     }
     final bytes = data.rgbaPixels;

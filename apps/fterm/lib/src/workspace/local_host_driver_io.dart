@@ -202,6 +202,7 @@ final class IoLocalHostDriver implements LocalHostDriver {
       cellPixelWidth: config.cellPixelWidth,
       cellPixelHeight: config.cellPixelHeight,
       colorScheme: config.colorScheme,
+      allowLocalKittyMedia: true,
     );
     final port = session.openPort(
       initialCols: config.initialCols,
