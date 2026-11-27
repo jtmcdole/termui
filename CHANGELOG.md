@@ -11,6 +11,27 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`fterm` - `v0.8.1`](#fterm---v081)
+
+---
+
+#### `fterm` - `v0.8.1`
+
+ - **FEAT**(fterm): refresh What's New cards and add minor-release reminder.
+
+
+## 2026-11-27
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - [`fterm` - `v0.8.0`](#fterm---v080)
 
 Packages with other changes:
