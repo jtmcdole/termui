@@ -1,3 +1,7 @@
+## 0.8.1
+
+ - **FEAT**(fterm): refresh What's New cards and add minor-release reminder.
+
 ## 0.8.0
 
 > Note: This release has breaking changes.
