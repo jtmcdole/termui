@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'package:termui/termui.dart';
 
+import 'ktty_probe_report.dart';
+
 /// Probe image ID for the Kitty Graphics `a=q` RGB24 query.
 const int kttyProbeQueryId = 901;
 
@@ -16,6 +18,27 @@ const int kttyProbeZlibId = 903;
 /// Probe image ID for the Kitty Graphics PNG (`f=100`) transmit check.
 const int kttyProbePngId = 904;
 
+/// Probe image ID for the Kitty Graphics chunked (`m=1`/`m=0`) transmit check.
+const int kttyProbeChunkedId = 905;
+
+/// Probe image ID for the Kitty Graphics `d=a`/`a=p` persistence check.
+const int kttyProbePlaceId = 906;
+
+/// Probe placement ID for the Kitty Graphics `a=p,U=1` persistence check.
+const int kttyProbePlacementId = 7;
+
+/// Probe image number (`I=`) for the Kitty Graphics image-number check.
+const int kttyProbeImageNumber = 907;
+
+/// Probe image ID for the optional Kitty Graphics temp-file (`t=t`) check.
+const int kttyProbeTempId = 908;
+
+/// Probe image ID for the optional Kitty Graphics shared-memory (`t=s`) check.
+const int kttyProbeShmId = 909;
+
+/// Probe image ID reserved for `tmux` DCS passthrough APC verification.
+const int kttyProbeTmuxApcId = 910;
+
 /// Visual showcase image ID for 24-bit raw RGBA (`f=32`).
 const int kttyVisualRgbaImageId = 0x004B01;
 
@@ -24,6 +47,9 @@ const int kttyVisual32BitImageId = 0x42004B02;
 
 /// Visual showcase image ID exercising PNG (`f=100`) transmission.
 const int kttyVisualPngImageId = 0x004B03;
+
+/// Visual showcase image ID for shorthand `U+10EEEE` cells (24-bit, MSB `0`).
+const int kttyVisualShorthandImageId = 0x004B04;
 
 final Uint32List _crc32Table = _buildCrc32Table();
 
@@ -138,8 +164,12 @@ Uint8List encodeRgbaPng(int width, int height, Uint8List rgba) {
   return out.takeBytes();
 }
 
-/// Builds the 4 non-visual Kitty Graphics `APC` probe commands (`q=0`).
-String buildKittyApcProbeCommands() {
+/// Builds the non-visual Kitty Graphics `APC` probe commands (`q=0`),
+/// including chunked upload, `d=a`/`a=p` persistence, `I=` image numbers,
+/// cleanup deletes for temporary probes, and optional `t=t`/`t=s` queries.
+String buildKittyApcProbeCommands({
+  KttyProbeOptions options = const KttyProbeOptions(),
+}) {
   final sampleRgba = Uint8List.fromList(const [
     40, 210, 255, 255, 255, 110, 190, 255, //
     110, 255, 170, 255, 255, 220, 90, 255,
@@ -147,16 +177,48 @@ String buildKittyApcProbeCommands() {
   final rawB64 = base64Encode(sampleRgba);
   final zlibB64 = base64Encode(encodeZlibStoredBlocks(sampleRgba));
   final pngB64 = base64Encode(encodeRgbaPng(2, 2, sampleRgba));
+  final splitAt = (rawB64.length ~/ 2) & ~3;
+  final chunk0 = rawB64.substring(0, splitAt);
+  final chunk1 = rawB64.substring(splitAt);
 
-  final sb = StringBuffer()
-    ..write('\x1b_Gi=$kttyProbeQueryId,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\')
-    ..write('\x1b_Gi=$kttyProbeRgbaId,s=2,v=2,a=t,t=d,f=32,q=0;$rawB64\x1b\\')
-    ..write(
-      '\x1b_Gi=$kttyProbeZlibId,s=2,v=2,a=t,t=d,f=32,o=z,q=0;$zlibB64\x1b\\',
-    )
-    ..write('\x1b_Gi=$kttyProbePngId,a=t,t=d,f=100,q=0;$pngB64\x1b\\');
-  return sb.toString();
+  final commands = <String>[
+    '\x1b_Gi=$kttyProbeQueryId,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\',
+    '\x1b_Gi=$kttyProbeRgbaId,s=2,v=2,a=t,t=d,f=32,q=0;$rawB64\x1b\\',
+    '\x1b_Gi=$kttyProbeZlibId,s=2,v=2,a=t,t=d,f=32,o=z,q=0;$zlibB64\x1b\\',
+    '\x1b_Gi=$kttyProbePngId,a=t,t=d,f=100,q=0;$pngB64\x1b\\',
+    '\x1b_Gi=$kttyProbeChunkedId,s=2,v=2,a=t,t=d,f=32,q=0,m=1;$chunk0\x1b\\',
+    '\x1b_Ga=t,m=0;$chunk1\x1b\\',
+    '\x1b_Ga=d,d=I,i=$kttyProbeChunkedId,q=2\x1b\\',
+    '\x1b_Gi=$kttyProbePlaceId,s=2,v=2,a=t,t=d,f=32,q=2;$rawB64\x1b\\',
+    '\x1b_Ga=d,d=i,i=$kttyProbePlaceId,q=2\x1b\\',
+    '\x1b_Ga=p,i=$kttyProbePlaceId,p=$kttyProbePlacementId,U=1,c=1,r=1,q=0\x1b\\',
+    '\x1b_Ga=d,d=I,i=$kttyProbePlaceId,q=2\x1b\\',
+    '\x1b_GI=$kttyProbeImageNumber,s=2,v=2,a=t,t=d,f=32,q=0;$rawB64\x1b\\',
+    '\x1b_Ga=d,d=N,I=$kttyProbeImageNumber,q=2\x1b\\',
+  ];
+
+  final tempPath = options.tempProbeFilePath;
+  if (tempPath != null && tempPath.isNotEmpty) {
+    final pathB64 = base64Encode(utf8.encode(tempPath));
+    commands.add(
+      '\x1b_Gi=$kttyProbeTempId,s=2,v=2,a=q,t=t,f=32,q=0;$pathB64\x1b\\',
+    );
+  }
+  final shmName = options.shmProbeName;
+  if (shmName != null && shmName.isNotEmpty) {
+    final shmB64 = base64Encode(utf8.encode(shmName));
+    commands.add(
+      '\x1b_Gi=$kttyProbeShmId,s=2,v=2,a=q,t=s,f=32,q=0;$shmB64\x1b\\',
+    );
+  }
+  if (!options.wrapTmuxPassthrough) return commands.join();
+  return commands.map(wrapTmuxDcsPassthrough).join();
 }
+
+/// Wraps [innerSequence] inside a `tmux` DCS passthrough envelope
+/// (`ESC P tmux ; ... ESC \`), doubling every inner `ESC` byte.
+String wrapTmuxDcsPassthrough(String innerSequence) =>
+    '\x1bPtmux;${innerSequence.replaceAll('\x1b', '\x1b\x1b')}\x1b\\';
 
 double _smoothstep(double edge0, double edge1, double x) {
   final t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
@@ -305,4 +367,58 @@ KittyImageData buildPngVisualTile({int cols = 12, int rows = 4}) {
     gridCols: cols,
     gridRows: rows,
   );
+}
+
+(int r, int g, int b) _shorthandTilePixel(int x, int y, int pw, int ph) {
+  if (x < 2 || x >= pw - 2 || y < 2 || y >= ph - 2) return (135, 250, 210);
+  if ((y - ph ~/ 2).abs() <= 1) return (255, 245, 210);
+  final u = x / (pw - 1);
+  final v = y / (ph - 1);
+  final stripe = (((x + y) ~/ 12) & 1) == 0 ? 18 : -10;
+  if (y < ph ~/ 2) {
+    return (
+      (35 + u * 55 + stripe).round().clamp(0, 255),
+      (165 + v * 60 + stripe).round().clamp(0, 255),
+      (190 + u * 55 + stripe).round().clamp(0, 255),
+    );
+  }
+  return (
+    (185 + u * 55 + stripe).round().clamp(0, 255),
+    (75 + (1.0 - v) * 85 + stripe).round().clamp(0, 255),
+    (160 + (1.0 - u) * 75 + stripe).round().clamp(0, 255),
+  );
+}
+
+/// Generates the 24-bit ID (`0x004B04`, MSB `0`) HiDPI visual tile (`144×96`)
+/// for shorthand `U+10EEEE` placement showcase rendering.
+KittyImageData buildShorthandVisualTile({int cols = 12, int rows = 4}) {
+  const pw = 144;
+  const ph = 96;
+  final rgba = Uint8List(pw * ph * 4);
+  for (var y = 0; y < ph; y++) {
+    for (var x = 0; x < pw; x++) {
+      final (r, g, b) = _shorthandTilePixel(x, y, pw, ph);
+      final idx = (y * pw + x) * 4;
+      rgba[idx] = r;
+      rgba[idx + 1] = g;
+      rgba[idx + 2] = b;
+      rgba[idx + 3] = 255;
+    }
+  }
+  return KittyImageData(
+    imageId: kttyVisualShorthandImageId,
+    pixelWidth: pw,
+    pixelHeight: ph,
+    rgbaPixels: rgba,
+    gridCols: cols,
+    gridRows: rows,
+  );
+}
+
+/// Builds explicit virtual placement `APC` commands (`p=1` top half and `p=2`
+/// bottom half) for the shorthand showcase tile ([kttyVisualShorthandImageId]).
+String buildShorthandPlacementApcCommands({int cols = 12, int rows = 4}) {
+  const id = kttyVisualShorthandImageId;
+  return '\x1b_Ga=p,U=1,i=$id,p=1,c=$cols,r=$rows,q=2\x1b\\'
+      '\x1b_Ga=p,U=1,i=$id,p=2,c=$cols,r=$rows,q=2\x1b\\';
 }
