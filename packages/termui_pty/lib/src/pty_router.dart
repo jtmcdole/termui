@@ -907,6 +907,7 @@ final class _RouterTerminalPort implements TerminalPort {
       alternateScroll: vt.alternateScrollMode,
       focusReporting: vt.focusReportingEnabled,
       kittyKeyboardFlags: vt.kittyKeyboardFlags,
+      mouseCursorShape: vt.mouseCursorShape,
     );
   }
 
