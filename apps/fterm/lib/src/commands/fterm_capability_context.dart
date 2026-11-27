@@ -32,20 +32,22 @@ final class FtermCapabilityContext {
 
   /// Derives a [FtermCapabilityContext] from [workspace] with optional
   /// platform, runtime, capability, and feature-flag overrides.
+  ///
+  /// When [enabledFeatures] is omitted, inherits `workspace.enabledFeatures`.
   factory FtermCapabilityContext.fromWorkspace(
     FtermWorkspaceController workspace, {
     bool? isWeb,
     TargetPlatform? platform,
     bool? isDesktopHost,
     bool? supportsUpdates,
-    Set<String> enabledFeatures = const <String>{},
+    Set<String>? enabledFeatures,
   }) => FtermCapabilityContext(
     isWeb: isWeb ?? kIsWeb,
     platform: platform ?? defaultTargetPlatform,
     isDesktopHost: isDesktopHost ?? workspace.isDesktopHost,
     supportsUpdates:
         supportsUpdates ?? workspace.updateViewModel.isSupportedDesktop,
-    enabledFeatures: enabledFeatures,
+    enabledFeatures: enabledFeatures ?? workspace.enabledFeatures,
   );
 
   /// Whether the active target platform is macOS (native or Web on macOS).

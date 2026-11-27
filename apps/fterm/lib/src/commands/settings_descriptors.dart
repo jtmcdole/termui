@@ -545,7 +545,7 @@ final FtermEnumSettingDescriptor<ShaderBackendKind?> _shadersBackend =
       keywords: 'shader backend gpu impeller webgl auto disabled shaders',
       icon: Icons.memory_outlined,
       optionsBuilder: (_) => _shaderBackendOptions,
-      read: (ws) => ws.shaderBackendOverride,
+      read: (ws) => ws.shaderBackendOverride == .disabled ? .disabled : null,
       write: (ws, override) => ws.setShaderBackendOverride(override),
     );
 

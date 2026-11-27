@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fterm/src/audio/fterm_audio_controller.dart';
 import 'package:fterm/src/automation/automation_models.dart';
+import 'package:fterm/src/commands/descriptor_adapters.dart';
 import 'package:fterm/src/commands/fterm_capability_context.dart';
 import 'package:fterm/src/commands/fterm_descriptor_models.dart';
 import 'package:fterm/src/commands/settings_descriptors.dart';
@@ -955,5 +956,71 @@ void main() {
       );
       expect(find.byType(BlenderPropertyRow), findsNothing);
     });
+
+    testWidgets(
+      'shaders-backend normalizes flutterGpu and webGl2 overrides to Auto',
+      (tester) async {
+        final workspace = _createWorkspace();
+        addTearDown(workspace.dispose);
+
+        final backend =
+            settingDescriptorById('shaders-backend')!
+                as FtermEnumSettingDescriptor<ShaderBackendKind?>;
+
+        for (final override in const <ShaderBackendKind>[
+          .flutterGpu,
+          .webGl2,
+        ]) {
+          await workspace.setShaderBackendOverride(override);
+          expect(workspace.shaderBackendOverride, equals(override));
+          expect(backend.read(workspace), isNull);
+
+          await tester.pumpWidget(
+            _wrapForWidgetTest(
+              buildSettingDescriptorWidget(
+                backend,
+                workspace: workspace,
+                palette: palette,
+                capabilities: linuxDesktop,
+              ),
+            ),
+          );
+          final control = tester
+              .widget<BlenderSegmentedControl<ShaderBackendKind?>>(
+                find.byType(BlenderSegmentedControl<ShaderBackendKind?>),
+              );
+          expect(control.value, isNull);
+
+          final paletteItems = projectDescriptorsToPaletteItems(
+            <FtermDescriptor>[backend],
+            workspace,
+            linuxDesktop,
+          );
+          final byId = <String, String?>{
+            for (final item in paletteItems) item.id: item.activeBadge,
+          };
+          expect(byId['shader.backend.auto'], equals('Active'));
+          expect(byId['shader.backend.disabled'], isNull);
+        }
+
+        await workspace.setShaderBackendOverride(.disabled);
+        expect(backend.read(workspace), equals(ShaderBackendKind.disabled));
+        await tester.pumpWidget(
+          _wrapForWidgetTest(
+            buildSettingDescriptorWidget(
+              backend,
+              workspace: workspace,
+              palette: palette,
+              capabilities: linuxDesktop,
+            ),
+          ),
+        );
+        final disabledControl = tester
+            .widget<BlenderSegmentedControl<ShaderBackendKind?>>(
+              find.byType(BlenderSegmentedControl<ShaderBackendKind?>),
+            );
+        expect(disabledControl.value, equals(ShaderBackendKind.disabled));
+      },
+    );
   });
 }

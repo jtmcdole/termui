@@ -46,10 +46,10 @@ List<PaletteItem> projectDescriptorsToPaletteItems(
 ///
 /// [FtermActionDescriptor] entries are skipped. Each emitted entry resolves
 /// `title` from `searchTitle ?? settingsLabel` (or `label` / `title` for slider
-/// and custom descriptors), sets `desktopOnly` whenever
-/// `descriptor.visibility != .always`, sets `windowsOnly` when
-/// `descriptor.visibility == .windowsDesktop`, and propagates `featureFlag` and
-/// `isAvailable`.
+/// and custom descriptors), preserves `descriptor.visibility` alongside
+/// compatibility flags `desktopOnly` (`visibility != .always`) and
+/// `windowsOnly` (`visibility == .windowsDesktop`), and propagates
+/// `featureFlag` and `isAvailable`.
 List<SettingsSearchEntry> projectDescriptorsToSettingsSearchEntries(
   List<FtermDescriptor> descriptors,
 ) => List<SettingsSearchEntry>.unmodifiable(<SettingsSearchEntry>[
@@ -209,6 +209,7 @@ SettingsSearchEntry _buildSettingsSearchEntry({
   keywords: descriptor.keywords,
   desktopOnly: descriptor.visibility != .always,
   windowsOnly: descriptor.visibility == .windowsDesktop,
+  visibility: descriptor.visibility,
   featureFlag: descriptor.featureFlag,
   isAvailable: descriptor.isAvailable,
 );

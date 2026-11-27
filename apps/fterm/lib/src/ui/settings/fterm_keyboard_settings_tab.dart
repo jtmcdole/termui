@@ -33,6 +33,9 @@ final class FtermKeyboardSettingsTab extends StatefulWidget {
   /// Optional platform override for hermetic cross-platform testing.
   final TargetPlatform? platformOverride;
 
+  /// Optional precomputed capability context shared from the parent overlay.
+  final FtermCapabilityContext? capabilities;
+
   /// Panel visibility, collapse state, and search-filter configuration.
   final SettingsPanelFilter filter;
 
@@ -43,6 +46,7 @@ final class FtermKeyboardSettingsTab extends StatefulWidget {
     required this.palette,
     required this.isWeb,
     this.platformOverride,
+    this.capabilities,
     this.filter = const SettingsPanelFilter.showAll(),
   });
 
@@ -76,7 +80,9 @@ final class _FtermKeyboardSettingsTabState
   String? _inputError;
 
   TargetPlatform get _platform =>
-      widget.platformOverride ?? defaultTargetPlatform;
+      widget.capabilities?.platform ??
+      widget.platformOverride ??
+      defaultTargetPlatform;
 
   @override
   void dispose() {
@@ -231,6 +237,13 @@ final class _FtermKeyboardSettingsTabState
   Widget build(BuildContext context) {
     final filter = widget.filter;
     final palette = widget.palette;
+    final capabilities =
+        widget.capabilities ??
+        FtermCapabilityContext.fromWorkspace(
+          widget.workspace,
+          isWeb: widget.isWeb,
+          platform: _platform,
+        );
     return ListenableBuilder(
       listenable: widget.workspace.chromeNotifier,
       builder: (_, _) => SettingsSpacedColumn(
@@ -238,16 +251,15 @@ final class _FtermKeyboardSettingsTabState
           if (filter.showPanel('keyboard-meta'))
             _KeyboardMetaPanel(
               workspace: widget.workspace,
-              platform: _platform,
-              isWeb: widget.isWeb,
+              capabilities: capabilities,
               palette: palette,
               filter: filter,
             ),
           if (filter.showPanel('keyboard-passthrough'))
             _KeyboardPassthroughPanel(
               chords: widget.workspace.preferences.passthroughShortcuts,
-              platform: _platform,
-              isWeb: widget.isWeb,
+              platform: capabilities.platform,
+              isWeb: capabilities.isWeb,
               palette: palette,
               filter: filter,
               inputController: _chordInputCtrl,
@@ -265,6 +277,7 @@ final class _FtermKeyboardSettingsTabState
           if (filter.showPanel('keyboard-host-keys'))
             _KeyboardHostKeysPanel(
               workspace: widget.workspace,
+              capabilities: capabilities,
               palette: palette,
               filter: filter,
             ),
@@ -276,41 +289,32 @@ final class _FtermKeyboardSettingsTabState
 
 final class _KeyboardMetaPanel extends StatelessWidget {
   final FtermWorkspaceController workspace;
-  final TargetPlatform platform;
-  final bool isWeb;
+  final FtermCapabilityContext capabilities;
   final FtermOverlayPalette palette;
   final SettingsPanelFilter filter;
 
   const _KeyboardMetaPanel({
     required this.workspace,
-    required this.platform,
-    required this.isWeb,
+    required this.capabilities,
     required this.palette,
     required this.filter,
   });
 
   @override
-  Widget build(BuildContext context) {
-    final capabilities = FtermCapabilityContext.fromWorkspace(
-      workspace,
-      isWeb: isWeb,
-      platform: platform,
-    );
-    return BlenderSettingsPanel(
-      id: 'keyboard-meta',
-      title: 'Meta / Cmd Key Policy',
-      categoryBreadcrumb: filter.categoryBreadcrumb,
-      expanded: filter.panelExpanded('keyboard-meta'),
-      onToggleExpanded: filter.toggleFor('keyboard-meta'),
+  Widget build(BuildContext context) => BlenderSettingsPanel(
+    id: 'keyboard-meta',
+    title: 'Meta / Cmd Key Policy',
+    categoryBreadcrumb: filter.categoryBreadcrumb,
+    expanded: filter.panelExpanded('keyboard-meta'),
+    onToggleExpanded: filter.toggleFor('keyboard-meta'),
+    palette: palette,
+    child: buildSettingDescriptorWidget(
+      settingDescriptorById('keyboard-meta-policy')!,
+      workspace: workspace,
       palette: palette,
-      child: buildSettingDescriptorWidget(
-        settingDescriptorById('keyboard-meta-policy')!,
-        workspace: workspace,
-        palette: palette,
-        capabilities: capabilities,
-      ),
-    );
-  }
+      capabilities: capabilities,
+    ),
+  );
 }
 
 final class _KeyboardPassthroughPanel extends StatelessWidget {
@@ -392,49 +396,45 @@ final class _KeyboardPassthroughPanel extends StatelessWidget {
 
 final class _KeyboardHostKeysPanel extends StatelessWidget {
   final FtermWorkspaceController workspace;
+  final FtermCapabilityContext capabilities;
   final FtermOverlayPalette palette;
   final SettingsPanelFilter filter;
 
   const _KeyboardHostKeysPanel({
     required this.workspace,
+    required this.capabilities,
     required this.palette,
     required this.filter,
   });
 
   @override
-  Widget build(BuildContext context) {
-    final capabilities = FtermCapabilityContext.fromWorkspace(
-      workspace,
-      platform: Theme.of(context).platform,
-    );
-    return BlenderSettingsPanel(
-      id: 'keyboard-host-keys',
-      title: 'Host & Platform Keys',
-      categoryBreadcrumb: filter.categoryBreadcrumb,
-      expanded: filter.panelExpanded('keyboard-host-keys'),
-      onToggleExpanded: filter.toggleFor('keyboard-host-keys'),
-      palette: palette,
-      child: SettingsSpacedColumn(
-        spacing: 8,
-        children: [
-          if (filter.showItem('keyboard-macos-option'))
-            buildSettingDescriptorWidget(
-              settingDescriptorById('keyboard-macos-option')!,
-              workspace: workspace,
-              palette: palette,
-              capabilities: capabilities,
-            ),
-          if (filter.showItem('keyboard-f12-shortcuts'))
-            buildSettingDescriptorWidget(
-              settingDescriptorById('keyboard-f12-shortcuts')!,
-              workspace: workspace,
-              palette: palette,
-              capabilities: capabilities,
-            ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => BlenderSettingsPanel(
+    id: 'keyboard-host-keys',
+    title: 'Host & Platform Keys',
+    categoryBreadcrumb: filter.categoryBreadcrumb,
+    expanded: filter.panelExpanded('keyboard-host-keys'),
+    onToggleExpanded: filter.toggleFor('keyboard-host-keys'),
+    palette: palette,
+    child: SettingsSpacedColumn(
+      spacing: 8,
+      children: [
+        if (filter.showItem('keyboard-macos-option'))
+          buildSettingDescriptorWidget(
+            settingDescriptorById('keyboard-macos-option')!,
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
+        if (filter.showItem('keyboard-f12-shortcuts'))
+          buildSettingDescriptorWidget(
+            settingDescriptorById('keyboard-f12-shortcuts')!,
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
+      ],
+    ),
+  );
 }
 
 final class _PassthroughShortcutsSection extends StatelessWidget {

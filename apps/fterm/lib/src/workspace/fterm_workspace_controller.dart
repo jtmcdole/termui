@@ -290,6 +290,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
   /// Fallback terminal font size (in logical pixels) when preferences omit it.
   final double defaultFontSize;
 
+  /// Unmodifiable set of runtime feature flag identifiers shared across
+  /// Settings UI, Settings search, Command Palette, and Shortcut Dispatch.
+  final Set<String> enabledFeatures;
+
   final List<FtermTabState> _tabs = [];
   final Map<String, FtermPaneController> _panes = {};
   late final Map<String, FtermPaneController> _panesView =
@@ -420,6 +424,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     AutomationHttpServerBackend? automationServerBackend,
     AutomationPointerDispatcher? automationPointerDispatcher,
     Future<void> Function()? automationFrameSettle,
+    Set<String> enabledFeatures = const <String>{},
   }) => FtermWorkspaceController._(
     launchConfig: launchConfig,
     repository: repository,
@@ -427,6 +432,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     audioController: audioController,
     storage: storage,
     defaultFontSize: defaultFontSize,
+    enabledFeatures: enabledFeatures,
     initialSettings: loadStoredSettings(
       storage,
       defaultDockPosition: defaultDockPosition,
@@ -466,6 +472,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     required this.audioController,
     required SettingsStorage storage,
     required this.defaultFontSize,
+    required Set<String> enabledFeatures,
     required CastWorkspaceSettings initialSettings,
     required FtermPreferences initialPreferences,
     required RelayCredentials initialCredentials,
@@ -491,7 +498,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
     required AutomationHttpServerBackend? automationServerBackend,
     required AutomationPointerDispatcher? automationPointerDispatcher,
     required Future<void> Function()? automationFrameSettle,
-  }) : _storage = storage,
+  }) : enabledFeatures = enabledFeatures.isEmpty
+           ? const <String>{}
+           : Set<String>.unmodifiable(enabledFeatures),
+       _storage = storage,
        _settingsSaver = ThrottledSettingsSaver(storage),
        _clock = clock ?? const Clock(),
        _pendingWebResumeSnapshot = initialWebResumeSnapshot,

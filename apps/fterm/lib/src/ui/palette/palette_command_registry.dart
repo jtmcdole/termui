@@ -66,16 +66,19 @@ final class PaletteContext {
   final Set<String> enabledFeatures;
 
   /// Creates a [PaletteContext] derived from [workspace] and runtime flags.
+  ///
+  /// When [enabledFeatures] is omitted, inherits `workspace.enabledFeatures`.
   PaletteContext({
     required this.workspace,
     required this.isWeb,
     required this.platform,
     bool? isDesktopHost,
     bool? supportsUpdates,
-    this.enabledFeatures = const <String>{},
+    Set<String>? enabledFeatures,
   }) : isDesktopHost = isDesktopHost ?? workspace.isDesktopHost,
        supportsUpdates =
-           supportsUpdates ?? workspace.updateViewModel.isSupportedDesktop;
+           supportsUpdates ?? workspace.updateViewModel.isSupportedDesktop,
+       enabledFeatures = enabledFeatures ?? workspace.enabledFeatures;
 
   /// Unified capability context shared with declarative descriptors.
   FtermCapabilityContext get capabilities => FtermCapabilityContext(

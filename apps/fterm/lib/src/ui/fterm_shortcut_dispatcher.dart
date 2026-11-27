@@ -77,15 +77,17 @@ final class FtermShortcutDispatcher {
 
   final TargetPlatform? _platformOverride;
   final bool? _isWebOverride;
-  final Set<String> _enabledFeatures;
+  final Set<String>? _enabledFeatures;
   final List<FtermDescriptor>? _descriptorsOverride;
 
   /// Creates a shortcut dispatcher bound to [workspace].
+  ///
+  /// When `enabledFeatures` is omitted, inherits `workspace.enabledFeatures`.
   const FtermShortcutDispatcher({
     required this.workspace,
     this._platformOverride,
     this._isWebOverride,
-    this._enabledFeatures = const <String>{},
+    this._enabledFeatures,
     this._descriptorsOverride,
   });
 
@@ -331,7 +333,7 @@ final class FtermShortcutDispatcher {
       if (chord == null || !chord.matches(key, shift: shift, character: ch)) {
         continue;
       }
-      if (!descriptor.isVisibleFor(ctx)) return false;
+      if (!descriptor.isVisibleFor(ctx)) continue;
       _executeDescriptor(descriptor);
       return true;
     }
@@ -480,7 +482,7 @@ final class FtermShortcutDispatcher {
           !binding.matchesDesktopStroke(key, modifiers, ctx)) {
         continue;
       }
-      if (!descriptor.isVisibleFor(ctx)) return false;
+      if (!descriptor.isVisibleFor(ctx)) continue;
       _executeDescriptor(descriptor);
       return true;
     }
@@ -489,7 +491,7 @@ final class FtermShortcutDispatcher {
 
   bool _isDescriptorVisible(String id, FtermCapabilityContext ctx) {
     final descriptor = _findDescriptorById(id);
-    return descriptor == null || descriptor.isVisibleFor(ctx);
+    return descriptor != null && descriptor.isVisibleFor(ctx);
   }
 
   FtermDescriptor? _findDescriptorById(String id) {
@@ -497,6 +499,7 @@ final class FtermShortcutDispatcher {
       for (final descriptor in custom) {
         if (descriptor.id == id) return descriptor;
       }
+      return null;
     }
     return actionDescriptorById(id) ?? settingDescriptorById(id);
   }

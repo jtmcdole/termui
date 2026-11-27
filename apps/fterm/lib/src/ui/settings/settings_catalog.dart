@@ -59,6 +59,9 @@ final class SettingsSearchItem {
   /// Whether this entry only renders on native Windows builds.
   final bool windowsOnly;
 
+  /// Declarative platform and capability visibility gate for this entry.
+  final FtermVisibility visibility;
+
   /// Optional runtime feature flag required to surface this setting.
   final String? featureFlag;
 
@@ -73,11 +76,22 @@ final class SettingsSearchItem {
     required this.panelTitle,
     required this.title,
     required this.keywords,
-    this.desktopOnly = false,
-    this.windowsOnly = false,
+    bool? desktopOnly,
+    bool? windowsOnly,
+    FtermVisibility? visibility,
     this.featureFlag,
     this.isAvailable,
-  });
+  }) : visibility =
+           visibility ??
+           ((windowsOnly ?? false)
+               ? .windowsDesktop
+               : ((desktopOnly ?? false) ? .desktopOnly : .always)),
+       desktopOnly =
+           desktopOnly ??
+           (visibility != null
+               ? visibility != .always
+               : (windowsOnly ?? false)),
+       windowsOnly = windowsOnly ?? (visibility == .windowsDesktop);
 
   /// Maps a pure [SettingsSearchEntry] projected from declarative descriptors
   /// into a [SettingsSearchItem].
@@ -91,6 +105,7 @@ final class SettingsSearchItem {
         keywords: entry.keywords,
         desktopOnly: entry.desktopOnly,
         windowsOnly: entry.windowsOnly,
+        visibility: entry.visibility,
         featureFlag: entry.featureFlag,
         isAvailable: entry.isAvailable,
       );
@@ -291,12 +306,17 @@ abstract final class SettingsCatalog {
 
   /// Executes a multi-token case-insensitive search across all visible
   /// sections and returns grouped panel matches plus per-section badge counts.
+  ///
+  /// When [capabilities] is provided, it is used directly; otherwise a
+  /// capability context is synthesized from [isWeb], [isDesktopHost],
+  /// [supportsUpdates], [isWindows], [platform], and [enabledFeatures].
   static SettingsSearchResult search(
     String rawQuery, {
-    required bool isWeb,
-    required bool isDesktopHost,
-    required bool supportsUpdates,
-    required bool isWindows,
+    FtermCapabilityContext? capabilities,
+    bool isWeb = false,
+    bool isDesktopHost = false,
+    bool supportsUpdates = false,
+    bool isWindows = false,
     TargetPlatform? platform,
     Set<String> enabledFeatures = const <String>{},
     List<SettingsSearchItem>? items,
@@ -313,13 +333,15 @@ abstract final class SettingsCatalog {
       );
     }
 
-    final capabilities = FtermCapabilityContext(
-      isWeb: isWeb,
-      platform: platform ?? (isWindows ? .windows : .linux),
-      isDesktopHost: isDesktopHost,
-      supportsUpdates: supportsUpdates,
-      enabledFeatures: enabledFeatures,
-    );
+    final resolvedCapabilities =
+        capabilities ??
+        FtermCapabilityContext(
+          isWeb: isWeb,
+          platform: platform ?? (isWindows ? .windows : .linux),
+          isDesktopHost: isDesktopHost,
+          supportsUpdates: supportsUpdates,
+          enabledFeatures: enabledFeatures,
+        );
     final indexed = items == null ? _indexedSearchItems : _indexItems(items);
 
     final counts = <FtermSettingsSection, int>{};
@@ -330,7 +352,7 @@ abstract final class SettingsCatalog {
 
     for (final entry in indexed) {
       final item = entry.item;
-      if (!_itemVisible(item, capabilities: capabilities)) continue;
+      if (!_itemVisible(item, capabilities: resolvedCapabilities)) continue;
       if (!_matchesAllTokens(entry.haystack, tokens)) continue;
 
       total++;
@@ -374,6 +396,7 @@ abstract final class SettingsCatalog {
     )) {
       return false;
     }
+    if (!item.visibility.isVisible(capabilities)) return false;
     if (item.windowsOnly && !capabilities.isWindowsDesktop) return false;
     if (item.desktopOnly && capabilities.isWeb) return false;
     if (item.featureFlag case final flag?

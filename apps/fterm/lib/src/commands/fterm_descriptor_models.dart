@@ -27,6 +27,7 @@ typedef SettingsSearchEntry = ({
   String keywords,
   bool desktopOnly,
   bool windowsOnly,
+  FtermVisibility visibility,
   String? featureFlag,
   bool Function(FtermCapabilityContext ctx)? isAvailable,
 });

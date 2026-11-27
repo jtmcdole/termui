@@ -944,8 +944,8 @@ void main() {
       expect(() => entries.add(portEntry), throwsUnsupportedError);
     });
 
-    test('maps every FtermVisibility value accurately to desktopOnly and '
-        'windowsOnly flags', () {
+    test('maps every FtermVisibility value accurately to visibility, '
+        'desktopOnly, and windowsOnly flags', () {
       final descriptors = <FtermDescriptor>[
         for (final visibility in FtermVisibility.values)
           FtermCustomSettingDescriptor(
@@ -965,6 +965,11 @@ void main() {
 
       for (final visibility in FtermVisibility.values) {
         final entry = byId['vis-${visibility.name}']!;
+        expect(
+          entry.visibility,
+          equals(visibility),
+          reason: 'visibility mismatch for $visibility',
+        );
         expect(
           entry.desktopOnly,
           equals(visibility != FtermVisibility.always),
