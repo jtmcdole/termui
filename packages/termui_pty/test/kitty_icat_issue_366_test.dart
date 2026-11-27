@@ -92,12 +92,12 @@ void main() {
         expect(replies, isNot(contains('\x1b_Gi=3;OK\x1b\\')));
         expect(replies, isNot(contains('\x1b_Gi=4;OK\x1b\\')));
         // Unsafe t=t path (missing tty-graphics-protocol) and unsupported t=f return EINVAL;
-        // missing t=s shm object returns ENOENT on Linux (EINVAL elsewhere).
+        // missing t=s shm object returns ENOENT on Linux/macOS (EINVAL elsewhere).
         expect(replies, contains(startsWith('\x1b_Gi=2;EINVAL:')));
         expect(
           replies,
           contains(
-            Platform.isLinux
+            (Platform.isLinux || Platform.isMacOS)
                 ? startsWith('\x1b_Gi=3;ENOENT:')
                 : startsWith('\x1b_Gi=3;EINVAL:'),
           ),
@@ -115,7 +115,7 @@ void main() {
         expect(
           replies,
           contains(
-            Platform.isLinux
+            (Platform.isLinux || Platform.isMacOS)
                 ? startsWith('\x1b_Gi=5;ENOENT:')
                 : startsWith('\x1b_Gi=5;EINVAL:'),
           ),

@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'kitty_medium.dart';
+import 'kitty_shm_macos.dart';
 
 export 'kitty_medium.dart';
 
@@ -13,7 +14,7 @@ final RegExp _pathSeparatorRegex = RegExp(r'[/\\]');
 /// transmission medium [medium] (`'t'` temp file or `'s'` POSIX shared memory).
 bool platformSupportsKittyMedium(String medium) => switch (medium) {
   't' => true,
-  's' => Platform.isLinux,
+  's' => Platform.isLinux || Platform.isMacOS,
   _ => false,
 };
 
@@ -141,8 +142,9 @@ KittyMediumReadResult _readFileSlice(
   }
 }
 
-/// Reads and unlinks a Kitty Graphics Protocol temp file (`t=t`) or Linux
-/// POSIX shared-memory object (`t=s`), enforcing [maxBytes] and safety checks.
+/// Reads and unlinks a Kitty Graphics Protocol temp file (`t=t`) or
+/// Linux/macOS POSIX shared-memory object (`t=s`), enforcing [maxBytes] and
+/// safety checks.
 KittyMediumReadResult readPlatformKittyMedium(
   String medium,
   Uint8List encodedPathBytes, {
@@ -165,6 +167,14 @@ KittyMediumReadResult readPlatformKittyMedium(
   }
   if (decoded.isEmpty || decoded.contains('\x00')) {
     return const KittyMediumReadInvalid();
+  }
+  if (medium == 's' && Platform.isMacOS) {
+    return readMacosPosixShm(
+      decoded,
+      maxBytes: maxBytes,
+      offset: offset,
+      size: size,
+    );
   }
 
   final resolved = _resolveTargetPath(medium, decoded);

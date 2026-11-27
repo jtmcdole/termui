@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:termui/termui.dart';
+import 'package:termui_pty/src/kitty_shm_macos.dart';
 import 'package:termui_pty/termui_pty.dart';
 import 'package:test/test.dart';
 
@@ -827,6 +828,23 @@ void main() {
           replies,
           equals(['\x1b_Gi=140;EINVAL:unsupported action\x1b\\']),
         );
+      },
+    );
+
+    test(
+      'normalizeMacosShmName enforces leading slash, path safety, and 30-byte PSHMNAMLEN cap',
+      () {
+        expect(normalizeMacosShmName('/peng-123-1'), equals('/peng-123-1'));
+        expect(normalizeMacosShmName('peng-123-1'), equals('/peng-123-1'));
+        expect(normalizeMacosShmName(''), isNull);
+        expect(normalizeMacosShmName('/'), isNull);
+        expect(normalizeMacosShmName('.'), isNull);
+        expect(normalizeMacosShmName('..'), isNull);
+        expect(normalizeMacosShmName('/foo/bar'), isNull);
+        expect(normalizeMacosShmName(r'/foo\bar'), isNull);
+        expect(normalizeMacosShmName('/foo\x00bar'), isNull);
+        expect(normalizeMacosShmName('/${'a' * 29}'), equals('/${'a' * 29}'));
+        expect(normalizeMacosShmName('/${'a' * 30}'), isNull);
       },
     );
   });
