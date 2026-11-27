@@ -1,3 +1,7 @@
+## 0.4.1
+
+ - **FIX**(cast_protocol): prevent premature sub.cancel() from leaking Dart 5s WebSocket close timer (#479).
+
 ## 0.4.0
 
 > Note: This release has breaking changes.

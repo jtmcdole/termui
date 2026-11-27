@@ -1,3 +1,14 @@
+## 0.8.0
+
+> Note: This release has breaking changes.
+
+ - **FEAT**(fterm): add VS Code-style Command Palette with scrollback jump and search (#486).
+ - **FEAT**(fterm): overhaul Settings modal with Blender-style sidebar, panels, and search (#485).
+ - **FEAT**(fterm): wire HTTP automation v1 router, OpenAPI spec, ConPTY fix, and sizzle director (#483).
+ - **FEAT**(fterm): add loopback HTTP automation server, screen search, and Settings tab (#482).
+ - **FEAT**(fterm): add automation driver contracts, CLI flags, and Win32 window bounds (#481).
+ - **BREAKING** **REFACTOR**(fterm): unify command, setting, and shortcut descriptors (#487).
+
 ## 0.7.0
 
 > Note: This release has breaking changes.
