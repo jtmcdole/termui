@@ -12,6 +12,84 @@ enum KttyCapabilityStatus {
   unsupported,
 }
 
+/// Classification tier distinguishing required core probes from opt-in probes.
+enum KttyCapabilityTier {
+  /// Core terminal protocol probe counted toward `--strict` and `--self-test`.
+  core,
+
+  /// Opt-in or policy-gated probe (e.g. `t=t` temp files, `t=s` shared memory).
+  optional,
+}
+
+/// Wire-level options controlling optional probes and multiplexer passthrough.
+final class KttyProbeOptions {
+  /// Whether to wrap Kitty Graphics `APC` probe commands in `tmux` DCS passthrough.
+  final bool wrapTmuxPassthrough;
+
+  /// Optional local temporary RGBA file path for probing Kitty `a=q,t=t`.
+  final String? tempProbeFilePath;
+
+  /// Optional POSIX shared-memory object name for probing Kitty `a=q,t=s`.
+  final String? shmProbeName;
+
+  /// Creates [KttyProbeOptions].
+  const KttyProbeOptions({
+    this.wrapTmuxPassthrough = false,
+    this.tempProbeFilePath,
+    this.shmProbeName,
+  });
+}
+
+/// Diagnostic snapshot of an enclosing terminal multiplexer (`tmux` / `screen`).
+final class KttyMultiplexerDiagnostics {
+  /// Detected multiplexer name (`'tmux'` or `'screen'`).
+  final String multiplexer;
+
+  /// Value of `tmux` `allow-passthrough` (`'off'`, `'on'`, `'all'`, or `null`).
+  final String? allowPassthrough;
+
+  /// Whether truecolor (`RGB` or `Tc`) support is advertised by multiplexer config.
+  final bool hasTrueColor;
+
+  /// Actionable remediation hints for enabling passthrough or truecolor.
+  final List<String> hints;
+
+  /// Creates a [KttyMultiplexerDiagnostics] snapshot.
+  const KttyMultiplexerDiagnostics({
+    required this.multiplexer,
+    this.allowPassthrough,
+    this.hasTrueColor = false,
+    this.hints = const [],
+  });
+
+  /// Serializes multiplexer diagnostics to a JSON-compatible map.
+  Map<String, Object?> toJsonMap() => {
+    'multiplexer': multiplexer,
+    'allowPassthrough': allowPassthrough,
+    'hasTrueColor': hasTrueColor,
+    'hints': hints,
+  };
+}
+
+/// Lifecycle handle for local temp-file (`t=t`) and shared-memory (`t=s`) probe
+/// fixtures created outside Web-safe core libraries.
+abstract interface class KttyLocalMediaProbeSession {
+  /// Absolute path to the temporary RGBA probe file, or `null` when unavailable.
+  String? get tempFilePath;
+
+  /// POSIX shared-memory object name, or `null` when unavailable.
+  String? get shmObjectName;
+
+  /// Whether the temporary probe file still exists on disk (verifying `a=q` did not unlink it).
+  bool get tempFileStillExists;
+
+  /// Whether the shared-memory probe object still exists (verifying `a=q` did not unlink it).
+  bool get shmStillExists;
+
+  /// Removes any temporary probe artifacts created by this session.
+  void dispose();
+}
+
 /// Decoded `DECRQM` (`CSI ? Pm ; Ps $ y`) mode report status.
 enum DecrqmModeState {
   /// Mode is not recognized (`Ps = 0`).
