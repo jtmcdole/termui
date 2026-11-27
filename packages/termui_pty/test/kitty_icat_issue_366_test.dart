@@ -754,13 +754,15 @@ void main() {
     );
 
     test(
-      'Chunked tmux/U=1 kitten icat uploads with explicit i= on chunk 0 and repeated a=T without i= on continuation chunks register and resolve placeholders',
+      'Chunked tmux/U=1 kitten icat uploads with explicit i= on chunk 0 and repeated a= without i= continue a=T/a=t/a=q, emit OK replies, and isolate cross-action or new-metadata frames',
       () {
+        final replies = <String>[];
         final vt = VirtualTerminal(
           width: 20,
           height: 6,
           cellPixelWidth: 10,
           cellPixelHeight: 20,
+          onReply: replies.add,
         );
 
         // 1. Multi-chunk PNG (f=100, U=1) matching kitten icat inside tmux:
@@ -792,6 +794,7 @@ void main() {
         expect(registeredPng.gridCols, equals(4));
         expect(registeredPng.gridRows, equals(2));
         expect(registeredPng.rgbaPixels, equals(pngBytes));
+        expect(replies, isEmpty);
         // U=1 virtual upload must not write direct cells at cursor.
         expect(vt.buffer.getCharacter(0, 0), equals(' '));
         expect(vt.cursorX, equals(0));
@@ -839,6 +842,61 @@ void main() {
         expect(registeredRgb.pixelHeight, equals(20));
         expect(registeredRgb.gridCols, equals(2));
         expect(registeredRgb.gridRows, equals(1));
+        expect(replies, isEmpty);
+
+        // 3. Explicit-ID a=t (q=0) repeating a=t without i= registers and emits OK.
+        final transmitPx = Uint8List.fromList([11, 22, 33, 255]);
+        final transmitB64 = base64Encode(transmitPx);
+        final tMid = transmitB64.length ~/ 2;
+        vt.writeString(
+          '\x1b_Ga=t,i=801,f=32,s=1,v=1,m=1;${transmitB64.substring(0, tMid)}\x1b\\',
+        );
+        expect(replies, isEmpty);
+        expect(vt.imageRegistry.lookupImage(801), isNull);
+        vt.writeString('\x1b_Ga=t,m=0;${transmitB64.substring(tMid)}\x1b\\');
+        expect(replies, equals(['\x1b_Gi=801;OK\x1b\\']));
+        expect(
+          vt.imageRegistry.lookupImage(801)?.rgbaPixels,
+          equals(transmitPx),
+        );
+
+        // 4. Explicit-ID a=q (q=0) repeating a=q without i= emits OK without registering.
+        replies.clear();
+        final queryB64 = base64Encode(zlib.encode(const [9, 8, 7, 6]));
+        final qMid = queryB64.length ~/ 2;
+        vt.writeString(
+          '\x1b_Ga=q,t=d,f=32,o=z,s=1,v=1,i=802,m=1;${queryB64.substring(0, qMid)}\x1b\\',
+        );
+        expect(replies, isEmpty);
+        vt.writeString('\x1b_Ga=q,m=0;${queryB64.substring(qMid)}\x1b\\');
+        expect(replies, equals(['\x1b_Gi=802;OK\x1b\\']));
+        expect(vt.imageRegistry.lookupImage(802), isNull);
+
+        // 5. Explicit-ID a=T,m=1 (q=0) resists bare cross-action a=t and new-metadata a=T.
+        replies.clear();
+        final isoPx = Uint8List.fromList([44, 55, 66, 255]);
+        final isoB64 = base64Encode(isoPx);
+        final isoMid = isoB64.length ~/ 2;
+        final otherPx = Uint8List.fromList([99, 88, 77, 255]);
+        final otherB64 = base64Encode(otherPx);
+
+        vt.writeString(
+          '\x1b_Ga=T,i=803,f=32,s=1,v=1,U=1,m=1;${isoB64.substring(0, isoMid)}\x1b\\',
+        );
+        // Bare cross-action a=t (no i=, no metadata) must not hijack open a=T i=803.
+        vt.writeString('\x1b_Ga=t;$otherB64\x1b\\');
+        expect(vt.imageRegistry.lookupImage(803), isNull);
+        expect(replies, isEmpty);
+
+        // Single-chunk new-metadata a=T must not hijack or overwrite _lastActiveUploadId.
+        vt.writeString('\x1b_Ga=T,f=32,s=1,v=1,U=1;$otherB64\x1b\\');
+        expect(vt.imageRegistry.lookupImage(803), isNull);
+        expect(replies, isEmpty);
+
+        // Final repeated a=T without i= completes i=803 and emits OK.
+        vt.writeString('\x1b_Ga=T;${isoB64.substring(isoMid)}\x1b\\');
+        expect(replies, equals(['\x1b_Gi=803;OK\x1b\\']));
+        expect(vt.imageRegistry.lookupImage(803)?.rgbaPixels, equals(isoPx));
       },
     );
   });
