@@ -4,17 +4,21 @@ import 'dart:convert';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
+import 'ktty_probe_assets.dart';
 import 'ktty_probe_report.dart';
 import 'ktty_probe_widgets.dart';
 import 'ktty_reply_interceptor.dart';
 import 'ktty_wire_backend.dart';
 
 /// Runs a non-interactive capability probe over [wireInput] and [onWriteWire],
-/// completing as soon as the `DA1` sentinel arrives or [timeout] elapses.
+/// completing as soon as the `DA1` sentinel arrives, [stopHandle] stops, or
+/// [timeout] elapses.
 Future<KttyProbeReport> runKttyBatchProbe({
   required Stream<List<int>> wireInput,
   required void Function(String data) onWriteWire,
   Duration timeout = const Duration(milliseconds: 500),
+  KttyProbeOptions options = const KttyProbeOptions(),
+  KttyProbeStopHandle? stopHandle,
 }) async {
   final report = KttyProbeReport()..resetForNewProbe();
   final interceptor = KttyReplyInterceptor(report);
@@ -26,18 +30,26 @@ Future<KttyProbeReport> runKttyBatchProbe({
     }
   }
 
+  void finalizeAndComplete(String reason) {
+    if (done.isCompleted) return;
+    report.finalizePending(reason);
+    if (!done.isCompleted) {
+      done.complete();
+    }
+  }
+
   report.addListener(checkComplete);
+  stopHandle?._attach(() => finalizeAndComplete('Aborted before DA1'));
   final sub = wireInput.listen((chunk) {
     interceptor.processChunk(chunk);
   });
   final timer = Timer(timeout, () {
-    if (!done.isCompleted) {
-      report.finalizePending('Timed out waiting for DA1');
-      done.complete();
-    }
+    finalizeAndComplete('Timed out waiting for DA1');
   });
 
-  onWriteWire(KttyProbeReport.buildWireProbeSequence());
+  if (!done.isCompleted) {
+    onWriteWire(KttyProbeReport.buildWireProbeSequence(options: options));
+  }
   try {
     await done.future;
   } finally {
@@ -66,11 +78,24 @@ final class KttyProbeStopHandle {
   }
 }
 
+bool _bufferContainsKittyImageId(Buffer buffer, int imageId) {
+  final targetRgb = imageId & 0xFFFFFF;
+  final count = buffer.width * buffer.height;
+  for (var i = 0; i < count; i++) {
+    final mods = buffer.attributes[i * 3 + 2];
+    if ((mods & Modifier.kittyPlaceholder) == 0) continue;
+    final fg = buffer.attributes[i * 3];
+    if ((fg & 0xFFFFFF) == targetRgb) return true;
+  }
+  return false;
+}
+
 /// Runs the interactive KTTY Probe & Check TUI over a [KttyWireTerminalBackend].
 Future<KttyProbeReport> runKttyProbeOnWire(
   KttyWireTerminalBackend backend, {
   Duration probeTimeout = const Duration(milliseconds: 600),
   KttyProbeStopHandle? stopHandle,
+  KttyProbeOptions options = const KttyProbeOptions(),
 }) async {
   final terminal = term.Terminal(backend);
   final sceneManager = SceneManager(terminal, renderingMode: .alternateScreen)
@@ -91,6 +116,27 @@ Future<KttyProbeReport> runKttyProbeOnWire(
   backend.interceptor.sgrPixelsRequested = true;
   backend.write('\x1b[?1004h\x1b[>11u\x1b[?1016h');
 
+  var emittedShorthandSignature = '';
+  void emitShorthandPlacementsIfUploaded(Buffer frame) {
+    if (exitCompleter.isCompleted) return;
+    if (!_bufferContainsKittyImageId(frame, kttyVisualShorthandImageId)) return;
+    final data = KittyImageRegistry.global.lookupImage(
+      kttyVisualShorthandImageId,
+    );
+    if (data == null) return;
+    final sig = '${data.version}:${data.gridCols}x${data.gridRows}';
+    if (sig == emittedShorthandSignature) return;
+    emittedShorthandSignature = sig;
+    _writeApcSequence(
+      backend,
+      buildShorthandPlacementApcCommands(
+        cols: data.gridCols,
+        rows: data.gridRows,
+      ),
+      wrapTmux: options.wrapTmuxPassthrough,
+    );
+  }
+
   late final PromptRunner<void> runner;
   runner = PromptRunner<void>(
     terminal: terminal,
@@ -99,10 +145,14 @@ Future<KttyProbeReport> runKttyProbeOnWire(
       terminal: terminal,
       probeTimeout: probeTimeout,
       onQuit: requestQuit,
+      options: options,
     ),
     alternateScreen: false,
     mode: .managed,
-    onFramePainted: (_) => sceneManager.scheduleRender(),
+    onFramePainted: (frame) {
+      sceneManager.scheduleRender();
+      scheduleMicrotask(() => emitShorthandPlacementsIfUploaded(frame));
+    },
   );
 
   final rootLayer = SceneLayer(
@@ -138,6 +188,29 @@ Future<KttyProbeReport> runKttyProbeOnWire(
   return backend.report;
 }
 
+final RegExp _singleApcCommandRegex = RegExp(r'\x1b_G[^\x1b]*\x1b\\');
+
+void _writeApcSequence(
+  KttyWireTerminalBackend backend,
+  String sequence, {
+  required bool wrapTmux,
+}) {
+  if (!wrapTmux) {
+    backend.write(sequence);
+    return;
+  }
+  final matches = _singleApcCommandRegex.allMatches(sequence).toList();
+  if (matches.isEmpty) {
+    backend.write(wrapTmuxDcsPassthrough(sequence));
+    return;
+  }
+  final sb = StringBuffer();
+  for (final match in matches) {
+    sb.write(wrapTmuxDcsPassthrough(match.group(0)!));
+  }
+  backend.write(sb.toString());
+}
+
 /// Stateful root widget managing probe lifecycles, mode toggles, and telemetry.
 final class KttyProbeStatefulRoot extends StatefulWidget {
   /// Wire backend carrying raw escape sequences and replies.
@@ -152,6 +225,9 @@ final class KttyProbeStatefulRoot extends StatefulWidget {
   /// Callback invoked when the user exits the probe app.
   final void Function() onQuit;
 
+  /// Optional wire-level probe options (e.g. tmux passthrough or local media).
+  final KttyProbeOptions options;
+
   /// Creates a [KttyProbeStatefulRoot].
   const KttyProbeStatefulRoot({
     super.key,
@@ -159,6 +235,7 @@ final class KttyProbeStatefulRoot extends StatefulWidget {
     required this.terminal,
     required this.probeTimeout,
     required this.onQuit,
+    this.options = const KttyProbeOptions(),
   });
 
   @override
@@ -166,7 +243,7 @@ final class KttyProbeStatefulRoot extends StatefulWidget {
 }
 
 final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
-  static const List<int> _kbFlagCycle = [11, 3, 1, 0];
+  static const List<int> _kbFlagCycle = [11, 31, 15, 3, 1, 0];
 
   final FocusNode _focusNode = FocusNode(id: 'ktty_probe_root');
   final List<String> _keyLog = [
@@ -177,11 +254,14 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
   int _kbCycleIndex = 0;
   bool _sgrPixelsEnabled = true;
   bool _showOcclusion = true;
+  bool _deleteFreeDataNext = false;
+  String? _deleteModeLabel;
   int _notifySeq = 0;
   int _clipboardSeq = 0;
   int _titleSeq = 0;
   int _promptSeq = 0;
-  String _lastActionMessage = 'Ready — press [N] OSC99, [C] OSC52, [T] Title';
+  String _lastActionMessage =
+      'Ready — press [D] DelMode, [N] OSC99, [C] OSC52, [T] Title';
   Timer? _probeFallbackTimer;
 
   int get _requestedKbFlags => _kbFlagCycle[_kbCycleIndex];
@@ -205,10 +285,20 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
     if (mounted) setState(() {});
   }
 
+  void _writeApc(String sequence) {
+    _writeApcSequence(
+      widget.backend,
+      sequence,
+      wrapTmux: widget.options.wrapTmuxPassthrough,
+    );
+  }
+
   void _triggerProbe() {
     _probeFallbackTimer?.cancel();
     widget.backend.report.resetForNewProbe();
-    widget.backend.write(KttyProbeReport.buildWireProbeSequence());
+    widget.backend.write(
+      KttyProbeReport.buildWireProbeSequence(options: widget.options),
+    );
     _probeFallbackTimer = Timer(widget.probeTimeout, () {
       if (!widget.backend.report.isComplete) {
         widget.backend.report.finalizePending('Timed out waiting for DA1');
@@ -251,6 +341,19 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
       _showOcclusion = !_showOcclusion;
       _lastActionMessage =
           'Z-index cell occlusion overlay: ${_showOcclusion ? "ON" : "OFF"}';
+    });
+  }
+
+  void _cycleDeleteMode() {
+    final freeData = _deleteFreeDataNext;
+    _deleteFreeDataNext = !freeData;
+    final mode = freeData ? 'A' : 'a';
+    _writeApc('\x1b_Ga=d,d=$mode,q=2\x1b\\');
+    setState(() {
+      _deleteModeLabel = 'd=$mode';
+      _lastActionMessage = freeData
+          ? 'Sent Kitty delete a=d,d=A,q=2 (frees unreferenced images)'
+          : 'Sent Kitty delete a=d,d=a,q=2 (clears direct placements, keeps U=1)';
     });
   }
 
@@ -353,6 +456,8 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
         _toggleSgrPixels();
       case 'o' || 'O':
         _toggleOcclusion();
+      case 'd' || 'D':
+        _cycleDeleteMode();
       case 'n' || 'N':
         _sendNotification();
       case 'c' || 'C':
@@ -379,6 +484,7 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
       showOcclusion: _showOcclusion,
       keyLog: _keyLog,
       lastActionMessage: _lastActionMessage,
+      deleteModeLabel: _deleteModeLabel,
     );
     final actions = KttyProbeActions(
       onSelectTab: _selectTab,
@@ -386,6 +492,7 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
       onCycleKittyKeyboard: _cycleKittyKeyboard,
       onToggleSgrPixels: _toggleSgrPixels,
       onToggleOcclusion: _toggleOcclusion,
+      onCycleDeleteMode: _cycleDeleteMode,
       onSendNotification: _sendNotification,
       onSendClipboard: _sendClipboard,
       onCycleWindowTitle: _cycleWindowTitle,
