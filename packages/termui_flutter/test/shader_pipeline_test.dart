@@ -4437,6 +4437,129 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         expect(backend.syncBackgroundCalls, isNotEmpty);
       },
     );
+
+    testWidgets(
+      'resumes fallback background rendering when direct pipeline compile disables direct mode or priming returns false on a static shader',
+      (tester) async {
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final atlasImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 32,
+            height: 32,
+            color: const Color(0xFFFFFFFF),
+          ),
+        );
+        addTearDown(() => atlasImg?.dispose());
+        final outputImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 120,
+            height: 60,
+            color: const Color(0xFF112233),
+          ),
+        );
+        addTearDown(() => outputImg?.dispose());
+        final kittyImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 4,
+            height: 4,
+            color: const Color(0xFF00FF00),
+          ),
+        );
+        addTearDown(() => kittyImg?.dispose());
+
+        final prepareCompleter = Completer<bool>();
+        final backend = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+          primedInitially: true,
+          prepareHandler: (_) => prepareCompleter.future,
+        );
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+
+        // Static (non-animated) background shader so _syncTicker() is a no-op
+        // and recovery depends on clearing _directPrepareInFlight + notifying
+        // _frameNotifier.
+        const staticBgGlsl = '''
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = vec4(0.1, 0.2, 0.3, 1.0);
+}
+''';
+        final config = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'bg:static',
+              stage: TerminalShaderStage.background,
+              customSourcePath: 'static.glsl',
+            ),
+          ],
+          animationMode: ShaderAnimationMode.always,
+        );
+        await tester.runAsync(
+          () => controller.syncConfig(
+            config,
+            sourceLoader: (_) async => staticBgGlsl,
+          ),
+        );
+
+        final activity = _TestPaintNotifier();
+        addTearDown(activity.dispose);
+        final batch = GpuAtlasQuadBatch(
+          instanceData: Float32List(16),
+          instanceCount: 1,
+          italicStartInstanceIndex: 1,
+          kittyInsertInstanceIndex: 1,
+          generation: 1,
+          defaultBackgroundArgb: 0xFF000000,
+          kittyQuads: <GpuKittyQuad>[
+            GpuKittyQuad(
+              image: kittyImg!,
+              dstX: 0,
+              dstY: 0,
+              dstWidth: 16,
+              dstHeight: 16,
+              u0: 0,
+              v0: 0,
+              u1: 1,
+              v1: 1,
+            ),
+          ],
+          hasCanvasOnlyContent: false,
+        );
+
+        backend.forceNullDirectRender = true;
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: Center(
+              child: TerminalShaderHost(
+                controller: controller,
+                config: config,
+                isFocused: true,
+                activityListenable: activity,
+                atlasImage: atlasImg,
+                atlasDevicePixelRatio: 1.0,
+                directLogicalSize: const Size(120, 60),
+                directTerminalBatchProvider: (_, _) => batch,
+                child: const SizedBox(width: 120, height: 60),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        expect(backend.prepareCallCount, equals(1));
+        expect(backend.syncBackgroundCalls, isEmpty);
+
+        // Simulate _compileDirectAtlasPipeline failing: supportsDirect turns
+        // false before prepareDirectResources completes with false.
+        backend.supportsDirect = false;
+        prepareCompleter.complete(false);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+        await tester.pump();
+        expect(backend.syncBackgroundCalls, isNotEmpty);
+      },
+    );
   });
 }
 
@@ -4447,6 +4570,7 @@ final class _FakeDirectShaderBackend extends _FakeShaderBackend
   final Future<bool> Function(ui.Image atlasImage)? prepareHandler;
   Object? directRenderError;
   bool primed;
+  bool supportsDirect = true;
   bool simulateBackpressureSkip = false;
   bool forceNullDirectRender = false;
   bool _lastSyncSkipped = false;
@@ -4466,7 +4590,7 @@ final class _FakeDirectShaderBackend extends _FakeShaderBackend
   }) : primed = primedInitially;
 
   @override
-  bool get supportsDirectTerminalRender => true;
+  bool get supportsDirectTerminalRender => supportsDirect;
 
   @override
   ShaderBackendDiagnostics readDiagnostics() => ShaderBackendDiagnostics(
