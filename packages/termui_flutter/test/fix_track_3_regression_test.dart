@@ -1330,6 +1330,15 @@ void main() {
         );
         await tester.pumpAndSettle();
 
+        TuiAtlasPainter? readPainter() {
+          final finder = find.descendant(
+            of: find.byType(PrivateTuiView),
+            matching: find.byType(CustomPaint),
+          );
+          if (finder.evaluate().isEmpty) return null;
+          return tester.widget<CustomPaint>(finder).painter! as TuiAtlasPainter;
+        }
+
         for (var v = 1; v <= 6; v++) {
           final pixels = Uint8List(4 * 4 * 4);
           for (var i = 0; i < pixels.length; i += 4) {
@@ -1338,17 +1347,16 @@ void main() {
             pixels[i + 2] = 64;
             pixels[i + 3] = 255;
           }
-          registry.registerImage(
-            KittyImageData(
-              imageId: 1,
-              pixelWidth: 4,
-              pixelHeight: 4,
-              rgbaPixels: pixels,
-              gridCols: 2,
-              gridRows: 1,
-              version: v,
-            ),
+          final data = KittyImageData(
+            imageId: 1,
+            pixelWidth: 4,
+            pixelHeight: 4,
+            rgbaPixels: pixels,
+            gridCols: 2,
+            gridRows: 1,
+            version: v,
           );
+          registry.registerImage(data);
           final buf = Buffer(4, 2)
             ..registerKittyRegistry(const tui_geom.Rect(0, 0, 4, 2), registry);
           buf.setAttributes(
@@ -1360,19 +1368,18 @@ void main() {
             modifiers: Modifier.kittyPlaceholder,
           );
           drawFrame(buf);
-          await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 50)),
-          );
-          await tester.pumpAndSettle();
+          await tester.pump();
+          for (var attempt = 0; attempt < 100; attempt++) {
+            if (readPainter()?.kittyImages.containsKey(data) ?? false) break;
+            await tester.runAsync(
+              () => Future<void>.delayed(const Duration(milliseconds: 5)),
+            );
+            await tester.pump();
+          }
+          expect(readPainter()?.kittyImages.containsKey(data), isTrue);
         }
 
-        final paintWidget = tester.widget<CustomPaint>(
-          find.descendant(
-            of: find.byType(PrivateTuiView),
-            matching: find.byType(CustomPaint),
-          ),
-        );
-        final activePainter = paintWidget.painter! as TuiAtlasPainter;
+        final activePainter = readPainter()!;
         expect(
           activePainter.kittyImages.length,
           equals(1),
@@ -1380,6 +1387,80 @@ void main() {
               'Superseded KittyImageData versions for the same (registry, imageId) '
               'must be evicted once the newer version has decoded.',
         );
+      },
+    );
+
+    testWidgets(
+      'TerminalSurface evicts oldest Kitty GPU images when distinct imageIds exceed 64',
+      (tester) async {
+        final registry = KittyImageRegistry();
+        final terminal = FlutterTerminal();
+        addTearDown(terminal.dispose);
+        late void Function(Buffer) drawFrame;
+
+        await tester.pumpWidget(
+          _testApp(
+            home: SizedBox(
+              width: 300,
+              height: 200,
+              child: Terminal(
+                terminal: terminal,
+                onRun: (_, onDraw) async {
+                  drawFrame = onDraw;
+                },
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        TuiAtlasPainter? readPainter() {
+          final finder = find.descendant(
+            of: find.byType(PrivateTuiView),
+            matching: find.byType(CustomPaint),
+          );
+          if (finder.evaluate().isEmpty) return null;
+          return tester.widget<CustomPaint>(finder).painter! as TuiAtlasPainter;
+        }
+
+        KittyImageData? firstData;
+        for (var id = 1; id <= 65; id++) {
+          final pixels = Uint8List(2 * 2 * 4)..fillRange(0, 16, id & 0xFF);
+          final data = KittyImageData(
+            imageId: id,
+            pixelWidth: 2,
+            pixelHeight: 2,
+            rgbaPixels: pixels,
+            gridCols: 1,
+            gridRows: 1,
+          );
+          firstData ??= data;
+          registry.registerImage(data);
+          final buf = Buffer(4, 2)
+            ..registerKittyRegistry(const tui_geom.Rect(0, 0, 4, 2), registry);
+          buf.setAttributes(
+            0,
+            0,
+            char: kittyPlaceholderCell(0, 0),
+            fg: 0xFF000000 | id,
+            bg: 0xFF000000,
+            modifiers: Modifier.kittyPlaceholder,
+          );
+          drawFrame(buf);
+          await tester.pump();
+          for (var attempt = 0; attempt < 100; attempt++) {
+            if (readPainter()?.kittyImages.containsKey(data) ?? false) break;
+            await tester.runAsync(
+              () => Future<void>.delayed(const Duration(milliseconds: 5)),
+            );
+            await tester.pump();
+          }
+          expect(readPainter()?.kittyImages.containsKey(data), isTrue);
+        }
+
+        final activePainter = readPainter()!;
+        expect(activePainter.kittyImages.length, equals(64));
+        expect(activePainter.kittyImages.containsKey(firstData), isFalse);
       },
     );
   });

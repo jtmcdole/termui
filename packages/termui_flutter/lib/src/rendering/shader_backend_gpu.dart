@@ -189,6 +189,128 @@ final class GpuReflectionBindingCache {
       error.toString().contains('no texture named');
 }
 
+/// Slot-aware LRU cache for CPU-uploaded Kitty GPU textures.
+///
+/// Tracks uploaded textures by [ui.Image] identity while also indexing active
+/// entries by an optional `(KittyImageRegistry, imageId)` [GpuKittyQuad.cacheSlot]
+/// so superseded versions of a reused Kitty image ID are evicted immediately
+/// instead of accumulating up to the global LRU limit.
+@visibleForTesting
+final class KittyTextureUploadCache<T> {
+  final int _initialCapacity;
+  int _capacity;
+  final LinkedHashMap<ui.Image, T> _textures =
+      LinkedHashMap<ui.Image, T>.identity();
+  final Map<Object, ui.Image> _imageBySlot = <Object, ui.Image>{};
+
+  /// Creates an empty cache with an initial LRU capacity of [initialCapacity].
+  KittyTextureUploadCache({required int initialCapacity})
+    : assert(initialCapacity > 0, 'initialCapacity must be positive'),
+      _initialCapacity = initialCapacity,
+      _capacity = initialCapacity;
+
+  /// Number of cached textures currently retained.
+  int get length => _textures.length;
+
+  /// Current maximum number of textures retained before LRU eviction.
+  int get capacity => _capacity;
+
+  /// Whether [image] currently has a cached texture.
+  bool contains(ui.Image image) => _textures.containsKey(image);
+
+  /// Returns the cached texture for [image] and marks it most-recently used.
+  T? touch(ui.Image image) {
+    final existing = _textures.remove(image);
+    if (existing == null) return null;
+    _textures[image] = existing;
+    return existing;
+  }
+
+  /// Ensures [capacity] is large enough to hold every distinct image in [images].
+  void ensureCapacityFor(Iterable<ui.Image> images) {
+    final distinct = LinkedHashSet<ui.Image>.identity()..addAll(images);
+    if (distinct.length > _capacity) {
+      _capacity = distinct.length;
+    }
+  }
+
+  /// Stores [texture] for [image], evicting any superseded image in [cacheSlot]
+  /// and enforcing the LRU [capacity] bound.
+  void store(ui.Image image, T texture, {Object? cacheSlot}) {
+    if (cacheSlot != null) {
+      final previous = _imageBySlot[cacheSlot];
+      if (previous != null && !identical(previous, image)) {
+        _textures.remove(previous);
+      }
+      _imageBySlot[cacheSlot] = image;
+    }
+    _textures.remove(image);
+    while (_textures.length >= _capacity && _textures.isNotEmpty) {
+      final evicted = _textures.keys.first;
+      _textures.remove(evicted);
+      _imageBySlot.removeWhere((_, tracked) => identical(tracked, evicted));
+    }
+    _textures[image] = texture;
+  }
+
+  /// Resolves textures for all [quads], synchronously uploading cache misses
+  /// via [uploadRawRgba] when [GpuKittyQuad.rawRgbaPixels] is available.
+  ///
+  /// Returns `null` if any quad is uncached and lacks valid raw RGBA pixels or
+  /// if [uploadRawRgba] returns `null`.
+  List<T>? resolveQuads(
+    List<GpuKittyQuad> quads, {
+    required T? Function(int width, int height, ByteData rgbaBytes)
+    uploadRawRgba,
+  }) {
+    if (quads.isEmpty) return <T>[];
+    final resolved = <T>[];
+    var ensuredCapacity = false;
+    for (final quad in quads) {
+      var tex = touch(quad.image);
+      if (tex == null) {
+        if (!ensuredCapacity) {
+          ensureCapacityFor(quads.map((q) => q.image));
+          ensuredCapacity = true;
+        }
+        tex = _uploadRawRgbaQuad(quad, uploadRawRgba);
+        if (tex == null) return null;
+      }
+      resolved.add(tex);
+    }
+    return resolved;
+  }
+
+  T? _uploadRawRgbaQuad(
+    GpuKittyQuad quad,
+    T? Function(int width, int height, ByteData rgbaBytes) uploadRawRgba,
+  ) {
+    final raw = quad.rawRgbaPixels;
+    if (raw == null) return null;
+    final image = quad.image;
+    final width = image.width;
+    final height = image.height;
+    if (width <= 0 || height <= 0) return null;
+    final expectedBytes = width * height * 4;
+    if (raw.length < expectedBytes) return null;
+    final tex = uploadRawRgba(
+      width,
+      height,
+      ByteData.sublistView(raw, 0, expectedBytes),
+    );
+    if (tex == null) return null;
+    store(image, tex, cacheSlot: quad.cacheSlot);
+    return tex;
+  }
+
+  /// Clears all cached textures and restores [capacity] to its initial bound.
+  void clear() {
+    _textures.clear();
+    _imageBySlot.clear();
+    _capacity = _initialCapacity;
+  }
+}
+
 /// Compiled `flutter_gpu` shader handle owned by [FlutterGpuShaderBackend].
 final class _GpuCompiledShaderHandle implements CompiledShaderHandle {
   @override
@@ -440,10 +562,10 @@ final class FlutterGpuShaderBackend
       LinkedHashMap<ui.Image, gpu.Texture>.identity();
   final LinkedHashMap<ui.Image, gpu.Texture> _uploadedInputTextures =
       LinkedHashMap<ui.Image, gpu.Texture>.identity();
-  final LinkedHashMap<ui.Image, gpu.Texture> _uploadedKittyTextures =
-      LinkedHashMap<ui.Image, gpu.Texture>.identity();
-  final Map<Object, ui.Image> _uploadedKittyImageBySlot = <Object, ui.Image>{};
-  int _uploadedKittyCapacity = _maxUploadedKittyTextures;
+  final KittyTextureUploadCache<gpu.Texture> _uploadedKittyTextures =
+      KittyTextureUploadCache<gpu.Texture>(
+        initialCapacity: _maxUploadedKittyTextures,
+      );
   final Map<ui.Image, Future<bool>> _pixelUploadsInFlight =
       Map<ui.Image, Future<bool>>.identity();
   final LinkedHashMap<(String, String), _CachedGpuRegionMask>
@@ -876,8 +998,6 @@ final class FlutterGpuShaderBackend
     _uploadedWallpaperTextures.clear();
     _uploadedInputTextures.clear();
     _uploadedKittyTextures.clear();
-    _uploadedKittyImageBySlot.clear();
-    _uploadedKittyCapacity = _maxUploadedKittyTextures;
     _pixelUploadsInFlight.clear();
     _cachedRegionMasks.clear();
     _viewportUboCache.clear();
@@ -939,21 +1059,10 @@ final class FlutterGpuShaderBackend
   List<gpu.Texture>? _wrapKittyQuadTextures(List<GpuKittyQuad> quads) {
     if (quads.isEmpty) return const <gpu.Texture>[];
     if (_usePixelUploadForImages) {
-      final wrapped = <gpu.Texture>[];
-      var ensuredCapacity = false;
-      for (final quad in quads) {
-        var tex = _touchLruTexture(_uploadedKittyTextures, quad.image);
-        if (tex == null) {
-          if (!ensuredCapacity) {
-            _ensureKittyUploadCapacityForQuads(quads);
-            ensuredCapacity = true;
-          }
-          tex = _tryUploadRawRgbaKittyTexture(quad);
-          if (tex == null) return null;
-        }
-        wrapped.add(tex);
-      }
-      return wrapped;
+      return _uploadedKittyTextures.resolveQuads(
+        quads,
+        uploadRawRgba: _createHostVisibleRgbaTexture,
+      );
     }
     final cache = Map<ui.Image, gpu.Texture>.identity();
     final wrapped = <gpu.Texture>[];
@@ -969,37 +1078,20 @@ final class FlutterGpuShaderBackend
     return wrapped;
   }
 
-  void _ensureKittyUploadCapacityForQuads(List<GpuKittyQuad> quads) {
-    final distinct = LinkedHashSet<ui.Image>.identity();
-    for (final quad in quads) {
-      distinct.add(quad.image);
-    }
-    if (distinct.length > _uploadedKittyCapacity) {
-      _uploadedKittyCapacity = distinct.length;
-    }
-  }
-
-  gpu.Texture? _tryUploadRawRgbaKittyTexture(GpuKittyQuad quad) {
-    final raw = quad.rawRgbaPixels;
-    if (raw == null) return null;
-    final image = quad.image;
-    final width = image.width;
-    final height = image.height;
-    if (width <= 0 || height <= 0) return null;
-    final expectedBytes = width * height * 4;
-    if (raw.length < expectedBytes) return null;
+  gpu.Texture? _createHostVisibleRgbaTexture(
+    int width,
+    int height,
+    ByteData rgbaBytes,
+  ) {
     try {
-      final tex = _context.createTexture(
+      return _context.createTexture(
         gpu.StorageMode.hostVisible,
         width,
         height,
         format: gpu.PixelFormat.r8g8b8a8UNormInt,
         enableRenderTargetUsage: false,
         enableShaderReadUsage: true,
-      );
-      tex.overwrite(ByteData.sublistView(raw, 0, expectedBytes));
-      _storeUploadedKittyTexture(image, tex, cacheSlot: quad.cacheSlot);
-      return tex;
+      )..overwrite(rgbaBytes);
     } on Object {
       return null;
     }
@@ -3555,29 +3647,8 @@ final class FlutterGpuShaderBackend
         maxEntries: _maxUploadedInputTextures,
       );
 
-  void _storeUploadedKittyTexture(
-    ui.Image image,
-    gpu.Texture texture, {
-    Object? cacheSlot,
-  }) {
-    if (cacheSlot != null) {
-      final previous = _uploadedKittyImageBySlot[cacheSlot];
-      if (previous != null && !identical(previous, image)) {
-        _uploadedKittyTextures.remove(previous);
-      }
-      _uploadedKittyImageBySlot[cacheSlot] = image;
-    }
-    _uploadedKittyTextures.remove(image);
-    while (_uploadedKittyTextures.length >= _uploadedKittyCapacity &&
-        _uploadedKittyTextures.isNotEmpty) {
-      final evicted = _uploadedKittyTextures.keys.first;
-      _uploadedKittyTextures.remove(evicted);
-      _uploadedKittyImageBySlot.removeWhere(
-        (_, tracked) => identical(tracked, evicted),
-      );
-    }
-    _uploadedKittyTextures[image] = texture;
-  }
+  void _storeUploadedKittyTexture(ui.Image image, gpu.Texture texture) =>
+      _uploadedKittyTextures.store(image, texture);
 
   Future<bool> _primeDirectPixelUploads({
     required ui.Image atlasImage,
@@ -3586,9 +3657,7 @@ final class FlutterGpuShaderBackend
   }) async {
     final distinctKitty = LinkedHashSet<ui.Image>.identity()
       ..addAll(kittyImages);
-    if (distinctKitty.length > _uploadedKittyCapacity) {
-      _uploadedKittyCapacity = distinctKitty.length;
-    }
+    _uploadedKittyTextures.ensureCapacityFor(distinctKitty);
     final pending = <Future<bool>>[
       if (!_uploadedAtlasTextures.containsKey(atlasImage))
         _primeUploadedImage(atlasImage, _storeUploadedAtlasTexture),
@@ -3596,7 +3665,7 @@ final class FlutterGpuShaderBackend
           !_uploadedWallpaperTextures.containsKey(wallpaperImage))
         _primeUploadedImage(wallpaperImage, _storeUploadedWallpaperTexture),
       for (final kittyImage in distinctKitty)
-        if (!_uploadedKittyTextures.containsKey(kittyImage))
+        if (!_uploadedKittyTextures.contains(kittyImage))
           _primeUploadedImage(kittyImage, _storeUploadedKittyTexture),
     ];
     if (pending.isNotEmpty) {
@@ -3606,7 +3675,7 @@ final class FlutterGpuShaderBackend
     return _uploadedAtlasTextures.containsKey(atlasImage) &&
         (wallpaperImage == null ||
             _uploadedWallpaperTextures.containsKey(wallpaperImage)) &&
-        distinctKitty.every(_uploadedKittyTextures.containsKey);
+        distinctKitty.every(_uploadedKittyTextures.contains);
   }
 
   Future<void> _primeAsyncPassImages({

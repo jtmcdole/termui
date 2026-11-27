@@ -4323,6 +4323,120 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         expect(backend.directSyncRenderCount, greaterThan(rendersBefore));
       },
     );
+
+    testWidgets(
+      'resumes ambient background shader rendering if direct priming rejects with an error',
+      (tester) async {
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final atlasImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 32,
+            height: 32,
+            color: const Color(0xFFFFFFFF),
+          ),
+        );
+        addTearDown(() => atlasImg?.dispose());
+        final outputImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 120,
+            height: 60,
+            color: const Color(0xFF112233),
+          ),
+        );
+        addTearDown(() => outputImg?.dispose());
+        final kittyV2 = await tester.runAsync(
+          () => _createSolidImage(
+            width: 4,
+            height: 4,
+            color: const Color(0xFF00FF00),
+          ),
+        );
+        addTearDown(() => kittyV2?.dispose());
+
+        final prepareV2 = Completer<bool>();
+        final backend = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+          primedInitially: true,
+          prepareHandler: (_) => prepareV2.future,
+        );
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+
+        final config = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'bg:anim',
+              stage: TerminalShaderStage.background,
+              customSourcePath: 'anim.glsl',
+            ),
+          ],
+          animationMode: ShaderAnimationMode.always,
+        );
+        await tester.runAsync(
+          () => controller.syncConfig(
+            config,
+            sourceLoader: (_) async => _validAnimatedGlsl,
+          ),
+        );
+
+        final activity = _TestPaintNotifier();
+        addTearDown(activity.dispose);
+        final batch = GpuAtlasQuadBatch(
+          instanceData: Float32List(16),
+          instanceCount: 1,
+          italicStartInstanceIndex: 1,
+          kittyInsertInstanceIndex: 1,
+          generation: 1,
+          defaultBackgroundArgb: 0xFF000000,
+          kittyQuads: <GpuKittyQuad>[
+            GpuKittyQuad(
+              image: kittyV2!,
+              dstX: 0,
+              dstY: 0,
+              dstWidth: 16,
+              dstHeight: 16,
+              u0: 0,
+              v0: 0,
+              u1: 1,
+              v1: 1,
+            ),
+          ],
+          hasCanvasOnlyContent: false,
+        );
+
+        backend.forceNullDirectRender = true;
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: Center(
+              child: TerminalShaderHost(
+                controller: controller,
+                config: config,
+                isFocused: true,
+                activityListenable: activity,
+                atlasImage: atlasImg,
+                atlasDevicePixelRatio: 1.0,
+                directLogicalSize: const Size(120, 60),
+                directTerminalBatchProvider: (_, _) => batch,
+                child: const SizedBox(width: 120, height: 60),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        expect(backend.prepareCallCount, equals(1));
+        expect(backend.syncBackgroundCalls, isEmpty);
+
+        // Completing priming with an error must clear _directPrepareInFlight
+        // and resume the ticker so fallback background renders recover.
+        prepareV2.completeError(StateError('simulated upload error'));
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump(const Duration(milliseconds: 16));
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(backend.syncBackgroundCalls, isNotEmpty);
+      },
+    );
   });
 }
 
