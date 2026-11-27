@@ -3649,10 +3649,6 @@ final class _KittyGpuImageCache {
   }
 
   void _scheduleImageDisposal(ui.Image image) {
-    if (_disposed) {
-      image.dispose();
-      return;
-    }
     _pendingDisposals.add(image);
     if (_postFrameDisposalScheduled) return;
     _postFrameDisposalScheduled = true;

@@ -1,11 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter_gpu/gpu.dart' as gpu;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:source_span/source_span.dart';
 import 'package:termui_flutter/src/rendering/builtin_shaders.dart';
+import 'package:termui_flutter/src/rendering/gpu_atlas_batch.dart';
 import 'package:termui_flutter/src/rendering/gpu_atlas_shaders.dart';
 import 'package:termui_flutter/src/rendering/impellerc_compiler_io.dart';
 import 'package:termui_flutter/src/rendering/impellerc_compiler_stub.dart'
@@ -1764,6 +1767,141 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
               encodeCopyToSurface: (cb, src, dst) {},
             ),
         throwsRangeError,
+      );
+    });
+
+    test('KittyTextureUploadCache uploads raw RGBA synchronously, evicts replaced slots, and enforces LRU capacity', () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+
+      Future<ui.Image> makeImage(int w, int h, int seed) {
+        final pixels = Uint8List(w * h * 4);
+        for (var i = 0; i < pixels.length; i += 4) {
+          pixels[i] = seed & 0xFF;
+          pixels[i + 1] = 100;
+          pixels[i + 2] = 200;
+          pixels[i + 3] = 255;
+        }
+        final c = Completer<ui.Image>();
+        ui.decodeImageFromPixels(
+          pixels,
+          w,
+          h,
+          ui.PixelFormat.rgba8888,
+          c.complete,
+        );
+        return c.future;
+      }
+
+      GpuKittyQuad makeQuad(
+        ui.Image image, {
+        Uint8List? rawRgbaPixels,
+        Object? cacheSlot,
+      }) => GpuKittyQuad(
+        image: image,
+        rawRgbaPixels: rawRgbaPixels,
+        cacheSlot: cacheSlot,
+        dstX: 0,
+        dstY: 0,
+        dstWidth: image.width.toDouble(),
+        dstHeight: image.height.toDouble(),
+        u0: 0,
+        v0: 0,
+        u1: 1,
+        v1: 1,
+      );
+
+      final img1 = await makeImage(2, 2, 10);
+      final img2 = await makeImage(2, 2, 20);
+      final img3 = await makeImage(2, 2, 30);
+      final img4 = await makeImage(2, 2, 40);
+      addTearDown(() {
+        img1.dispose();
+        img2.dispose();
+        img3.dispose();
+        img4.dispose();
+      });
+
+      final cache = KittyTextureUploadCache<String>(initialCapacity: 2);
+      var uploadCount = 0;
+      String? upload(int w, int h, ByteData bytes) {
+        uploadCount++;
+        return 'tex_${uploadCount}_${w}x${h}_${bytes.lengthInBytes}';
+      }
+
+      // Empty quad list resolves immediately without uploading.
+      expect(
+        cache.resolveQuads(const <GpuKittyQuad>[], uploadRawRgba: upload),
+        isEmpty,
+      );
+
+      // Cache miss with valid RGBA32 buffer uploads synchronously and caches.
+      final raw1 = Uint8List.fromList(List<int>.filled(16, 11));
+      final first = cache.resolveQuads(<GpuKittyQuad>[
+        makeQuad(img1, rawRgbaPixels: raw1, cacheSlot: ('reg', 1)),
+      ], uploadRawRgba: upload);
+      expect(first, equals(<String>['tex_1_2x2_16']));
+      expect(cache.length, equals(1));
+      expect(cache.contains(img1), isTrue);
+
+      // Cache hit reuses texture without re-uploading.
+      final hit = cache.resolveQuads(<GpuKittyQuad>[
+        makeQuad(img1, rawRgbaPixels: raw1, cacheSlot: ('reg', 1)),
+      ], uploadRawRgba: upload);
+      expect(hit, equals(<String>['tex_1_2x2_16']));
+      expect(uploadCount, equals(1));
+
+      // Replacing the same cacheSlot evicts the superseded image immediately.
+      final raw2 = Uint8List.fromList(List<int>.filled(16, 22));
+      final replaced = cache.resolveQuads(<GpuKittyQuad>[
+        makeQuad(img2, rawRgbaPixels: raw2, cacheSlot: ('reg', 1)),
+      ], uploadRawRgba: upload);
+      expect(replaced, equals(<String>['tex_2_2x2_16']));
+      expect(cache.length, equals(1));
+      expect(cache.contains(img1), isFalse);
+      expect(cache.contains(img2), isTrue);
+
+      // Distinct slots beyond initialCapacity evict oldest LRU entry.
+      final raw3 = Uint8List.fromList(List<int>.filled(16, 33));
+      final raw4 = Uint8List.fromList(List<int>.filled(16, 44));
+      cache.store(img3, 'manual_3', cacheSlot: ('reg', 2));
+      expect(cache.length, equals(2));
+      expect(cache.touch(img2), equals('tex_2_2x2_16'));
+      cache.store(img4, 'manual_4', cacheSlot: ('reg', 3));
+      expect(cache.length, equals(2));
+      expect(cache.contains(img3), isFalse);
+      expect(cache.contains(img2), isTrue);
+      expect(cache.contains(img4), isTrue);
+
+      // Single frame referencing more distinct images than capacity expands it.
+      final expanded = cache.resolveQuads(<GpuKittyQuad>[
+        makeQuad(img1, rawRgbaPixels: raw1, cacheSlot: ('reg', 10)),
+        makeQuad(img3, rawRgbaPixels: raw3, cacheSlot: ('reg', 11)),
+        makeQuad(img4, rawRgbaPixels: raw4, cacheSlot: ('reg', 12)),
+      ], uploadRawRgba: upload);
+      expect(expanded, hasLength(3));
+      expect(cache.capacity, equals(3));
+
+      // Missing rawRgbaPixels, short buffer, or failed upload returns null.
+      cache.clear();
+      expect(cache.length, equals(0));
+      expect(cache.capacity, equals(2));
+      expect(
+        cache.resolveQuads(<GpuKittyQuad>[
+          makeQuad(img1),
+        ], uploadRawRgba: upload),
+        isNull,
+      );
+      expect(
+        cache.resolveQuads(<GpuKittyQuad>[
+          makeQuad(img1, rawRgbaPixels: Uint8List(4)),
+        ], uploadRawRgba: upload),
+        isNull,
+      );
+      expect(
+        cache.resolveQuads(<GpuKittyQuad>[
+          makeQuad(img1, rawRgbaPixels: raw1),
+        ], uploadRawRgba: (_, _, _) => null),
+        isNull,
       );
     });
   });
