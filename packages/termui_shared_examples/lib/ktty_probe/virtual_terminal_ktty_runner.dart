@@ -380,15 +380,27 @@ final class _VirtualTerminalProbeShellState
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
+  String _formatHeaderTelemetry(int maxWidth) {
     final vt = widget.virtualTerminal;
     final kbHex =
         '0x${vt.kittyKeyboardFlags.toRadixString(16).padLeft(2, '0')}';
     final imgCount = vt.imageRegistry.registeredImageIds.length;
     final pxMode = vt.sgrPixelsMouseMode ? 'ON' : 'OFF';
     final title = vt.windowTitle.isEmpty ? '(untitled)' : vt.windowTitle;
+    final scheme = vt.colorScheme.name;
+    final pointer = vt.mouseCursorShape ?? 'default';
 
+    if (maxWidth >= 128) {
+      return ' Title: "$title" │ Kb:$kbHex │ ?1016:$pxMode │ Scheme:$scheme │ Ptr:$pointer │ Img:$imgCount │ Zone:${vt.promptZone.name} ';
+    }
+    if (maxWidth >= 106) {
+      return ' Title: "$title" │ Kb:$kbHex │ ?1016:$pxMode │ Scheme:$scheme │ Ptr:$pointer ';
+    }
+    return ' Kb:$kbHex │ Scheme:$scheme │ Ptr:$pointer │ Img:$imgCount ';
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) => Column([
         if (constraints.maxHeight >= 1)
@@ -407,8 +419,7 @@ final class _VirtualTerminalProbeShellState
                     ),
                   ),
                   TextSpan(
-                    text:
-                        ' Title: "$title" │ KbFlags: $kbHex │ ?1016: $pxMode │ Images: $imgCount │ Zone: ${vt.promptZone.name} ',
+                    text: _formatHeaderTelemetry(constraints.maxWidth),
                     style: const Style(foreground: CharmColors.salt),
                   ),
                 ],
