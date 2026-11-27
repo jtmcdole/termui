@@ -1,3 +1,7 @@
+## 0.10.2
+
+ - **FEAT**(fterm): wire HTTP automation v1 router, OpenAPI spec, ConPTY fix, and sizzle director (#483).
+
 ## 0.10.1
 
  - **FIX**(pty2): short-circuit process-group kill to avoid reaper race (#433).

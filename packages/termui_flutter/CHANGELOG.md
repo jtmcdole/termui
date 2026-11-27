@@ -1,3 +1,8 @@
+## 0.17.1
+
+ - **FEAT**(fterm): add VS Code-style Command Palette with scrollback jump and search (#486).
+ - **FEAT**(termui_flutter): export TerminalSurfaceState and add external iMouse pointer injection (#480).
+
 ## 0.17.0
 
 > Note: This release has breaking changes.

@@ -3,6 +3,40 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-27
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`pty2` - `v0.10.2`](#pty2---v0102)
+ - [`termui_flutter` - `v0.17.1`](#termui_flutter---v0171)
+ - [`termui_pty` - `v0.16.3`](#termui_pty---v0163)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_pty` - `v0.16.3`
+
+---
+
+#### `pty2` - `v0.10.2`
+
+ - **FEAT**(fterm): wire HTTP automation v1 router, OpenAPI spec, ConPTY fix, and sizzle director (#483).
+
+#### `termui_flutter` - `v0.17.1`
+
+ - **FEAT**(fterm): add VS Code-style Command Palette with scrollback jump and search (#486).
+ - **FEAT**(termui_flutter): export TerminalSurfaceState and add external iMouse pointer injection (#480).
+
+
 ## 2026-11-25
 
 ### Changes
