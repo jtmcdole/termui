@@ -36,6 +36,27 @@ ArgParser _buildArgParser() {
       negatable: false,
       help: 'Emit probe results as JSON (with --report or --self-test).',
     )
+    ..addFlag(
+      'strict',
+      negatable: false,
+      help:
+          'Exit with code 1 when any core capability is unsupported '
+          '(with --report or --self-test).',
+    )
+    ..addFlag(
+      'tmux-passthrough',
+      negatable: false,
+      help:
+          'Wrap Kitty Graphics APC probe and control commands in tmux DCS '
+          'passthrough envelopes.',
+    )
+    ..addFlag(
+      'local-media',
+      negatable: false,
+      help:
+          'Create local temp-file (t=t) and shared-memory (t=s) fixtures to '
+          'probe optional Kitty graphics media.',
+    )
     ..addOption(
       'timeout-ms',
       defaultsTo: '600',
@@ -44,9 +65,55 @@ ArgParser _buildArgParser() {
     ..addFlag('help', abbr: 'h', negatable: false, help: 'Show CLI usage.');
 }
 
+KttyProbeOptions _buildProbeOptions({
+  required bool wrapTmux,
+  KttyLocalMediaProbeSession? mediaSession,
+}) {
+  return KttyProbeOptions(
+    wrapTmuxPassthrough: wrapTmux,
+    tempProbeFilePath: mediaSession?.tempFilePath,
+    shmProbeName: mediaSession?.shmObjectName,
+  );
+}
+
+void _warnIfLocalMediaUnlinked(KttyLocalMediaProbeSession? mediaSession) {
+  if (mediaSession == null) return;
+  if (mediaSession.tempFilePath != null && !mediaSession.tempFileStillExists) {
+    stderr.writeln(
+      'Warning: Kitty a=q,t=t unexpectedly unlinked temp probe file '
+      '(${mediaSession.tempFilePath}).',
+    );
+  }
+  if (mediaSession.shmObjectName != null && !mediaSession.shmStillExists) {
+    stderr.writeln(
+      'Warning: Kitty a=q,t=s unexpectedly unlinked shared-memory probe '
+      'object (${mediaSession.shmObjectName}).',
+    );
+  }
+}
+
+void _printMultiplexerHintsToStderr(KttyMultiplexerDiagnostics? diagnostics) {
+  if (diagnostics == null || diagnostics.hints.isEmpty) return;
+  stderr.writeln('Multiplexer diagnostics (${diagnostics.multiplexer}):');
+  for (final hint in diagnostics.hints) {
+    stderr.writeln('  Hint: $hint');
+  }
+}
+
+RandomAccessFile? _openControllingTtyForWrite() {
+  if (Platform.isWindows) return null;
+  try {
+    return File('/dev/tty').openSync(mode: FileMode.writeOnlyAppend);
+  } on FileSystemException {
+    return null;
+  }
+}
+
 Future<int> _runSelfTest({
   required bool asJson,
   required Duration timeout,
+  required bool wrapTmux,
+  required bool localMedia,
 }) async {
   final replies = StreamController<List<int>>.broadcast();
   final vt = VirtualTerminal(
@@ -54,6 +121,7 @@ Future<int> _runSelfTest({
     height: 30,
     defaultForeground: const Color(220, 228, 240),
     defaultBackground: const Color(18, 22, 32),
+    allowLocalKittyMedia: localMedia,
     onReply: (reply) {
       final bytes = utf8.encode(reply);
       scheduleMicrotask(() {
@@ -61,16 +129,24 @@ Future<int> _runSelfTest({
       });
     },
   );
+  KttyLocalMediaProbeSession? mediaSession;
 
   try {
+    mediaSession = localMedia ? createLocalMediaProbeSession() : null;
     final report = await runKttyBatchProbe(
       wireInput: replies.stream,
       onWriteWire: vt.writeString,
       timeout: timeout,
+      options: _buildProbeOptions(
+        wrapTmux: wrapTmux,
+        mediaSession: mediaSession,
+      ),
     );
+    _warnIfLocalMediaUnlinked(mediaSession);
     _printReport(report, asJson: asJson);
-    return report.unsupportedCount == 0 ? 0 : 1;
+    return report.coreUnsupportedCount == 0 ? 0 : 1;
   } finally {
+    mediaSession?.dispose();
     await replies.close();
     vt.dispose();
   }
@@ -79,6 +155,9 @@ Future<int> _runSelfTest({
 Future<int> _runStdioBatchReport({
   required bool asJson,
   required Duration timeout,
+  required bool strict,
+  required bool wrapTmux,
+  required bool localMedia,
 }) async {
   if (!stdin.hasTerminal) {
     stderr.writeln(
@@ -88,22 +167,70 @@ Future<int> _runStdioBatchReport({
     return 2;
   }
 
-  final ioBackend = IoTerminalBackend();
-  ioBackend.enableRawMode();
+  final muxDiagnostics = await detectMultiplexerDiagnostics();
+  KttyLocalMediaProbeSession? mediaSession;
+  IoTerminalBackend? ioBackend;
+  RandomAccessFile? ttyOut;
+  StreamSubscription<ProcessSignal>? sigintSub;
+  StreamSubscription<List<int>>? ctrlCSub;
+  var aborted = false;
+
   try {
+    if (!Platform.isWindows) {
+      ttyOut = _openControllingTtyForWrite();
+      if (ttyOut == null) {
+        stderr.writeln(
+          'ktty_probe --report could not open /dev/tty for writing probes '
+          '(or pass --self-test to probe VirtualTerminal).',
+        );
+        return 2;
+      }
+    }
+    mediaSession = localMedia ? createLocalMediaProbeSession() : null;
+    ioBackend = IoTerminalBackend();
+    final stopHandle = KttyProbeStopHandle();
+    void abortProbe() {
+      aborted = true;
+      stopHandle.stop();
+    }
+
+    if (!Platform.isWindows) {
+      sigintSub = ProcessSignal.sigint.watch().listen((_) => abortProbe());
+    }
+    ctrlCSub = ioBackend.rawInput.listen((chunk) {
+      if (chunk.contains(0x03)) abortProbe();
+    });
+
+    ioBackend.enableRawMode();
     final report = await runKttyBatchProbe(
       wireInput: ioBackend.rawInput,
       onWriteWire: (data) {
-        stdout.write(data);
+        if (ttyOut != null) {
+          ttyOut.writeStringSync(data);
+        } else {
+          stdout.write(data);
+        }
       },
       timeout: timeout,
+      options: _buildProbeOptions(
+        wrapTmux: wrapTmux,
+        mediaSession: mediaSession,
+      ),
+      stopHandle: stopHandle,
     );
+    report.multiplexerDiagnostics = muxDiagnostics;
     ioBackend.disableRawMode();
+    if (aborted) return 130;
+    _warnIfLocalMediaUnlinked(mediaSession);
     _printReport(report, asJson: asJson);
-    return 0;
+    return strict && report.coreUnsupportedCount > 0 ? 1 : 0;
   } finally {
-    ioBackend.disableRawMode();
-    ioBackend.dispose();
+    await ctrlCSub?.cancel();
+    await sigintSub?.cancel();
+    mediaSession?.dispose();
+    ttyOut?.closeSync();
+    ioBackend?.disableRawMode();
+    ioBackend?.dispose();
   }
 }
 
@@ -119,41 +246,66 @@ void _printReport(KttyProbeReport report, {required bool asJson}) {
   }
 }
 
-Future<void> _runInteractiveStdio(Duration timeout) async {
-  final ioBackend = IoTerminalBackend();
-  final rawSize = ioBackend.size;
-  final initialSize = rawSize.x > 0 && rawSize.y > 0
-      ? rawSize
-      : const Point<int>(100, 30);
-  final report = KttyProbeReport();
-  final wireBackend = KttyWireTerminalBackend(
-    wireInput: ioBackend.rawInput,
-    onWriteWire: ioBackend.write,
-    report: report,
-    initialSize: initialSize,
-    externalResizeStream: ioBackend.watchSize(),
-    onEnableRawMode: ioBackend.enableRawMode,
-    onDisableRawMode: ioBackend.disableRawMode,
-    isWindows: ioBackend.isWindows,
-  );
-
-  final stopHandle = KttyProbeStopHandle();
+Future<void> _runInteractiveStdio(
+  Duration timeout, {
+  required bool wrapTmux,
+  required bool localMedia,
+}) async {
+  final muxDiagnostics = await detectMultiplexerDiagnostics();
+  KttyLocalMediaProbeSession? mediaSession;
+  IoTerminalBackend? ioBackend;
   StreamSubscription<ProcessSignal>? sigintSub;
-  if (!Platform.isWindows) {
-    sigintSub = ProcessSignal.sigint.watch().listen((_) => stopHandle.stop());
-  }
 
   try {
+    mediaSession = localMedia ? createLocalMediaProbeSession() : null;
+    ioBackend = IoTerminalBackend();
+    final rawSize = ioBackend.size;
+    final initialSize = rawSize.x > 0 && rawSize.y > 0
+        ? rawSize
+        : const Point<int>(100, 30);
+    final report = KttyProbeReport()..multiplexerDiagnostics = muxDiagnostics;
+    final wireBackend = KttyWireTerminalBackend(
+      wireInput: ioBackend.rawInput,
+      onWriteWire: ioBackend.write,
+      report: report,
+      initialSize: initialSize,
+      externalResizeStream: ioBackend.watchSize(),
+      onEnableRawMode: ioBackend.enableRawMode,
+      onDisableRawMode: ioBackend.disableRawMode,
+      isWindows: ioBackend.isWindows,
+    );
+
+    final stopHandle = KttyProbeStopHandle();
+    if (!Platform.isWindows) {
+      sigintSub = ProcessSignal.sigint.watch().listen((_) => stopHandle.stop());
+    }
+
     await runKttyProbeOnWire(
       wireBackend,
       probeTimeout: timeout,
       stopHandle: stopHandle,
+      options: _buildProbeOptions(
+        wrapTmux: wrapTmux,
+        mediaSession: mediaSession,
+      ),
     );
-  } finally {
-    await sigintSub?.cancel();
     ioBackend.disableRawMode();
-    ioBackend.dispose();
+    _warnIfLocalMediaUnlinked(mediaSession);
+    _printMultiplexerHintsToStderr(muxDiagnostics);
+  } finally {
+    mediaSession?.dispose();
+    await sigintSub?.cancel();
+    ioBackend?.disableRawMode();
+    ioBackend?.dispose();
   }
+}
+
+int _countSelectedModes(ArgResults results) {
+  var count = 0;
+  if (results['self-test'] as bool) count++;
+  if (results['report'] as bool) count++;
+  if (results['virtual'] as bool) count++;
+  return count;
 }
 
 /// CLI entrypoint for the standalone KTTY capability probe and TUI check suite.
@@ -176,17 +328,47 @@ Future<void> main(List<String> arguments) async {
     exit(0);
   }
 
-  final timeoutMs = int.tryParse(results['timeout-ms'] as String) ?? 600;
+  if (_countSelectedModes(results) > 1) {
+    stderr.writeln(
+      'Specify at most one of --self-test, --report, or --virtual.',
+    );
+    stderr.writeln(parser.usage);
+    exit(64);
+  }
+
+  final timeoutRaw = results['timeout-ms'] as String;
+  final timeoutMs = int.tryParse(timeoutRaw);
+  if (timeoutMs == null || timeoutMs <= 0) {
+    stderr.writeln(
+      'Invalid --timeout-ms value: "$timeoutRaw" (expected positive integer).',
+    );
+    stderr.writeln(parser.usage);
+    exit(64);
+  }
   final timeout = Duration(milliseconds: max(50, timeoutMs));
   final asJson = results['json'] as bool;
+  final strict = results['strict'] as bool;
+  final wrapTmux = results['tmux-passthrough'] as bool;
+  final localMedia = results['local-media'] as bool;
 
   if (results['self-test'] as bool) {
-    final code = await _runSelfTest(asJson: asJson, timeout: timeout);
+    final code = await _runSelfTest(
+      asJson: asJson,
+      timeout: timeout,
+      wrapTmux: wrapTmux,
+      localMedia: localMedia,
+    );
     exit(code);
   }
 
   if (results['report'] as bool) {
-    final code = await _runStdioBatchReport(asJson: asJson, timeout: timeout);
+    final code = await _runStdioBatchReport(
+      asJson: asJson,
+      timeout: timeout,
+      strict: strict,
+      wrapTmux: wrapTmux,
+      localMedia: localMedia,
+    );
     exit(code);
   }
 
@@ -197,6 +379,10 @@ Future<void> main(List<String> arguments) async {
     exit(0);
   }
 
-  await _runInteractiveStdio(timeout);
+  await _runInteractiveStdio(
+    timeout,
+    wrapTmux: wrapTmux,
+    localMedia: localMedia,
+  );
   exit(0);
 }
