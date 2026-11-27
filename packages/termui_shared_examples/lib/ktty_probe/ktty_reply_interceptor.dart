@@ -13,14 +13,15 @@ final class KttyReplyInterceptor {
 
   static final RegExp _decrqmRegex = RegExp(r'^\?(\d+);(\d+)\$y$');
   static final RegExp _kittyKbQueryRegex = RegExp(r'^\?(\d+)u$');
+  static final RegExp _xtwinops14Regex = RegExp(r'^4;(\d+);(\d+)t$');
   static final RegExp _xtwinops16Regex = RegExp(r'^6;(\d+);(\d+)t$');
   static final RegExp _xtwinops18Regex = RegExp(r'^8;(\d+);(\d+)t$');
+  static final RegExp _colorSchemeRegex = RegExp(r'^\?997;(\d+)n$');
   static final RegExp _sgrMouseBodyRegex = RegExp(
     r'^<(\d+);(\d+);(\d+)([Mm])$',
   );
   static final RegExp _da1Regex = RegExp(r'^\?([\d;]*)c$');
   static final RegExp _da2Regex = RegExp(r'^>([\d;]*)c$');
-  static final RegExp _apcIdRegex = RegExp(r'i=(\d+)');
   static final RegExp _rgbSlashRegex = RegExp(
     r'^rgb:([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})$',
   );
@@ -232,6 +233,21 @@ final class KttyReplyInterceptor {
       return true;
     }
 
+    final scheme = _colorSchemeRegex.firstMatch(body);
+    if (scheme != null) {
+      report.recordColorScheme(int.tryParse(scheme.group(1)!) ?? 0);
+      return true;
+    }
+
+    final winPx = _xtwinops14Regex.firstMatch(body);
+    if (winPx != null) {
+      report.recordViewportPixelSize(
+        int.tryParse(winPx.group(2)!) ?? 0,
+        int.tryParse(winPx.group(1)!) ?? 0,
+      );
+      return true;
+    }
+
     final cellPx = _xtwinops16Regex.firstMatch(body);
     if (cellPx != null) {
       report.recordCellPixelSize(
@@ -310,6 +326,10 @@ final class KttyReplyInterceptor {
       report.recordOscColor(code!, rest, parseOscColorSpecToHex(rest));
       return false;
     }
+    if (code == 22) {
+      report.recordOsc22PointerQuery(rest);
+      return false;
+    }
     if (code == 52) {
       _tryRecordOsc52(rest);
       return true;
@@ -324,9 +344,15 @@ final class KttyReplyInterceptor {
   void _recordOsc99Reply(String rest) {
     final semi = rest.indexOf(';');
     final meta = semi >= 0 ? rest.substring(0, semi) : rest;
+    final body = semi >= 0 ? rest.substring(semi + 1) : '';
+    final fields = meta.split(':');
+    if (fields.contains('p=?')) {
+      report.recordOsc99CapabilityQuery(body);
+      return;
+    }
     var id = '?';
     var kind = 'activated';
-    for (final kv in meta.split(':')) {
+    for (final kv in fields) {
       if (kv.startsWith('i=')) {
         id = kv.substring(2);
       } else if (kv == 'p=close') {
@@ -350,15 +376,44 @@ final class KttyReplyInterceptor {
   }
 
   bool _inspectApcPayload(String payload) {
-    if (!payload.startsWith('G') && !payload.startsWith('_G')) return false;
-    final semi = payload.indexOf(';');
-    final control = semi >= 0 ? payload.substring(0, semi) : payload;
-    final status = semi >= 0 ? payload.substring(semi + 1) : '';
-    final match = _apcIdRegex.firstMatch(control);
-    final id = match != null ? int.tryParse(match.group(1)!) : null;
-    if (id != null) {
-      report.recordApcReply(id, status);
+    final int prefixLen;
+    if (payload.startsWith('_G')) {
+      prefixLen = 2;
+    } else if (payload.startsWith('G')) {
+      prefixLen = 1;
+    } else {
       return false;
+    }
+    final semi = payload.indexOf(';', prefixLen);
+    final control = semi >= 0
+        ? payload.substring(prefixLen, semi)
+        : payload.substring(prefixLen);
+    final status = semi >= 0 ? payload.substring(semi + 1) : '';
+    int? id;
+    int? num;
+    int? pid;
+    for (final kv in control.split(',')) {
+      final eq = kv.indexOf('=');
+      if (eq <= 0) continue;
+      final key = kv.substring(0, eq);
+      final val = int.tryParse(kv.substring(eq + 1));
+      if (val == null) continue;
+      switch (key) {
+        case 'i':
+          id = val;
+        case 'I':
+          num = val;
+        case 'p':
+          pid = val;
+      }
+    }
+    if (id != null || num != null) {
+      report.recordApcReply(
+        id ?? 0,
+        status,
+        imageNumber: num,
+        placementId: pid,
+      );
     }
     return false;
   }

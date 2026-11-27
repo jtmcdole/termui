@@ -269,7 +269,8 @@ final class KttyProbeDashboard extends StatelessWidget {
 
   Widget _buildHeaderBar() {
     final r = state.report;
-    final total = r.entries.length;
+    final coreTotal = r.coreTotalCount;
+    final coreSupported = r.coreSupportedCount;
     final ident = r.xtVersion ?? 'Probing XTVERSION...';
     final fg = r.defaultForegroundHex ?? '?';
     final bg = r.defaultBackgroundHex ?? '?';
@@ -289,9 +290,10 @@ final class KttyProbeDashboard extends StatelessWidget {
               ),
             ),
             TextSpan(
-              text: ' ${r.supportedCount}/$total PASS ',
+              text: ' $coreSupported/$coreTotal PASS ',
               style: Style(
-                foreground: r.supportedCount == total
+                foreground:
+                    r.coreUnsupportedCount == 0 && coreSupported == coreTotal
                     ? CharmColors.julep
                     : CharmColors.butter,
                 modifiers: Modifier.bold,
@@ -400,6 +402,7 @@ final class KttyProbeDashboard extends StatelessWidget {
       .supported => ('PASS', CharmColors.julep),
       .unsupported => ('MISS', CharmColors.salmon),
       .pending => ('WAIT', CharmColors.butter),
+      .optionalDisabled => ('OPT ', CharmColors.malibu),
     };
     return SizedBox(
       height: 1,
