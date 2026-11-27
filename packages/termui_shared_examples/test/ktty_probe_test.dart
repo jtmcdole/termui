@@ -147,8 +147,9 @@ void main() {
       }
 
       expect(report.isComplete, isTrue);
-      expect(report.supportedCount, equals(17));
-      expect(report.unsupportedCount, equals(0));
+      expect(report.supportedCount, equals(18));
+      expect(report.coreUnsupportedCount, equals(8));
+      expect(report.optionalDisabledCount, equals(2));
       expect(report.xtVersion, equals('kitty(0.37.0)'));
       expect(report.kittyKeyboardFlags, equals(11));
       expect(report.defaultForegroundHex, equals('#EFF1F5'));
@@ -246,11 +247,101 @@ void main() {
         equals('id=ktty3 closed (p=close) (OSC 99;i=ktty3:p=close;)'),
       );
     });
+
+    test(
+      'reassembles 1-byte chunks for 14t, 16t, DECRQM ?2031, CSI ?997n, OSC 22, OSC 99 p=?, and extended APC replies',
+      () {
+        final report = KttyProbeReport()..resetForNewProbe();
+        final interceptor = KttyReplyInterceptor(report);
+        final wireStream =
+            '\x1b_Gi=905;OK\x1b\\'
+            '\x1b_Gi=906,p=7;OK\x1b\\'
+            '\x1b_Gi=42,I=907;OK\x1b\\'
+            '\x1b_Gi=908;EINVAL:UNSUPPORTED medium\x1b\\'
+            '\x1b_Gi=909;OK\x1b\\'
+            '\x1b[4;540;900t'
+            '\x1b[6;20;10t'
+            '\x1b[?2031;2\$y'
+            '\x1b[?997;2n'
+            '\x1b]22;1,1,0\x1b\\'
+            '\x1b]99;i=ktty-probe:p=?;a=report:c=1:p=title,body,close,?\x1b\\'
+            '\x1b[?62;22c';
+
+        final passthrough = BytesBuilder();
+        for (final byte in utf8.encode(wireStream)) {
+          passthrough.add(interceptor.processChunk([byte]));
+        }
+
+        expect(passthrough.takeBytes(), isEmpty);
+        expect(report.isComplete, isTrue);
+        expect(
+          report['apc_chunked']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(report['apc_chunked']?.detail, equals('OK (i=905)'));
+        expect(
+          report['apc_place_persist']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(report['apc_place_persist']?.detail, equals('OK (i=906,p=7)'));
+        expect(
+          report['apc_image_num']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(report['apc_image_num']?.detail, equals('OK (i=42,I=907)'));
+        expect(
+          report['apc_temp_file']?.status,
+          equals(KttyCapabilityStatus.optionalDisabled),
+        );
+        expect(
+          report['apc_shm']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(report.viewportPixelWidth, equals(900));
+        expect(report.viewportPixelHeight, equals(540));
+        expect(report['xtwinops_14t']?.detail, equals('900x540px'));
+        expect(report['xtwinops_16t']?.detail, equals('10x20px'));
+        expect(
+          report['decrqm_2031']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(report.colorScheme, equals('light'));
+        expect(
+          report['csi_996_scheme']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(
+          report['osc_22_pointer']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(
+          report['osc_99_query']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(report.hasOsc99Ack, isFalse);
+
+        // Verify I=907 without i= and unknown CSI ?997;3n mode handling.
+        final reportNoId = KttyProbeReport()..resetForNewProbe();
+        final interceptorNoId = KttyReplyInterceptor(reportNoId);
+        for (final byte in utf8.encode('\x1b_GI=907;OK\x1b\\\x1b[?997;3n')) {
+          interceptorNoId.processChunk([byte]);
+        }
+        expect(
+          reportNoId['apc_image_num']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(reportNoId['apc_image_num']?.detail, equals('OK (I=907)'));
+        expect(
+          reportNoId['csi_996_scheme']?.status,
+          equals(KttyCapabilityStatus.unsupported),
+        );
+      },
+    );
   });
 
   group('VirtualTerminal end-to-end KTTY probe', () {
     test(
-      'runKttyBatchProbe passes all 17 capabilities against VirtualTerminal',
+      'runKttyBatchProbe passes all 26 core capabilities and cleans up temporary probe images',
       () async {
         final replies = StreamController<List<int>>.broadcast();
         final vt = VirtualTerminal(
@@ -272,13 +363,20 @@ void main() {
         );
 
         expect(report.isComplete, isTrue);
-        expect(report.supportedCount, equals(17));
-        expect(report.unsupportedCount, equals(0));
+        expect(report.coreSupportedCount, equals(26));
+        expect(report.coreTotalCount, equals(26));
+        expect(report.coreUnsupportedCount, equals(0));
+        expect(report.optionalDisabledCount, equals(2));
         expect(
           report.formatPlainReport(ansiColor: false),
-          contains('17/17 supported'),
+          contains('26/26 core supported'),
         );
-        expect(report.toJsonMap()['supportedCount'], equals(17));
+        expect(report.toJsonMap()['coreSupported'], equals(26));
+        // Temporary probes (905, 906, I=907) must be cleaned up before DA1.
+        expect(
+          vt.imageRegistry.registeredImageIds.toSet(),
+          equals({kttyProbeRgbaId, kttyProbeZlibId, kttyProbePngId}),
+        );
 
         await replies.close();
         vt.dispose();
@@ -303,8 +401,10 @@ void main() {
         expect(lastFrame, isNotNull);
         final initialScreen = _bufferToText(lastFrame!);
         expect(initialScreen, contains('VirtualTerminal Wrapper'));
+        expect(initialScreen, contains('Scheme:dark'));
+        expect(initialScreen, contains('Ptr:default'));
         expect(initialScreen, contains('KTTY PROBE'));
-        expect(initialScreen, contains('17/17 PASS'));
+        expect(initialScreen, contains('26/26 PASS'));
 
         // Verify U+10EEEE Kitty placeholder cells, SGR 58 underline colors, and OSC 8 URIs
         // all made it across the VirtualTerminal -> TerminalView wire!
@@ -356,7 +456,7 @@ void main() {
         final finalReport = await probeFuture.timeout(
           const Duration(seconds: 3),
         );
-        expect(finalReport.supportedCount, equals(17));
+        expect(finalReport.coreSupportedCount, equals(26));
         expect(finalReport.hasOsc99Ack, isTrue);
         expect(
           finalReport.lastOsc99Ack,
@@ -385,14 +485,14 @@ void main() {
         await _pumpEventQueue(16);
         expect(hostBackend.output.toString(), contains('\x1b[=11;1u'));
 
-        // Cycle Kitty keyboard flags via 'k' (11 -> 3 -> 1 -> 0 -> 11) and verify host output sync
+        // Cycle Kitty keyboard flags via 'k' (11 -> 31 -> 15 -> 3 -> 1 -> 0 -> 11) and verify host output sync
         hostBackend.output.clear();
         hostBackend.input.add(utf8.encode('k'));
         await _pumpEventQueue(8);
-        expect(hostBackend.output.toString(), contains('\x1b[=3;1u'));
+        expect(hostBackend.output.toString(), contains('\x1b[=31;1u'));
 
         hostBackend.output.clear();
-        hostBackend.input.add(utf8.encode('kk'));
+        hostBackend.input.add(utf8.encode('kkkk'));
         await _pumpEventQueue(8);
         expect(hostBackend.output.toString(), contains('\x1b[=0;1u'));
 
@@ -480,5 +580,117 @@ void main() {
         );
       },
     );
+
+    test(
+      'runKttyBatchProbe completes cleanly on timeout and stopHandle without double-completing',
+      () async {
+        final silentInput = StreamController<List<int>>.broadcast();
+        addTearDown(silentInput.close);
+
+        final timedOut = await runKttyBatchProbe(
+          wireInput: silentInput.stream,
+          onWriteWire: (_) {},
+          timeout: const Duration(milliseconds: 25),
+        );
+        expect(timedOut.isComplete, isTrue);
+        expect(timedOut.coreUnsupportedCount, equals(26));
+        expect(timedOut.optionalDisabledCount, equals(2));
+        expect(timedOut['da1']?.detail, equals('Timed out waiting for DA1'));
+
+        final stopHandle = KttyProbeStopHandle();
+        final abortFuture = runKttyBatchProbe(
+          wireInput: silentInput.stream,
+          onWriteWire: (_) => scheduleMicrotask(stopHandle.stop),
+          timeout: const Duration(seconds: 5),
+          stopHandle: stopHandle,
+        );
+        final aborted = await abortFuture;
+        expect(aborted.isComplete, isTrue);
+        expect(aborted['da1']?.detail, equals('Aborted before DA1'));
+      },
+    );
+  });
+
+  group('bin/ktty_probe.dart CLI flags', () {
+    Future<ProcessResult> runCli(List<String> args) {
+      return Process.run(Platform.resolvedExecutable, [
+        'bin/ktty_probe.dart',
+        ...args,
+      ]);
+    }
+
+    test('--help prints usage including new Wave 4 flags', () async {
+      final result = await runCli(const ['--help']);
+      expect(result.exitCode, equals(0));
+      final out = result.stdout as String;
+      expect(out, contains('--strict'));
+      expect(out, contains('--tmux-passthrough'));
+      expect(out, contains('--local-media'));
+    });
+
+    test(
+      'rejects unknown flags, invalid --timeout-ms, and conflicting modes with exit 64',
+      () async {
+        final badFlag = await runCli(const ['--does-not-exist']);
+        expect(badFlag.exitCode, equals(64));
+
+        final badTimeout = await runCli(const [
+          '--self-test',
+          '--timeout-ms',
+          'abc',
+        ]);
+        expect(badTimeout.exitCode, equals(64));
+
+        final conflict = await runCli(const ['--self-test', '--report']);
+        expect(conflict.exitCode, equals(64));
+      },
+    );
+
+    test('--self-test --json --strict emits 26/26 core pass JSON', () async {
+      final result = await runCli(const ['--self-test', '--json', '--strict']);
+      expect(result.exitCode, equals(0), reason: '${result.stderr}');
+      final decoded =
+          jsonDecode(result.stdout as String) as Map<String, Object?>;
+      expect(decoded['coreSupported'], equals(26));
+      expect(decoded['coreUnsupported'], equals(0));
+    });
+
+    test(
+      '--self-test --local-media --json --strict probes t=t without unlinking and cleans up',
+      () async {
+        final result = await runCli(const [
+          '--self-test',
+          '--local-media',
+          '--json',
+          '--strict',
+        ]);
+        expect(result.exitCode, equals(0), reason: '${result.stderr}');
+        expect(
+          result.stderr as String,
+          isNot(contains('unexpectedly unlinked')),
+        );
+        final decoded =
+            jsonDecode(result.stdout as String) as Map<String, Object?>;
+        final caps = (decoded['capabilities'] as List<Object?>)
+            .cast<Map<String, Object?>>();
+        final tempCap = caps.firstWhere((c) => c['id'] == 'apc_temp_file');
+        expect(tempCap['status'], equals('supported'));
+      },
+    );
+
+    test('--self-test --tmux-passthrough --strict exits 0', () async {
+      final result = await runCli(const [
+        '--self-test',
+        '--tmux-passthrough',
+        '--strict',
+      ]);
+      expect(result.exitCode, equals(0), reason: '${result.stderr}');
+    });
+
+    test('--report without a TTY on stdin exits 2', () async {
+      final result = await runCli(const ['--report']);
+      expect(result.exitCode, equals(2));
+      expect(result.stderr as String, contains('--self-test'));
+    });
   });
 }
