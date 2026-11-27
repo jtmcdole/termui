@@ -427,10 +427,64 @@ enum MousePointer {
   resizeLeftRight('ew-resize'),
 
   /// All-scroll cursor (four-way arrow indicator).
-  allScroll('all-scroll');
+  allScroll('all-scroll'),
+
+  /// Context menu cursor (arrow with menu icon).
+  contextMenu('context-menu'),
+
+  /// Vertical text selection cursor (rotated I-beam).
+  verticalText('vertical-text'),
+
+  /// Column resize cursor (vertical bar with left/right arrows).
+  colResize('col-resize'),
+
+  /// Row resize cursor (horizontal bar with up/down arrows).
+  rowResize('row-resize'),
+
+  /// North edge resize cursor.
+  resizeUp('n-resize'),
+
+  /// South edge resize cursor.
+  resizeDown('s-resize'),
+
+  /// West edge resize cursor.
+  resizeLeft('w-resize'),
+
+  /// East edge resize cursor.
+  resizeRight('e-resize'),
+
+  /// North-west corner resize cursor.
+  resizeUpLeft('nw-resize'),
+
+  /// North-east corner resize cursor.
+  resizeUpRight('ne-resize'),
+
+  /// South-west corner resize cursor.
+  resizeDownLeft('sw-resize'),
+
+  /// South-east corner resize cursor.
+  resizeDownRight('se-resize'),
+
+  /// Diagonal NE-SW resize cursor.
+  resizeUpRightDownLeft('nesw-resize'),
+
+  /// Diagonal NW-SE resize cursor.
+  resizeUpLeftDownRight('nwse-resize');
 
   /// The parameter value for the OSC 22 sequence.
   final String value;
 
   const MousePointer(this.value);
+
+  static final Map<String, MousePointer> _byOsc22Name = {
+    for (final pointer in values) pointer.value: pointer,
+  };
+
+  /// Looks up a [MousePointer] by its CSS/W3C `OSC 22` cursor [name].
+  ///
+  /// Returns `null` when [name] is `null`, empty, or unsupported.
+  static MousePointer? fromOsc22Name(String? name) {
+    if (name == null || name.isEmpty) return null;
+    return _byOsc22Name[name];
+  }
 }
