@@ -500,7 +500,7 @@ void main() {
         // must replace the remote green image with yellow rather than silently keeping stale pixels.
         await _runRealAsync(tester, () async {
           rig.backend.emitText(
-            '\x1b_Ga=d,d=i,i=77,q=2\x1b\\'
+            '\x1b_Ga=d,d=I,i=77,q=2\x1b\\'
             '\r\n${_buildSolidRgbZlibIcat(pixelWidth: 1200, pixelHeight: 900, r: 240, g: 220, b: 20, gridCols: 12, gridRows: 5, imageId: 77)}',
           );
         });
