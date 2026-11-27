@@ -752,5 +752,94 @@ void main() {
         expect(replies, equals(['\x1b_GI=99;OK\x1b\\']));
       },
     );
+
+    test(
+      'Chunked tmux/U=1 kitten icat uploads with explicit i= on chunk 0 and repeated a=T without i= on continuation chunks register and resolve placeholders',
+      () {
+        final vt = VirtualTerminal(
+          width: 20,
+          height: 6,
+          cellPixelWidth: 10,
+          cellPixelHeight: 20,
+        );
+
+        // 1. Multi-chunk PNG (f=100, U=1) matching kitten icat inside tmux:
+        //    chunk 0 carries explicit 32-bit i=, subsequent chunks repeat a=T,q=2,m=1
+        //    and final chunk omits both i= and m= (a=T,q=2).
+        const pngId = 0x6B3E9780; // MSB=0x6B, R=62, G=151, B=128
+        final pngBytes = _minimalPngBytes(40, 40);
+        final pngB64 = base64Encode(pngBytes);
+        final third = pngB64.length ~/ 3;
+
+        vt.writeString(
+          '\x1b_Ga=T,q=2,f=100,m=1,U=1,s=40,v=40,c=4,r=2,i=$pngId;'
+          '${pngB64.substring(0, third)}\x1b\\',
+        );
+        expect(vt.imageRegistry.lookupImage(pngId), isNull);
+
+        vt.writeString(
+          '\x1b_Ga=T,q=2,m=1;${pngB64.substring(third, third * 2)}\x1b\\',
+        );
+        expect(vt.imageRegistry.lookupImage(pngId), isNull);
+
+        vt.writeString('\x1b_Ga=T,q=2;${pngB64.substring(third * 2)}\x1b\\');
+
+        final registeredPng = vt.imageRegistry.lookupImage(pngId);
+        expect(registeredPng, isNotNull);
+        expect(registeredPng!.format, equals(KittyImageData.formatPng));
+        expect(registeredPng.pixelWidth, equals(40));
+        expect(registeredPng.pixelHeight, equals(40));
+        expect(registeredPng.gridCols, equals(4));
+        expect(registeredPng.gridRows, equals(2));
+        expect(registeredPng.rgbaPixels, equals(pngBytes));
+        // U=1 virtual upload must not write direct cells at cursor.
+        expect(vt.buffer.getCharacter(0, 0), equals(' '));
+        expect(vt.cursorX, equals(0));
+
+        // Emit U+10EEEE placeholders with 24-bit RGB fg and tmux's incremental BS rewrites.
+        final cell00 = kittyPlaceholderCell(0, 0, imageIdMsb: 0x6B);
+        final cell01 = kittyPlaceholderCell(0, 1, imageIdMsb: 0x6B);
+        vt.writeString(
+          '\x1b[38;2;62;151;128m'
+          '$kittyPlaceholderChar\x08'
+          '${cell00.substring(0, 3)}\x08'
+          '${cell00.substring(0, 4)}\x08'
+          '$cell00'
+          '$cell01\x1b[39m',
+        );
+        expect(vt.buffer.getCharacter(0, 0), equals(cell00));
+        expect(vt.buffer.getCharacter(1, 0), equals(cell01));
+        expect(
+          extractKittyCellImageId(
+            vt.buffer.getCharacter(0, 0),
+            vt.buffer.getForeground(0, 0),
+          ),
+          equals(pngId),
+        );
+        expect(vt.buffer.lookupKittyImage(0, 0, pngId), equals(registeredPng));
+        expect(vt.buffer.lookupKittyImage(1, 0, pngId), equals(registeredPng));
+
+        // 2. Multi-chunk zlib RGB24 (f=24, o=z, U=1) wrapped in DCS tmux passthrough
+        //    with explicit i= on chunk 0 and repeated a=T,q=2 on continuations.
+        const rgbId = 0x3442C2B2;
+        final rgbPayload = _buildUnpaddedCompressedRgbStream(20, 20);
+        final mid = rgbPayload.unpaddedB64.length ~/ 2;
+        vt.writeString(
+          '\x1bPtmux;\x1b\x1b_Ga=T,q=2,f=24,o=z,m=1,U=1,s=20,v=20,c=2,r=1,i=$rgbId;'
+          '${rgbPayload.unpaddedB64.substring(0, mid)}\x1b\x1b\\\x1b\\',
+        );
+        vt.writeString(
+          '\x1bPtmux;\x1b\x1b_Ga=T,q=2;'
+          '${rgbPayload.unpaddedB64.substring(mid)}\x1b\x1b\\\x1b\\',
+        );
+
+        final registeredRgb = vt.imageRegistry.lookupImage(rgbId);
+        expect(registeredRgb, isNotNull);
+        expect(registeredRgb!.pixelWidth, equals(20));
+        expect(registeredRgb.pixelHeight, equals(20));
+        expect(registeredRgb.gridCols, equals(2));
+        expect(registeredRgb.gridRows, equals(1));
+      },
+    );
   });
 }

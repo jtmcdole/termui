@@ -438,8 +438,7 @@ final class KittyApcHandler {
     if (explicitNumber > 0 && existing.replyPrefix != 'I=$explicitNumber') {
       return false;
     }
-    return !hasExplicitAction ||
-        (!existing.hasAddressableId && existing.action == action);
+    return !hasExplicitAction || existing.action == action;
   }
 
   _PendingUpload _obtainPendingUpload(
