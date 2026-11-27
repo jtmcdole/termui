@@ -53,6 +53,7 @@ void main() {
           width: 20,
           height: 6,
           onReply: replies.add,
+          allowLocalKittyMedia: true,
         );
 
         // Exact probe patterns emitted by kitty/kittens/icat/detect.go (unpadded base64).

@@ -322,9 +322,9 @@ void main() {
           onReply: replies.add,
         );
 
-        // 1. Oversized dimensions (> 4096) rejected before allocation.
+        // 1. Oversized dimensions (> 8192) rejected before allocation.
         final tiny = base64Encode(Uint8List(4));
-        terminal.writeString('\x1b_Gi=401,s=5000,v=1,a=t,f=32;$tiny\x1b\\');
+        terminal.writeString('\x1b_Gi=401,s=9000,v=1,a=t,f=32;$tiny\x1b\\');
         expect(
           replies.last,
           equals('\x1b_Gi=401;EINVAL:invalid payload\x1b\\'),
@@ -564,7 +564,12 @@ void main() {
       'Bare a=d / d=a and d=i clear placements without freeing image data for subsequent a=p, while d=A / d=I free data',
       () {
         final replies = <String>[];
-        final vt = VirtualTerminal(width: 10, height: 5, onReply: replies.add);
+        final vt = VirtualTerminal(
+          width: 10,
+          height: 5,
+          onReply: replies.add,
+          allowLocalKittyMedia: true,
+        );
         final pxB64 = base64Encode(Uint8List.fromList([255, 0, 0, 255]));
 
         // Transmit image 1 and 2 (separate transmit + place flow).
@@ -630,7 +635,12 @@ void main() {
       'Supports local temp file (t=t) and Linux POSIX shared memory (t=s) with O=/S= slicing, security checks, and unlink',
       () {
         final replies = <String>[];
-        final vt = VirtualTerminal(width: 10, height: 5, onReply: replies.add);
+        final vt = VirtualTerminal(
+          width: 10,
+          height: 5,
+          onReply: replies.add,
+          allowLocalKittyMedia: true,
+        );
         final rgba = Uint8List.fromList([10, 20, 30, 255]);
 
         // 1. t=t temp file with S=0 (protocol default -> read to EOF) unlinks after read.
@@ -845,6 +855,177 @@ void main() {
         expect(normalizeMacosShmName('/foo\x00bar'), isNull);
         expect(normalizeMacosShmName('/${'a' * 29}'), equals('/${'a' * 29}'));
         expect(normalizeMacosShmName('/${'a' * 30}'), isNull);
+      },
+    );
+
+    test(
+      'Local media (t=t/t=s) is disabled by default and preserves files on a=q or read errors',
+      () {
+        final rgba = Uint8List.fromList([1, 2, 3, 255]);
+        final tmpPath =
+            '${Directory.systemTemp.path}/tty-graphics-protocol-keep-$pid.rgba';
+        final tmpFile = File(tmpPath)..writeAsBytesSync(rgba);
+        addTearDown(() {
+          if (tmpFile.existsSync()) tmpFile.deleteSync();
+        });
+        final tmpB64 = base64Encode(utf8.encode(tmpPath));
+        final shmB64 = base64Encode(utf8.encode('/termui-disabled-$pid'));
+
+        // 1. Default VirtualTerminal rejects t=t and t=s without unlinking.
+        final defaultReplies = <String>[];
+        final defaultVt = VirtualTerminal(
+          width: 10,
+          height: 5,
+          onReply: defaultReplies.add,
+        );
+        defaultVt.writeString('\x1b_Ga=t,f=32,s=1,v=1,i=201,t=t;$tmpB64\x1b\\');
+        defaultVt.writeString('\x1b_Ga=t,f=32,s=1,v=1,i=202,t=s;$shmB64\x1b\\');
+        expect(
+          defaultReplies,
+          equals([
+            '\x1b_Gi=201;EINVAL:unsupported transmission medium\x1b\\',
+            '\x1b_Gi=202;EINVAL:unsupported transmission medium\x1b\\',
+          ]),
+        );
+        expect(tmpFile.existsSync(), isTrue);
+
+        // 2. With allowLocalKittyMedia: true, a=q probe and O= error do NOT unlink.
+        final replies = <String>[];
+        final vt = VirtualTerminal(
+          width: 10,
+          height: 5,
+          onReply: replies.add,
+          allowLocalKittyMedia: true,
+        );
+        vt.writeString('\x1b_Ga=q,f=32,s=1,v=1,i=203,t=t;$tmpB64\x1b\\');
+        expect(replies.last, equals('\x1b_Gi=203;OK\x1b\\'));
+        expect(tmpFile.existsSync(), isTrue);
+
+        vt.writeString(
+          '\x1b_Ga=t,f=32,s=1,v=1,i=204,t=t,O=999999;$tmpB64\x1b\\',
+        );
+        expect(replies.last, startsWith('\x1b_Gi=204;EINVAL:'));
+        expect(tmpFile.existsSync(), isTrue);
+
+        // 3. UNC (including mixed-slash) and relative paths are rejected with EINVAL.
+        for (final badPath in const [
+          r'\\host\share\tty-graphics-protocol.rgba',
+          '//host/share/tty-graphics-protocol.rgba',
+          r'\/host/share/tty-graphics-protocol.rgba',
+          r'/\host\share\tty-graphics-protocol.rgba',
+          'tty-graphics-protocol-relative.rgba',
+        ]) {
+          replies.clear();
+          final b64 = base64Encode(utf8.encode(badPath));
+          vt.writeString('\x1b_Ga=t,f=32,s=1,v=1,i=205,t=t;$b64\x1b\\');
+          expect(
+            replies.single,
+            startsWith('\x1b_Gi=205;EINVAL:'),
+            reason: 'Expected EINVAL for $badPath',
+          );
+        }
+      },
+    );
+
+    test(
+      'Resets stale m=1 uploads on conflicting metadata and preserves chunked I= continuations',
+      () {
+        final replies = <String>[];
+        final vt = VirtualTerminal(width: 10, height: 5, onReply: replies.add);
+        final rgba = Uint8List.fromList([7, 8, 9, 255]);
+        final b64 = base64Encode(rgba);
+        final mid = b64.length ~/ 2;
+
+        // 1. Aborted 2x2 m=1 upload on i=50 is replaced cleanly by a new 1x1 m=1 upload.
+        vt.writeString(
+          '\x1b_Ga=t,i=50,f=32,s=2,v=2,m=1;${b64.substring(0, mid)}\x1b\\',
+        );
+        vt.writeString(
+          '\x1b_Ga=t,i=50,f=32,s=1,v=1,m=1;${b64.substring(0, mid)}\x1b\\',
+        );
+        vt.writeString('\x1b_Gi=50,m=0;${b64.substring(mid)}\x1b\\');
+        expect(replies, contains('\x1b_Gi=50;OK\x1b\\'));
+        expect(vt.imageRegistry.lookupImage(50)?.pixelWidth, equals(1));
+        expect(vt.imageRegistry.lookupImage(50)?.rgbaPixels, equals(rgba));
+
+        // 2. Aborted a=q,m=1 on i=51 does NOT hijack a subsequent implicit a=t,m=0 upload.
+        replies.clear();
+        vt.writeString('\x1b_Ga=q,i=51,f=32,s=1,v=1,m=1;AAAA\x1b\\');
+        vt.writeString('\x1b_Gi=51,f=32,s=1,v=1,m=0;$b64\x1b\\');
+        expect(replies, contains('\x1b_Gi=51;OK\x1b\\'));
+        expect(vt.imageRegistry.lookupImage(51)?.rgbaPixels, equals(rgba));
+
+        // 3. Chunked I=7 upload repeating f=32,t=d on m=0 completes cleanly.
+        replies.clear();
+        vt.writeString(
+          '\x1b_Ga=t,I=7,f=32,s=1,v=1,t=d,m=1;${b64.substring(0, mid)}\x1b\\',
+        );
+        vt.writeString('\x1b_GI=7,f=32,t=d,m=0;${b64.substring(mid)}\x1b\\');
+        expect(replies.single, matches(RegExp(r'^\x1b_Gi=\d+,I=7;OK\x1b\\$')));
+      },
+    );
+
+    test(
+      'Tracks selective placementId clearing, multi-placement sizing, mixed U=1/direct d=a, and 32-bit continuation cells',
+      () {
+        final vt = VirtualTerminal(width: 10, height: 6);
+        final b64 = base64Encode(Uint8List.fromList([50, 60, 70, 255]));
+
+        // 1. Two placements (p=1 at row 0 with c=4,r=2; p=2 at row 3 with c=2,r=1).
+        vt.writeString('\x1b_Ga=t,i=160,f=32,s=1,v=1,c=4,r=2;$b64\x1b\\');
+        vt.writeString('\x1b[1;1H\x1b_Ga=p,i=160,p=1,c=4,r=2,C=1\x1b\\');
+        vt.writeString('\x1b[4;1H\x1b_Ga=p,i=160,p=2,c=2,r=1,C=1\x1b\\');
+        // Second placement must not shrink the stored image's gridCols/gridRows.
+        expect(vt.imageRegistry.lookupImage(160)?.gridCols, equals(4));
+        expect(vt.imageRegistry.lookupImage(160)?.gridRows, equals(2));
+
+        // Deleting only p=1 clears row 0..1 while keeping p=2 on row 3.
+        vt.writeString('\x1b_Ga=d,d=i,i=160,p=1\x1b\\');
+        expect(vt.buffer.getCharacter(0, 0), equals(' '));
+        expect(vt.buffer.getCharacter(3, 1), equals(' '));
+        expect(
+          vt.buffer.getCharacter(0, 3),
+          equals(kittyPlaceholderCell(0, 0)),
+        );
+        expect(
+          vt.buffer.getCharacter(1, 3),
+          equals(kittyPlaceholderCell(0, 1)),
+        );
+
+        // 2. Mixed U=1 (p=1 with SGR 58) and direct (p=0 default + p=1) on the same imageId:
+        // d=a clears both direct placements without wiping U=1 cells.
+        vt.writeString(
+          '\x1b_Ga=T,U=1,i=161,p=1,f=32,s=1,v=1,c=2,r=1;$b64\x1b\\',
+        );
+        vt.writeString(
+          '\x1b[1;1H\x1b[38;2;0;0;161;58;2;0;0;1m'
+          '${kittyPlaceholderCell(0, 0)}$kittyPlaceholderChar\x1b[39;59m',
+        );
+        vt.writeString('\x1b[2;1H\x1b_Ga=p,i=161,c=2,r=1,C=1\x1b\\');
+        vt.writeString('\x1b[3;1H\x1b_Ga=p,i=161,p=1,c=2,r=1,C=1\x1b\\');
+        vt.writeString('\x1b_Ga=d,d=a\x1b\\');
+        expect(
+          vt.buffer.getCharacter(0, 0),
+          equals(kittyPlaceholderCell(0, 0)),
+        );
+        expect(vt.buffer.getCharacter(0, 1), equals(' '));
+        expect(vt.buffer.getCharacter(1, 1), equals(' '));
+        expect(vt.buffer.getCharacter(0, 2), equals(' '));
+        expect(vt.buffer.getCharacter(1, 2), equals(' '));
+
+        // 3. Direct 32-bit U+10EEEE row with 1-diacritic and bare continuations clears all 3 cols on d=i.
+        const id32 = 0x120000A5;
+        vt.writeString('\x1b_Ga=t,i=$id32,f=32,s=1,v=1;$b64\x1b\\');
+        vt.writeString(
+          '\x1b[5;1H\x1b[38;2;0;0;165m'
+          '${kittyPlaceholderCell(0, 0, imageIdMsb: 0x12)}'
+          '$kittyPlaceholderChar\u0305'
+          '$kittyPlaceholderChar\x1b[39m',
+        );
+        vt.writeString('\x1b_Ga=d,d=i,i=$id32\x1b\\');
+        expect(vt.buffer.getCharacter(0, 4), equals(' '));
+        expect(vt.buffer.getCharacter(1, 4), equals(' '));
+        expect(vt.buffer.getCharacter(2, 4), equals(' '));
       },
     );
   });

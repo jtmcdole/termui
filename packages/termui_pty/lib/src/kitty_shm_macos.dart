@@ -174,13 +174,15 @@ KittyMediumReadResult _mmapReadSlice(
   }
 }
 
-/// Reads and unlinks a macOS POSIX shared-memory object (`t=s`) via `shm_open`,
-/// `fstat`, `mmap`, and `shm_unlink`.
+/// Reads a macOS POSIX shared-memory object (`t=s`) via `shm_open`, `fstat`,
+/// and `mmap`, optionally unlinking it with `shm_unlink` when [unlink] is
+/// `true` and the read succeeds.
 KittyMediumReadResult readMacosPosixShm(
   String decodedName, {
   required int maxBytes,
   int offset = 0,
   int? size,
+  bool unlink = true,
 }) {
   if (offset < 0 || maxBytes < 0 || (size != null && size < 0)) {
     return const KittyMediumReadInvalid();
@@ -204,13 +206,10 @@ KittyMediumReadResult readMacosPosixShm(
           ? const KittyMediumReadNotFound()
           : const KittyMediumReadInvalid();
     }
-    // Unlink immediately per POSIX/Kitty semantics so the name is removed from
-    // the global shm namespace while the open `fd` keeps the memory alive.
-    lib.shmUnlink(namePtr);
     try {
       final fileLen = _readMacosFdSize(lib, fd);
       if (fileLen == null) return const KittyMediumReadInvalid();
-      return _mmapReadSlice(
+      final result = _mmapReadSlice(
         lib,
         fd,
         fileLen: fileLen,
@@ -218,6 +217,10 @@ KittyMediumReadResult readMacosPosixShm(
         offset: offset,
         size: size,
       );
+      if (unlink && result is KittyMediumReadOk) {
+        lib.shmUnlink(namePtr);
+      }
+      return result;
     } finally {
       lib.close(fd);
     }

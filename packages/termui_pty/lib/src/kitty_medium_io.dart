@@ -49,30 +49,29 @@ List<String> _canonicalAllowedTempPrefixes() {
   return prefixes;
 }
 
-bool _isCanonicalParentAllowed(String canonicalParent) {
-  final normalizedParent = _normalizePrefix(canonicalParent);
-  for (final prefix in _canonicalAllowedTempPrefixes()) {
-    if (normalizedParent.startsWith(prefix)) return true;
-  }
-  return false;
-}
-
-bool _isRawPathUnderTempRoot(String rawPath) {
-  final normalized = _normalizePrefix(rawPath);
+bool _isUnderAllowedTempRoot(String path) {
+  final normalized = _normalizePrefix(path);
   for (final prefix in _canonicalAllowedTempPrefixes()) {
     if (normalized.startsWith(prefix)) return true;
   }
   return false;
 }
 
+bool _isUncOrDoubleSlash(String path) =>
+    path.length >= 2 &&
+    (path[0] == r'\' || path[0] == '/') &&
+    (path[1] == r'\' || path[1] == '/');
+
 ({String? path, bool notFound}) _resolveTempPath(String decoded) {
-  if (_hasParentTraversal(decoded)) return (path: null, notFound: false);
+  if (_hasParentTraversal(decoded) ||
+      _isUncOrDoubleSlash(decoded) ||
+      !File(decoded).isAbsolute ||
+      !decoded.contains('tty-graphics-protocol')) {
+    return (path: null, notFound: false);
+  }
   final parent = File(decoded).parent;
   if (!parent.existsSync()) {
-    final underTemp =
-        decoded.contains('tty-graphics-protocol') &&
-        _isRawPathUnderTempRoot(parent.path);
-    return (path: null, notFound: underTemp);
+    return (path: null, notFound: _isUnderAllowedTempRoot(parent.path));
   }
   final String canonicalParent;
   try {
@@ -80,11 +79,14 @@ bool _isRawPathUnderTempRoot(String rawPath) {
   } on FileSystemException {
     return (path: null, notFound: false);
   }
-  if (!_isCanonicalParentAllowed(canonicalParent)) {
+  if (!_isUnderAllowedTempRoot(canonicalParent)) {
     return (path: null, notFound: false);
   }
   final leaf = decoded.split(_pathSeparatorRegex).last;
-  if (leaf.isEmpty || leaf == '.' || leaf == '..') {
+  if (leaf.isEmpty ||
+      leaf == '.' ||
+      leaf == '..' ||
+      (Platform.isWindows && leaf.contains(':'))) {
     return (path: null, notFound: false);
   }
   final sep = Platform.pathSeparator;
@@ -142,15 +144,26 @@ KittyMediumReadResult _readFileSlice(
   }
 }
 
-/// Reads and unlinks a Kitty Graphics Protocol temp file (`t=t`) or
-/// Linux/macOS POSIX shared-memory object (`t=s`), enforcing [maxBytes] and
-/// safety checks.
+void _deleteBestEffort(File file) {
+  try {
+    file.deleteSync();
+  } on FileSystemException {
+    // Best-effort unlink per Kitty Graphics Protocol spec.
+  }
+}
+
+/// Reads a Kitty Graphics Protocol temp file (`t=t`) or Linux/macOS POSIX
+/// shared-memory object (`t=s`), enforcing [maxBytes] and safety checks.
+///
+/// When [unlink] is `true`, the backing file or shared-memory object is
+/// unlinked after a successful read.
 KittyMediumReadResult readPlatformKittyMedium(
   String medium,
   Uint8List encodedPathBytes, {
   required int maxBytes,
   int offset = 0,
   int? size,
+  bool unlink = true,
 }) {
   if (!platformSupportsKittyMedium(medium)) {
     return const KittyMediumReadUnsupported();
@@ -174,6 +187,7 @@ KittyMediumReadResult readPlatformKittyMedium(
       maxBytes: maxBytes,
       offset: offset,
       size: size,
+      unlink: unlink,
     );
   }
 
@@ -191,15 +205,19 @@ KittyMediumReadResult readPlatformKittyMedium(
   }
 
   final file = File(targetPath);
+  final KittyMediumReadResult result;
   try {
-    return _readFileSlice(file, maxBytes: maxBytes, offset: offset, size: size);
+    result = _readFileSlice(
+      file,
+      maxBytes: maxBytes,
+      offset: offset,
+      size: size,
+    );
   } on FileSystemException {
     return const KittyMediumReadInvalid();
-  } finally {
-    try {
-      file.deleteSync();
-    } on FileSystemException {
-      // Best-effort unlink per Kitty Graphics Protocol spec.
-    }
   }
+  if (unlink && result is KittyMediumReadOk) {
+    _deleteBestEffort(file);
+  }
+  return result;
 }

@@ -1303,8 +1303,8 @@ void _defineV5ProtocolAndKittyTests(SessionId sessionId) {
       rawVt.imageRegistry.registerImage(
         KittyImageData(
           imageId: 99,
-          pixelWidth: 2049,
-          pixelHeight: 2048,
+          pixelWidth: 4097,
+          pixelHeight: 4096,
           rgbaPixels: Uint8List(16),
           gridCols: 1,
           gridRows: 1,

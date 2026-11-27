@@ -62,22 +62,6 @@ final class _CountingByteSink extends ByteConversionSinkBase {
   void close() {}
 }
 
-final class _KittyPlacement {
-  final int imageId;
-  final int placementId;
-  final int cols;
-  final int rows;
-  final bool isVirtual;
-
-  const _KittyPlacement({
-    required this.imageId,
-    required this.placementId,
-    required this.cols,
-    required this.rows,
-    required this.isVirtual,
-  });
-}
-
 final class _PendingUpload {
   final int imageId;
   final int explicitNumber;
@@ -152,19 +136,31 @@ final class KittyApcHandler {
   final void Function(String reply)? onReply;
 
   /// Callback invoked when a direct graphic placement writes cells at the cursor.
-  final void Function(int cols, int rows, int imageId, bool advanceCursor)
+  final void Function(
+    int cols,
+    int rows,
+    int imageId,
+    bool advanceCursor,
+    int placementId,
+  )
   onPlaceVirtual;
 
   /// Callback invoked when `a=d` deletes visible placements on the active screen.
   /// When `imageId` is `null`, all Kitty placeholder cells are cleared;
-  /// otherwise only placements matching `imageId` are cleared.
-  final void Function(int? imageId)? onClearPlacements;
+  /// otherwise only placements matching `imageId` (and optional `placementId`)
+  /// are cleared.
+  final void Function(int? imageId, {int? placementId, bool directOnly})?
+  onClearPlacements;
 
   /// Callback returning the live terminal cell dimensions in pixels `(width, height)`.
   final (int width, int height) Function() cellPixelSize;
 
+  /// Whether local filesystem (`t=t`) and POSIX shared-memory (`t=s`)
+  /// transmission media are enabled. Defaults to `false`.
+  final bool allowLocalMedia;
+
   final Map<int, _PendingUpload> _pendingUploads = {};
-  final Map<(int, int), _KittyPlacement> _placements = {};
+  final Set<(int imageId, int placementId, bool isVirtual)> _placements = {};
   final Map<int, int> _imageNumberToId = {};
   int _totalPendingBase64 = 0;
   int? _lastActiveUploadId;
@@ -177,6 +173,7 @@ final class KittyApcHandler {
     required this.onPlaceVirtual,
     required this.cellPixelSize,
     this.onClearPlacements,
+    this.allowLocalMedia = false,
   });
 
   /// Clears all pending chunked uploads, placements, and wipes [registry].
@@ -201,12 +198,19 @@ final class KittyApcHandler {
 
     final control = _parseControlPart(controlPart);
     final explicitId = _parsePositiveId(control['i']);
-    final allowContinuation =
-        !control.containsKey('a') &&
-        (!_hasNewUploadMetadata(control) ||
-            (explicitId > 0 && control.containsKey('m')));
-    final pendingContinuation = allowContinuation
+    final explicitNumber = _parsePositiveId(control['I']);
+    final candidate = !control.containsKey('a')
         ? _resolveActiveContinuation(control)
+        : null;
+    final pendingContinuation =
+        candidate != null &&
+            _canContinueWithoutAction(
+              candidate,
+              control,
+              explicitId,
+              explicitNumber,
+            )
+        ? candidate
         : null;
     final action = pendingContinuation?.action ?? (control['a'] ?? 't');
     final quiet = int.tryParse(control['q'] ?? '0') ?? 0;
@@ -309,10 +313,10 @@ final class KittyApcHandler {
   static String _parseMedium(Map<String, String> control) =>
       control['t'] ?? 'd';
 
-  static bool _isSupportedMedium(Map<String, String> control) =>
+  bool _isSupportedMedium(Map<String, String> control) =>
       switch (_parseMedium(control)) {
         'd' => true,
-        final medium => platformSupportsKittyMedium(medium),
+        final medium => allowLocalMedia && platformSupportsKittyMedium(medium),
       };
 
   /// Returns whether [format] is a supported Kitty Graphics `f=` transmission code:
@@ -335,10 +339,7 @@ final class KittyApcHandler {
     return int.tryParse(raw) ?? -1;
   }
 
-  static String? _resolveValidationError(
-    Map<String, String> control,
-    int format,
-  ) {
+  String? _resolveValidationError(Map<String, String> control, int format) {
     if (_isOutOfRangeUint32(control['i']) ||
         _isOutOfRangeUint32(control['I'])) {
       return 'EINVAL:invalid id';
@@ -487,6 +488,7 @@ final class KittyApcHandler {
     Uint8List decoded, {
     required int dataOffset,
     required int? dataSize,
+    required bool unlink,
   }) {
     if (medium == 'd') return decoded;
     return switch (readPlatformKittyMedium(
@@ -495,6 +497,7 @@ final class KittyApcHandler {
       maxBytes: _maxInflatedBytes,
       offset: dataOffset,
       size: dataSize,
+      unlink: unlink,
     )) {
       KittyMediumReadOk(:final bytes) => bytes,
       KittyMediumReadNotFound() => throw const _MediumNotFoundException(),
@@ -530,6 +533,7 @@ final class KittyApcHandler {
         decoded,
         dataOffset: dataOffset,
         dataSize: dataSize,
+        unlink: false,
       );
       if (compressed && payloadBytes.isNotEmpty) {
         _validateZlibBytes(payloadBytes);
@@ -541,8 +545,16 @@ final class KittyApcHandler {
   }
 
   bool _hasRemainingPlacements(int imageId) {
-    for (final key in _placements.keys) {
-      if (key.$1 == imageId) return true;
+    for (final entry in _placements) {
+      if (entry.$1 == imageId) return true;
+    }
+    return false;
+  }
+
+  bool _hasOtherPlacement(int imageId, int placementId, bool isVirtual) {
+    for (final entry in _placements) {
+      if (entry.$1 != imageId) continue;
+      if (entry.$2 != placementId || entry.$3 != isVirtual) return true;
     }
     return false;
   }
@@ -553,22 +565,23 @@ final class KittyApcHandler {
     required bool freeData,
   }) {
     var clearedDirect = false;
-    final toRemove = <(int, int)>[];
-    for (final entry in _placements.entries) {
-      if (entry.key.$1 != imageId) continue;
-      if (placementId > 0 && entry.key.$2 != placementId) continue;
-      toRemove.add(entry.key);
-      if (!entry.value.isVirtual) clearedDirect = true;
+    final toRemove = <(int, int, bool)>[];
+    for (final entry in _placements) {
+      if (entry.$1 != imageId) continue;
+      if (placementId > 0 && entry.$2 != placementId) continue;
+      toRemove.add(entry);
+      if (!entry.$3) clearedDirect = true;
     }
-    for (final key in toRemove) {
-      _placements.remove(key);
-    }
+    _placements.removeAll(toRemove);
     final clearLegacyUntracked =
         placementId == 0 &&
         toRemove.isEmpty &&
         !_hasRemainingPlacements(imageId);
     if (clearedDirect || clearLegacyUntracked) {
-      onClearPlacements?.call(imageId);
+      onClearPlacements?.call(
+        imageId,
+        placementId: placementId > 0 ? placementId : null,
+      );
     }
     if (freeData && !_hasRemainingPlacements(imageId)) {
       registry.unregisterImage(imageId);
@@ -595,26 +608,16 @@ final class KittyApcHandler {
 
   void _deleteAllDirectPlacements({required bool freeData}) {
     var hasVirtual = false;
-    final directImageIds = <int>{};
-    final toRemove = <(int, int)>[];
-    for (final entry in _placements.entries) {
-      if (entry.value.isVirtual) {
+    final toRemove = <(int, int, bool)>[];
+    for (final entry in _placements) {
+      if (entry.$3) {
         hasVirtual = true;
       } else {
-        directImageIds.add(entry.key.$1);
-        toRemove.add(entry.key);
+        toRemove.add(entry);
       }
     }
-    for (final key in toRemove) {
-      _placements.remove(key);
-    }
-    if (!hasVirtual) {
-      onClearPlacements?.call(null);
-    } else {
-      for (final id in directImageIds) {
-        onClearPlacements?.call(id);
-      }
-    }
+    _placements.removeAll(toRemove);
+    onClearPlacements?.call(null, directOnly: hasVirtual);
     if (freeData) {
       _evictUnreferencedImages(hasVirtual: hasVirtual);
     }
@@ -695,31 +698,76 @@ final class KittyApcHandler {
     }
   }
 
+  static bool _hasConflictingUploadMetadata(
+    _PendingUpload existing,
+    Map<String, String> control,
+  ) {
+    if (control.containsKey('f') && _parseFormat(control) != existing.format) {
+      return true;
+    }
+    if (control.containsKey('t') && _parseMedium(control) != existing.medium) {
+      return true;
+    }
+    if (control.containsKey('s') &&
+        (int.tryParse(control['s'] ?? '') ?? -1) != existing.width) {
+      return true;
+    }
+    if (control.containsKey('v') &&
+        (int.tryParse(control['v'] ?? '') ?? -1) != existing.height) {
+      return true;
+    }
+    if (control.containsKey('o') &&
+        (control['o'] == 'z') != existing.compressed) {
+      return true;
+    }
+    return false;
+  }
+
+  static bool _canContinueWithoutAction(
+    _PendingUpload candidate,
+    Map<String, String> control,
+    int explicitId,
+    int explicitNumber,
+  ) {
+    if (!_hasNewUploadMetadata(control)) return true;
+    if (!control.containsKey('m') || candidate.action == 'q') return false;
+    final matchesId =
+        explicitId > 0 &&
+        candidate.hasAddressableId &&
+        explicitId == candidate.imageId;
+    final matchesNumber =
+        explicitNumber > 0 && explicitNumber == candidate.explicitNumber;
+    if (!matchesId && !matchesNumber) return false;
+    return !_hasConflictingUploadMetadata(candidate, control);
+  }
+
+  static bool _matchesContinuationMetadata(
+    _PendingUpload existing,
+    Map<String, String> control,
+  ) => control.containsKey('m')
+      ? !_hasConflictingUploadMetadata(existing, control)
+      : !_hasNewUploadMetadata(control);
+
   static bool _canContinueExisting(
     _PendingUpload? existing,
     String action,
     Map<String, String> control,
     int explicitId,
   ) {
-    if (existing == null) return false;
-    final hasExplicitAction = control.containsKey('a');
+    if (existing == null || existing.action != action) return false;
     if (explicitId > 0) {
-      final matchesExisting =
-          explicitId == existing.imageId &&
-          existing.hasAddressableId &&
-          (!hasExplicitAction || existing.action == action);
-      if (!matchesExisting) return false;
-      // Per Kitty spec, continuation chunks (carrying m=1 or m=0) may repeat
-      // metadata keys like f=, p=, s=, v=, t=; ignore them while m= is active.
-      return control.containsKey('m') || !_hasNewUploadMetadata(control);
+      if (explicitId != existing.imageId || !existing.hasAddressableId) {
+        return false;
+      }
+      return _matchesContinuationMetadata(existing, control);
+    }
+    final explicitNumber = _parsePositiveId(control['I']);
+    if (explicitNumber > 0) {
+      return existing.explicitNumber == explicitNumber &&
+          _matchesContinuationMetadata(existing, control);
     }
     if (_hasNewUploadMetadata(control)) return false;
-    final explicitNumber = _parsePositiveId(control['I']);
-    if (explicitNumber > 0 && existing.explicitNumber != explicitNumber) {
-      return false;
-    }
-    return !hasExplicitAction ||
-        (!existing.hasAddressableId && existing.action == action);
+    return !control.containsKey('a') || !existing.hasAddressableId;
   }
 
   _PendingUpload _obtainPendingUpload(
@@ -848,13 +896,11 @@ final class KittyApcHandler {
         _imageNumberToId[pending.explicitNumber] = pending.imageId;
       }
       if (pending.action == 'T' || pending.virtual) {
-        _placements[(pending.imageId, pending.placementId)] = _KittyPlacement(
-          imageId: pending.imageId,
-          placementId: pending.placementId,
-          cols: imageData.gridCols,
-          rows: imageData.gridRows,
-          isVirtual: pending.virtual,
-        );
+        _placements.add((
+          pending.imageId,
+          pending.placementId,
+          pending.virtual,
+        ));
       }
       if (pending.action == 'T' && !pending.virtual) {
         onPlaceVirtual(
@@ -862,6 +908,7 @@ final class KittyApcHandler {
           imageData.gridRows,
           pending.imageId,
           pending.advanceCursor,
+          pending.placementId,
         );
       }
       _replyOk(pending.replyPrefix, quiet);
@@ -877,6 +924,7 @@ final class KittyApcHandler {
       decoded,
       dataOffset: pending.dataOffset,
       dataSize: pending.dataSize,
+      unlink: true,
     );
     return pending.compressed ? _inflateZlibBytes(payloadBytes) : payloadBytes;
   }
@@ -1098,20 +1146,15 @@ final class KittyApcHandler {
             data.pixelHeight,
           )
         : (data.gridCols, data.gridRows);
-    if (cols != data.gridCols || rows != data.gridRows) {
+    final isVirtual = (int.tryParse(control['U'] ?? '0') ?? 0) == 1;
+    if ((cols != data.gridCols || rows != data.gridRows) &&
+        !_hasOtherPlacement(imageId, placementId, isVirtual)) {
       registry.registerImage(data.copyWith(gridCols: cols, gridRows: rows));
     }
-    final isVirtual = (int.tryParse(control['U'] ?? '0') ?? 0) == 1;
-    _placements[(imageId, placementId)] = _KittyPlacement(
-      imageId: imageId,
-      placementId: placementId,
-      cols: cols,
-      rows: rows,
-      isVirtual: isVirtual,
-    );
+    _placements.add((imageId, placementId, isVirtual));
     if (!isVirtual) {
       final advanceCursor = (int.tryParse(control['C'] ?? '0') ?? 0) != 1;
-      onPlaceVirtual(cols, rows, imageId, advanceCursor);
+      onPlaceVirtual(cols, rows, imageId, advanceCursor, placementId);
     }
     _replyOk(replyPrefix, quiet);
   }

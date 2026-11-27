@@ -16,8 +16,8 @@ const int _emptyDeltaBaseTailBytes = 9;
 const int _maxInlineImageBytes =
     _maxUncompressedTailBudget - _emptyDeltaBaseTailBytes;
 const int _maxKittyEntriesPerFrame = 1024;
-const int _maxKittyDimension = 4096;
-const int _maxKittyTotalPixels = 4_194_304;
+const int _maxKittyDimension = 8192;
+const int _maxKittyTotalPixels = 16_777_216;
 const int _maxKittyGridSpan = 512;
 const int _maxKittyChunkCount = 256;
 const int _minPngBytes = 24;

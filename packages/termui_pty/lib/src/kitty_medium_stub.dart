@@ -16,4 +16,5 @@ KittyMediumReadResult readPlatformKittyMedium(
   required int maxBytes,
   int offset = 0,
   int? size,
+  bool unlink = true,
 }) => const KittyMediumReadUnsupported();
