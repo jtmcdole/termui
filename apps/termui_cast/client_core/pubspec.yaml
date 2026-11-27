@@ -16,7 +16,7 @@ dependencies:
   stream_channel: ^2.1.4
   termui: ^0.21.2
   termui_cast_protocol: ^0.4.0
-  termui_pty: ^0.16.2
+  termui_pty: ^0.16.3
   web_socket_channel: ^3.0.3
 
 dev_dependencies:

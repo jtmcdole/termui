@@ -13,11 +13,11 @@ dependencies:
   crypto: ^3.0.6
   hierarchical_state_machine: ^2.4.0
   path: ^1.9.1
-  pty2: ^0.10.1
+  pty2: ^0.10.2
   stream_channel: ^2.1.4
   termui: ^0.21.2
   termui_cast_protocol: ^0.4.0
-  termui_pty: ^0.16.2
+  termui_pty: ^0.16.3
 
 dev_dependencies:
   checks: ^0.3.2
