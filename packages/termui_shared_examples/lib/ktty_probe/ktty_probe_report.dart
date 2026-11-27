@@ -10,6 +10,9 @@ enum KttyCapabilityStatus {
 
   /// Terminal either rejected the capability or ignored it prior to `DA1`.
   unsupported,
+
+  /// Optional capability was not probed or is disabled by terminal policy.
+  optionalDisabled,
 }
 
 /// Classification tier distinguishing required core probes from opt-in probes.
@@ -139,6 +142,9 @@ final class KttyCapabilityEntry {
   /// Short wire-protocol label (e.g. `'APC a=q'`, `'CSI ? u'`).
   final String protocol;
 
+  /// Whether this capability is a core requirement or an opt-in check.
+  final KttyCapabilityTier tier;
+
   /// Current probe status.
   KttyCapabilityStatus status;
 
@@ -150,6 +156,7 @@ final class KttyCapabilityEntry {
     required this.id,
     required this.name,
     required this.protocol,
+    this.tier = .core,
     this.status = .pending,
     this.detail = 'Probing...',
   });
@@ -166,6 +173,9 @@ final class KttyProbeReport {
   /// Whether the `DA1` sentinel reply has completed the active probe pass.
   bool isComplete = false;
 
+  /// Optional diagnostics for an enclosing `tmux` or `screen` multiplexer.
+  KttyMultiplexerDiagnostics? multiplexerDiagnostics;
+
   /// Terminal version string reported by `XTVERSION` (`DCS > | ... ST`), if any.
   String? xtVersion;
 
@@ -178,8 +188,17 @@ final class KttyProbeReport {
   /// Default background color reported by `OSC 11`, normalized to `#RRGGBB`.
   String? defaultBackgroundHex;
 
+  /// Active color scheme reported by `CSI ? 997 ; 1|2 n` (`'dark'` or `'light'`).
+  String? colorScheme;
+
   /// Most recent `OSC 52` clipboard read payload, if the host replied to `OSC 52;?`.
   String? osc52ClipboardReply;
+
+  /// Viewport width in pixels reported by `CSI 14 t` (`CSI 4 ; h ; w t`).
+  int viewportPixelWidth = 0;
+
+  /// Viewport height in pixels reported by `CSI 14 t` (`CSI 4 ; h ; w t`).
+  int viewportPixelHeight = 0;
 
   /// Cell width in pixels (reported by `CSI 16 t` or configured by host).
   int cellPixelWidth = 9;
@@ -199,33 +218,49 @@ final class KttyProbeReport {
   /// Whether at least one `OSC 99` reply has arrived during the active session.
   bool hasOsc99Ack = false;
 
-  /// Creates a [KttyProbeReport] initialized with all standard KTTY probe entries.
+  /// Creates a [KttyProbeReport] initialized with all 28 standard KTTY probe entries.
   KttyProbeReport() {
     _initEntries();
   }
 
   void _initEntries() {
-    final specs = <(String, String, String)>[
-      ('apc_query', 'Kitty Graphics Query', 'APC a=q'),
-      ('apc_rgba', 'Kitty Graphics RGBA32', 'APC f=32'),
-      ('apc_zlib', 'Kitty Graphics Zlib', 'APC o=z'),
-      ('apc_png', 'Kitty Graphics PNG', 'APC f=100'),
-      ('kitty_kb', 'Kitty Keyboard Protocol', 'CSI ? u'),
-      ('xtversion', 'Terminal Identity', 'XTVERSION'),
-      ('osc10', 'Default Foreground', 'OSC 10;?'),
-      ('osc11', 'Default Background', 'OSC 11;?'),
-      ('decrqm_2026', 'Synchronized Output', 'DECRQM ?2026'),
-      ('decrqm_1016', 'SGR-Pixels Mouse', 'DECRQM ?1016'),
-      ('decrqm_2027', 'Grapheme Clustering', 'DECRQM ?2027'),
-      ('decrqm_2004', 'Bracketed Paste', 'DECRQM ?2004'),
-      ('decrqm_1004', 'Focus Reporting', 'DECRQM ?1004'),
-      ('decrqm_1006', 'SGR Mouse Encoding', 'DECRQM ?1006'),
-      ('xtwinops_18t', 'Text Grid Size', 'CSI 18 t'),
-      ('da2', 'Secondary Device Attrs', 'CSI > c'),
-      ('da1', 'Primary DA Sentinel', 'CSI c'),
+    final specs = <(String, String, String, KttyCapabilityTier)>[
+      ('apc_query', 'Kitty Graphics Query', 'APC a=q', .core),
+      ('apc_rgba', 'Kitty Graphics RGBA32', 'APC f=32', .core),
+      ('apc_zlib', 'Kitty Graphics Zlib', 'APC o=z', .core),
+      ('apc_png', 'Kitty Graphics PNG', 'APC f=100', .core),
+      ('apc_chunked', 'Kitty Graphics Chunked', 'APC m=1/0', .core),
+      ('apc_place_persist', 'Kitty Place Persistence', 'APC d=a/a=p', .core),
+      ('apc_image_num', 'Kitty Image Number', 'APC I=', .core),
+      ('apc_temp_file', 'Kitty Temp File Medium', 'APC t=t', .optional),
+      ('apc_shm', 'Kitty Shared Memory', 'APC t=s', .optional),
+      ('kitty_kb', 'Kitty Keyboard Protocol', 'CSI ? u', .core),
+      ('xtversion', 'Terminal Identity', 'XTVERSION', .core),
+      ('osc10', 'Default Foreground', 'OSC 10;?', .core),
+      ('osc11', 'Default Background', 'OSC 11;?', .core),
+      ('osc_22_pointer', 'Mouse Pointer Shapes', 'OSC 22;?', .core),
+      ('osc_99_query', 'Notification Query', 'OSC 99;p=?', .core),
+      ('decrqm_2026', 'Synchronized Output', 'DECRQM ?2026', .core),
+      ('decrqm_1016', 'SGR-Pixels Mouse', 'DECRQM ?1016', .core),
+      ('decrqm_2027', 'Grapheme Clustering', 'DECRQM ?2027', .core),
+      ('decrqm_2004', 'Bracketed Paste', 'DECRQM ?2004', .core),
+      ('decrqm_1004', 'Focus Reporting', 'DECRQM ?1004', .core),
+      ('decrqm_1006', 'SGR Mouse Encoding', 'DECRQM ?1006', .core),
+      ('decrqm_2031', 'Color Scheme Updates', 'DECRQM ?2031', .core),
+      ('csi_996_scheme', 'Color Scheme Query', 'CSI ? 996 n', .core),
+      ('xtwinops_14t', 'Viewport Pixel Size', 'CSI 14 t', .core),
+      ('xtwinops_16t', 'Cell Pixel Size', 'CSI 16 t', .core),
+      ('xtwinops_18t', 'Text Grid Size', 'CSI 18 t', .core),
+      ('da2', 'Secondary Device Attrs', 'CSI > c', .core),
+      ('da1', 'Primary DA Sentinel', 'CSI c', .core),
     ];
-    for (final (id, name, proto) in specs) {
-      _entries[id] = KttyCapabilityEntry(id: id, name: name, protocol: proto);
+    for (final (id, name, proto, tier) in specs) {
+      _entries[id] = KttyCapabilityEntry(
+        id: id,
+        name: name,
+        protocol: proto,
+        tier: tier,
+      );
     }
   }
 
@@ -248,6 +283,24 @@ final class KttyProbeReport {
   int get pendingCount =>
       _entries.values.where((e) => e.status == .pending).length;
 
+  /// Count of [KttyCapabilityTier.core] capabilities marked supported.
+  int get coreSupportedCount => _entries.values
+      .where((e) => e.tier == .core && e.status == .supported)
+      .length;
+
+  /// Total number of [KttyCapabilityTier.core] capabilities in the report.
+  int get coreTotalCount =>
+      _entries.values.where((e) => e.tier == .core).length;
+
+  /// Count of [KttyCapabilityTier.core] capabilities marked unsupported.
+  int get coreUnsupportedCount => _entries.values
+      .where((e) => e.tier == .core && e.status == .unsupported)
+      .length;
+
+  /// Count of [KttyCapabilityTier.optional] capabilities marked disabled or skipped.
+  int get optionalDisabledCount =>
+      _entries.values.where((e) => e.status == .optionalDisabled).length;
+
   /// Registers a change listener invoked when probe results update.
   void addListener(void Function() listener) => _listeners.add(listener);
 
@@ -268,6 +321,9 @@ final class KttyProbeReport {
     kittyKeyboardFlags = null;
     defaultForegroundHex = null;
     defaultBackgroundHex = null;
+    colorScheme = null;
+    viewportPixelWidth = 0;
+    viewportPixelHeight = 0;
     lastOsc99Ack = _defaultOsc99Ack;
     hasOsc99Ack = false;
     for (final entry in _entries.values) {
@@ -277,20 +333,38 @@ final class KttyProbeReport {
     _notify();
   }
 
+  static final RegExp _controlCharsRegex = RegExp(r'[\x00-\x1F\x7F-\x9F]');
+  static const int _maxDetailLength = 200;
+
+  static String _sanitizeDetail(String raw) {
+    final cleaned = raw.replaceAll(_controlCharsRegex, '').trim();
+    return cleaned.length <= _maxDetailLength
+        ? cleaned
+        : '${cleaned.substring(0, _maxDetailLength)}...';
+  }
+
   /// Builds the wire-protocol query burst ending with the `DA1` (`\x1b[c`) sentinel.
-  static String buildWireProbeSequence() {
+  static String buildWireProbeSequence({
+    KttyProbeOptions options = const KttyProbeOptions(),
+  }) {
+    final apcCommands = buildKittyApcProbeCommands(options: options);
     final sb = StringBuffer()
-      ..write(buildKittyApcProbeCommands())
+      ..write(apcCommands)
       ..write('\x1b[?u')
       ..write('\x1b[>0q')
       ..write('\x1b]10;?\x1b\\')
       ..write('\x1b]11;?\x1b\\')
+      ..write('\x1b]22;?pointer,text,ktty-invalid\x1b\\')
+      ..write('\x1b]99;i=ktty-probe:p=?;\x1b\\')
       ..write('\x1b[?2026\$p')
       ..write('\x1b[?1016\$p')
       ..write('\x1b[?2027\$p')
       ..write('\x1b[?2004\$p')
       ..write('\x1b[?1004\$p')
       ..write('\x1b[?1006\$p')
+      ..write('\x1b[?2031\$p')
+      ..write('\x1b[?996n')
+      ..write('\x1b[14t')
       ..write('\x1b[16t')
       ..write('\x1b[18t')
       ..write('\x1b[>c')
@@ -311,22 +385,81 @@ final class KttyProbeReport {
     if (notify) _notify();
   }
 
-  /// Records a Kitty Graphics `APC` reply (`ESC _ G i=<id>;<status> ESC \`).
-  void recordApcReply(int imageId, String statusMessage) {
-    final ok = statusMessage.trim().toUpperCase() == 'OK';
-    final key = switch (imageId) {
+  static String? _resolveApcCapabilityKey(
+    int imageId, {
+    int? imageNumber,
+    int? placementId,
+  }) {
+    if (imageNumber == kttyProbeImageNumber) return 'apc_image_num';
+    return switch (imageId) {
       kttyProbeQueryId => 'apc_query',
       kttyProbeRgbaId => 'apc_rgba',
       kttyProbeZlibId => 'apc_zlib',
       kttyProbePngId => 'apc_png',
+      kttyProbeChunkedId => 'apc_chunked',
+      kttyProbePlaceId =>
+        placementId == kttyProbePlacementId ? 'apc_place_persist' : null,
+      kttyProbeTempId => 'apc_temp_file',
+      kttyProbeShmId => 'apc_shm',
       _ => null,
     };
-    if (key == null) return;
-    _updateEntry(
-      key,
-      ok ? .supported : .unsupported,
-      ok ? 'OK (i=$imageId)' : statusMessage,
+  }
+
+  static String _formatApcOkDetail(
+    int imageId, {
+    int? imageNumber,
+    int? placementId,
+  }) {
+    if (imageNumber != null) {
+      return imageId > 0
+          ? 'OK (i=$imageId,I=$imageNumber)'
+          : 'OK (I=$imageNumber)';
+    }
+    if (placementId != null) return 'OK (i=$imageId,p=$placementId)';
+    return 'OK (i=$imageId)';
+  }
+
+  /// Records a Kitty Graphics `APC` reply (`ESC _ G i=<id>,I=<num>,p=<pid>;<status> ESC \`).
+  void recordApcReply(
+    int imageId,
+    String statusMessage, {
+    int? imageNumber,
+    int? placementId,
+  }) {
+    final trimmed = _sanitizeDetail(statusMessage);
+    final upper = trimmed.toUpperCase();
+    final ok = upper == 'OK';
+    final key = _resolveApcCapabilityKey(
+      imageId,
+      imageNumber: imageNumber,
+      placementId: placementId,
     );
+    if (key == null) return;
+    final entry = _entries[key];
+    if (entry == null) return;
+
+    final isOptionalDisabled =
+        entry.tier == .optional &&
+        (upper.startsWith('EINVAL:UNSUPPORTED') ||
+            upper.startsWith('EPERM:') ||
+            upper.startsWith('ENOTSUP:'));
+    final KttyCapabilityStatus status;
+    if (ok) {
+      status = .supported;
+    } else if (isOptionalDisabled) {
+      status = .optionalDisabled;
+    } else {
+      status = .unsupported;
+    }
+
+    final detail = ok
+        ? _formatApcOkDetail(
+            imageId,
+            imageNumber: imageNumber,
+            placementId: placementId,
+          )
+        : trimmed;
+    _updateEntry(key, status, detail);
   }
 
   /// Records a Kitty Keyboard query reply (`CSI ? <flags> u`).
@@ -341,8 +474,9 @@ final class KttyProbeReport {
 
   /// Records an `XTVERSION` reply (`DCS > | <version> ST`).
   void recordXtVersion(String version) {
-    xtVersion = version;
-    _updateEntry('xtversion', .supported, version);
+    final safe = _sanitizeDetail(version);
+    xtVersion = safe;
+    _updateEntry('xtversion', .supported, safe);
   }
 
   /// Records an `OSC 10` (foreground) or `OSC 11` (background) color reply.
@@ -357,6 +491,33 @@ final class KttyProbeReport {
       defaultBackgroundHex = normalizedHex ?? rawSpec;
       _updateEntry('osc11', .supported, display);
     }
+  }
+
+  /// Records an `OSC 22` mouse pointer shape query reply (`ESC ] 22 ; 1,1,0 ST`).
+  void recordOsc22PointerQuery(String rawReply) {
+    final trimmed = _sanitizeDetail(rawReply);
+    final tokens = trimmed.split(',');
+    final valid =
+        tokens.length == 3 &&
+        tokens[0] == '1' &&
+        tokens[1] == '1' &&
+        tokens[2] == '0';
+    _updateEntry(
+      'osc_22_pointer',
+      valid ? .supported : .unsupported,
+      valid ? 'OK ($trimmed)' : 'Unexpected reply ($trimmed)',
+    );
+  }
+
+  /// Records an `OSC 99` capability query reply (`ESC ] 99 ; ...:p=?;... ST`).
+  void recordOsc99CapabilityQuery(String capabilities) {
+    final trimmed = _sanitizeDetail(capabilities);
+    final hasCaps = trimmed.isNotEmpty;
+    _updateEntry(
+      'osc_99_query',
+      hasCaps ? .supported : .unsupported,
+      hasCaps ? trimmed : 'Empty capability reply',
+    );
   }
 
   /// Records an `OSC 52` clipboard read reply if the terminal sent one.
@@ -384,11 +545,41 @@ final class KttyProbeReport {
     );
   }
 
+  /// Records a color scheme query reply (`CSI ? 997 ; 1|2 n`).
+  void recordColorScheme(int mode) {
+    final label = switch (mode) {
+      1 => 'dark',
+      2 => 'light',
+      _ => null,
+    };
+    if (label == null) {
+      _updateEntry('csi_996_scheme', .unsupported, 'Unknown mode ($mode)');
+      return;
+    }
+    colorScheme = label;
+    _updateEntry('csi_996_scheme', .supported, '$label (CSI ?997;${mode}n)');
+  }
+
+  /// Records viewport pixel dimensions reported by `XTWINOPS 14t` (`CSI 4 ; h ; w t`).
+  void recordViewportPixelSize(int widthPx, int heightPx) {
+    if (widthPx > 0) viewportPixelWidth = widthPx;
+    if (heightPx > 0) viewportPixelHeight = heightPx;
+    if (widthPx > 0 && heightPx > 0) {
+      _updateEntry('xtwinops_14t', .supported, '${widthPx}x${heightPx}px');
+    } else {
+      _notify();
+    }
+  }
+
   /// Records cell pixel dimensions reported by `XTWINOPS 16t` (`CSI 6 ; h ; w t`).
   void recordCellPixelSize(int widthPx, int heightPx) {
     if (widthPx > 0) cellPixelWidth = widthPx;
     if (heightPx > 0) cellPixelHeight = heightPx;
-    _notify();
+    if (widthPx > 0 && heightPx > 0) {
+      _updateEntry('xtwinops_16t', .supported, '${widthPx}x${heightPx}px');
+    } else {
+      _notify();
+    }
   }
 
   /// Records a decoded wire-level SGR or SGR-Pixels mouse packet for live telemetry.
@@ -407,17 +598,23 @@ final class KttyProbeReport {
     _updateEntry('da2', .supported, 'CSI > $params c');
   }
 
-  /// Records the Primary Device Attributes (`DA1`) sentinel and marks any
-  /// earlier unanswered queries as [KttyCapabilityStatus.unsupported].
+  /// Records the Primary Device Attributes (`DA1`) sentinel and finalizes any
+  /// earlier unanswered queries.
   void recordDa1Sentinel(String params) {
     _updateEntry('da1', .supported, 'CSI ? $params c', notify: false);
     finalizePending('No reply before DA1');
   }
 
-  /// Marks any remaining [KttyCapabilityStatus.pending] probes as unsupported.
+  /// Transitions remaining [KttyCapabilityStatus.pending] probes: optional rows
+  /// become [KttyCapabilityStatus.optionalDisabled] and core rows become
+  /// [KttyCapabilityStatus.unsupported].
   void finalizePending(String reason) {
     for (final entry in _entries.values) {
-      if (entry.status == .pending) {
+      if (entry.status != .pending) continue;
+      if (entry.tier == .optional) {
+        entry.status = .optionalDisabled;
+        entry.detail = 'Optional ($reason)';
+      } else {
         entry.status = .unsupported;
         entry.detail = reason;
       }
@@ -432,16 +629,27 @@ final class KttyProbeReport {
     'isComplete': isComplete,
     'supportedCount': supportedCount,
     'unsupportedCount': unsupportedCount,
+    'coreSupported': coreSupportedCount,
+    'coreTotal': coreTotalCount,
+    'coreUnsupported': coreUnsupportedCount,
     'xtVersion': xtVersion,
     'kittyKeyboardFlags': kittyKeyboardFlags,
     'defaultForeground': defaultForegroundHex,
     'defaultBackground': defaultBackgroundHex,
+    'colorScheme': colorScheme,
+    'viewportPixelWidth': viewportPixelWidth,
+    'viewportPixelHeight': viewportPixelHeight,
+    'cellPixelWidth': cellPixelWidth,
+    'cellPixelHeight': cellPixelHeight,
+    if (multiplexerDiagnostics != null)
+      'multiplexerDiagnostics': multiplexerDiagnostics!.toJsonMap(),
     'capabilities': [
       for (final e in _entries.values)
         {
           'id': e.id,
           'name': e.name,
           'protocol': e.protocol,
+          'tier': e.tier.name,
           'status': e.status.name,
           'detail': e.detail,
         },
@@ -460,7 +668,8 @@ final class KttyProbeReport {
 
     sb.writeln(
       '$bold${cyan}KTTY Capability Probe Report$reset '
-      '($supportedCount/${_entries.length} supported)',
+      '($coreSupportedCount/$coreTotalCount core supported, '
+      '$supportedCount/${_entries.length} total)',
     );
     sb.writeln('─' * 74);
     for (final entry in _entries.values) {
@@ -468,12 +677,32 @@ final class KttyProbeReport {
         .supported => ('PASS', green),
         .unsupported => ('MISS', red),
         .pending => ('WAIT', yellow),
+        .optionalDisabled => ('OPT ', cyan),
       };
       final nameCol = entry.name.padRight(25);
       final protoCol = entry.protocol.padRight(14);
       sb.writeln('[$color$badge$reset] $nameCol $protoCol ${entry.detail}');
     }
     sb.writeln('─' * 74);
+    _appendMultiplexerSummary(sb, yellow: yellow, reset: reset);
     return sb.toString();
+  }
+
+  void _appendMultiplexerSummary(
+    StringBuffer sb, {
+    required String yellow,
+    required String reset,
+  }) {
+    final mux = multiplexerDiagnostics;
+    if (mux == null) return;
+    final passthrough = mux.allowPassthrough ?? 'unknown';
+    final trueColor = mux.hasTrueColor ? 'yes' : 'no';
+    sb.writeln(
+      '${yellow}Multiplexer:$reset ${mux.multiplexer} '
+      '(allow-passthrough=$passthrough, truecolor=$trueColor)',
+    );
+    for (final hint in mux.hints) {
+      sb.writeln('  Hint: $hint');
+    }
   }
 }
