@@ -464,6 +464,12 @@ final class FtermPaneController {
   /// Stable tear-off reading [mouseTracking] for `TerminalSurface`.
   bool readMouseTracking() => mouseTracking;
 
+  /// Active `OSC 22` mouse cursor shape name (e.g. `'pointer'`), or `null` for default.
+  String? get mouseCursorShape => port.modes.mouseCursorShape;
+
+  /// Stable tear-off reading [mouseCursorShape] for `TerminalSurface`.
+  String? readMouseCursorShape() => mouseCursorShape;
+
   /// Current primary-screen scrollback offset (`0` = live bottom).
   int get scrollOffsetLines => _scrollOffsetLines;
 

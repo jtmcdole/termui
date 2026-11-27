@@ -123,6 +123,9 @@ final class TerminalSurface extends StatefulWidget {
   /// Optional OSC 22 mouse cursor name when not using [terminal].
   final String? mouseCursorName;
 
+  /// Optional live getter for the OSC 22 mouse cursor name when not using [terminal].
+  final String? Function()? mouseCursorNameProvider;
+
   /// Callback invoked on initial layout or when grid/cell metrics change.
   final void Function(int cols, int rows, double cellWidth, double cellHeight)?
   onViewportSizeChanged;
@@ -335,6 +338,7 @@ final class TerminalSurface extends StatefulWidget {
     this.copyOnSelect = true,
     this.copyOnSelectProvider,
     this.mouseCursorName,
+    this.mouseCursorNameProvider,
     this.onViewportSizeChanged,
     this.onInputEvent,
     this.onTextInput,
@@ -980,13 +984,27 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       ..clearSurfaceHandlers();
   }
 
+  MouseCursor _resolveExternalMouseCursor() => _mapOsc22ToSystemCursor(
+    widget.mouseCursorNameProvider?.call() ?? widget.mouseCursorName,
+  );
+
+  bool _syncExternalMouseCursorFromProvider() {
+    if (widget.terminal != null || widget.mouseCursorNameProvider == null) {
+      return false;
+    }
+    final nextCursor = _resolveExternalMouseCursor();
+    if (nextCursor == _currentCursor) return false;
+    _currentCursor = nextCursor;
+    return true;
+  }
+
   void _initModeFlags() {
     _enableLigatures =
         widget.enableLigatures || (widget.terminal?.enableLigatures ?? false);
     _terminalBuiltinSelection = widget.terminal?.enableBuiltinSelection ?? true;
     _terminalBuiltinLinkOpen = widget.terminal?.enableBuiltinLinkOpen ?? true;
     if (widget.terminal == null) {
-      _currentCursor = _mapOsc22ToSystemCursor(widget.mouseCursorName);
+      _currentCursor = _resolveExternalMouseCursor();
     }
   }
 
@@ -1288,16 +1306,21 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       _terminalBuiltinSelection =
           widget.terminal?.enableBuiltinSelection ?? true;
       _terminalBuiltinLinkOpen = widget.terminal?.enableBuiltinLinkOpen ?? true;
+      if (widget.terminal != null) {
+        _currentCursor = SystemMouseCursors.basic;
+      }
       _bindTerminalStreams();
       _syncTerminalCellMetrics();
     } else if (oldWidget.enableLigatures != widget.enableLigatures) {
       _enableLigatures = widget.enableLigatures;
     }
 
-    if (oldWidget.terminal == null &&
-        widget.terminal == null &&
-        oldWidget.mouseCursorName != widget.mouseCursorName) {
-      _currentCursor = _mapOsc22ToSystemCursor(widget.mouseCursorName);
+    if (widget.terminal == null &&
+        (widget.mouseCursorNameProvider != null ||
+            oldWidget.terminal != null ||
+            oldWidget.mouseCursorName != widget.mouseCursorName ||
+            oldWidget.mouseCursorNameProvider != null)) {
+      _currentCursor = _resolveExternalMouseCursor();
     }
 
     if (oldWidget.bufferListenable != widget.bufferListenable) {
@@ -1516,6 +1539,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
         widget.cursorPositionProvider?.call() ?? widget.cursorPosition;
     final cursorMoved = cursor != _lastCursorPosition;
     _lastCursorPosition = cursor;
+    final cursorShapeChanged = _syncExternalMouseCursorFromProvider();
 
     final listenable = widget.bufferListenable;
     var overlayOnly = false;
@@ -1533,6 +1557,9 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     if (overlayOnly) {
       _syncCellTransformsAndRegions(buf, force: true);
       _paintNotifier.notifyTransformTick();
+      if (cursorShapeChanged) {
+        setState(() {});
+      }
       return;
     }
 
@@ -1548,6 +1575,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     }
     final needsWidgetRebuild =
         linkChanged ||
+        cursorShapeChanged ||
         !hasBuf ||
         !_hadActiveBuffer ||
         !identical(buf, _lastPaintedBuffer) ||
@@ -2738,31 +2766,49 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       ? '0x${argb.toRadixString(16).padLeft(8, '0').toUpperCase()}'
       : null;
 
-  MouseCursor _mapOsc22ToSystemCursor(String? cursorName) =>
-      switch (cursorName) {
-        null || '' || 'default' => SystemMouseCursors.basic,
-        'text' => SystemMouseCursors.text,
-        'pointer' => SystemMouseCursors.click,
-        'crosshair' => SystemMouseCursors.precise,
-        'help' => SystemMouseCursors.help,
-        'progress' => SystemMouseCursors.progress,
-        'wait' => SystemMouseCursors.wait,
-        'move' => SystemMouseCursors.move,
-        'not-allowed' => SystemMouseCursors.forbidden,
-        'grab' => SystemMouseCursors.grab,
-        'grabbing' => SystemMouseCursors.grabbing,
-        'none' => SystemMouseCursors.none,
-        'alias' => SystemMouseCursors.alias,
-        'copy' => SystemMouseCursors.copy,
-        'cell' => SystemMouseCursors.cell,
-        'no-drop' => SystemMouseCursors.noDrop,
-        'zoom-in' => SystemMouseCursors.zoomIn,
-        'zoom-out' => SystemMouseCursors.zoomOut,
-        'ns-resize' => SystemMouseCursors.resizeUpDown,
-        'ew-resize' => SystemMouseCursors.resizeLeftRight,
-        'all-scroll' => SystemMouseCursors.allScroll,
-        _ => SystemMouseCursors.basic,
-      };
+  MouseCursor _mapOsc22ToSystemCursor(String? cursorName) {
+    final pointer = term.MousePointer.fromOsc22Name(cursorName);
+    if (pointer == null) return SystemMouseCursors.basic;
+    return switch (pointer) {
+      term.MousePointer.defaultCursor => SystemMouseCursors.basic,
+      term.MousePointer.text => SystemMouseCursors.text,
+      term.MousePointer.pointer => SystemMouseCursors.click,
+      term.MousePointer.crosshair => SystemMouseCursors.precise,
+      term.MousePointer.help => SystemMouseCursors.help,
+      term.MousePointer.progress => SystemMouseCursors.progress,
+      term.MousePointer.wait => SystemMouseCursors.wait,
+      term.MousePointer.move => SystemMouseCursors.move,
+      term.MousePointer.notAllowed => SystemMouseCursors.forbidden,
+      term.MousePointer.grab => SystemMouseCursors.grab,
+      term.MousePointer.grabbing => SystemMouseCursors.grabbing,
+      term.MousePointer.none => SystemMouseCursors.none,
+      term.MousePointer.alias => SystemMouseCursors.alias,
+      term.MousePointer.copy => SystemMouseCursors.copy,
+      term.MousePointer.cell => SystemMouseCursors.cell,
+      term.MousePointer.noDrop => SystemMouseCursors.noDrop,
+      term.MousePointer.zoomIn => SystemMouseCursors.zoomIn,
+      term.MousePointer.zoomOut => SystemMouseCursors.zoomOut,
+      term.MousePointer.resizeUpDown => SystemMouseCursors.resizeUpDown,
+      term.MousePointer.resizeLeftRight => SystemMouseCursors.resizeLeftRight,
+      term.MousePointer.allScroll => SystemMouseCursors.allScroll,
+      term.MousePointer.contextMenu => SystemMouseCursors.contextMenu,
+      term.MousePointer.verticalText => SystemMouseCursors.verticalText,
+      term.MousePointer.colResize => SystemMouseCursors.resizeColumn,
+      term.MousePointer.rowResize => SystemMouseCursors.resizeRow,
+      term.MousePointer.resizeUp => SystemMouseCursors.resizeUp,
+      term.MousePointer.resizeDown => SystemMouseCursors.resizeDown,
+      term.MousePointer.resizeLeft => SystemMouseCursors.resizeLeft,
+      term.MousePointer.resizeRight => SystemMouseCursors.resizeRight,
+      term.MousePointer.resizeUpLeft => SystemMouseCursors.resizeUpLeft,
+      term.MousePointer.resizeUpRight => SystemMouseCursors.resizeUpRight,
+      term.MousePointer.resizeDownLeft => SystemMouseCursors.resizeDownLeft,
+      term.MousePointer.resizeDownRight => SystemMouseCursors.resizeDownRight,
+      term.MousePointer.resizeUpRightDownLeft =>
+        SystemMouseCursors.resizeUpRightDownLeft,
+      term.MousePointer.resizeUpLeftDownRight =>
+        SystemMouseCursors.resizeUpLeftDownRight,
+    };
+  }
 
   @override
   Widget build(BuildContext context) {
