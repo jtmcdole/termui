@@ -769,5 +769,152 @@ void main() {
         expect(replies, equals(['\x1b_GI=99;OK\x1b\\']));
       },
     );
+
+    test(
+      'Chunked tmux/U=1 kitten icat uploads with explicit i= on chunk 0 and repeated a= without i= continue a=T/a=t/a=q, emit OK replies, and isolate cross-action or new-metadata frames',
+      () {
+        final replies = <String>[];
+        final vt = VirtualTerminal(
+          width: 20,
+          height: 6,
+          cellPixelWidth: 10,
+          cellPixelHeight: 20,
+          onReply: replies.add,
+        );
+
+        // 1. Multi-chunk PNG (f=100, U=1) matching kitten icat inside tmux:
+        //    chunk 0 carries explicit 32-bit i=, subsequent chunks repeat a=T,q=2,m=1
+        //    and final chunk omits both i= and m= (a=T,q=2).
+        const pngId = 0x6B3E9780; // MSB=0x6B, R=62, G=151, B=128
+        final pngBytes = _minimalPngBytes(40, 40);
+        final pngB64 = base64Encode(pngBytes);
+        final third = pngB64.length ~/ 3;
+
+        vt.writeString(
+          '\x1b_Ga=T,q=2,f=100,m=1,U=1,s=40,v=40,c=4,r=2,i=$pngId;'
+          '${pngB64.substring(0, third)}\x1b\\',
+        );
+        expect(vt.imageRegistry.lookupImage(pngId), isNull);
+
+        vt.writeString(
+          '\x1b_Ga=T,q=2,m=1;${pngB64.substring(third, third * 2)}\x1b\\',
+        );
+        expect(vt.imageRegistry.lookupImage(pngId), isNull);
+
+        vt.writeString('\x1b_Ga=T,q=2;${pngB64.substring(third * 2)}\x1b\\');
+
+        final registeredPng = vt.imageRegistry.lookupImage(pngId);
+        expect(registeredPng, isNotNull);
+        expect(registeredPng!.format, equals(KittyImageData.formatPng));
+        expect(registeredPng.pixelWidth, equals(40));
+        expect(registeredPng.pixelHeight, equals(40));
+        expect(registeredPng.gridCols, equals(4));
+        expect(registeredPng.gridRows, equals(2));
+        expect(registeredPng.rgbaPixels, equals(pngBytes));
+        expect(replies, isEmpty);
+        // U=1 virtual upload must not write direct cells at cursor.
+        expect(vt.buffer.getCharacter(0, 0), equals(' '));
+        expect(vt.cursorX, equals(0));
+
+        // Emit U+10EEEE placeholders with 24-bit RGB fg and tmux's incremental BS rewrites.
+        final cell00 = kittyPlaceholderCell(0, 0, imageIdMsb: 0x6B);
+        final cell01 = kittyPlaceholderCell(0, 1, imageIdMsb: 0x6B);
+        vt.writeString(
+          '\x1b[38;2;62;151;128m'
+          '$kittyPlaceholderChar\x08'
+          '${cell00.substring(0, 3)}\x08'
+          '${cell00.substring(0, 4)}\x08'
+          '$cell00'
+          '$cell01\x1b[39m',
+        );
+        expect(vt.buffer.getCharacter(0, 0), equals(cell00));
+        expect(vt.buffer.getCharacter(1, 0), equals(cell01));
+        expect(
+          extractKittyCellImageId(
+            vt.buffer.getCharacter(0, 0),
+            vt.buffer.getForeground(0, 0),
+          ),
+          equals(pngId),
+        );
+        expect(vt.buffer.lookupKittyImage(0, 0, pngId), equals(registeredPng));
+        expect(vt.buffer.lookupKittyImage(1, 0, pngId), equals(registeredPng));
+
+        // 2. Multi-chunk zlib RGB24 (f=24, o=z, U=1) wrapped in DCS tmux passthrough
+        //    with explicit i= on chunk 0 and repeated a=T,q=2 on continuations.
+        const rgbId = 0x3442C2B2;
+        final rgbPayload = _buildUnpaddedCompressedRgbStream(20, 20);
+        final mid = rgbPayload.unpaddedB64.length ~/ 2;
+        vt.writeString(
+          '\x1bPtmux;\x1b\x1b_Ga=T,q=2,f=24,o=z,m=1,U=1,s=20,v=20,c=2,r=1,i=$rgbId;'
+          '${rgbPayload.unpaddedB64.substring(0, mid)}\x1b\x1b\\\x1b\\',
+        );
+        vt.writeString(
+          '\x1bPtmux;\x1b\x1b_Ga=T,q=2;'
+          '${rgbPayload.unpaddedB64.substring(mid)}\x1b\x1b\\\x1b\\',
+        );
+
+        final registeredRgb = vt.imageRegistry.lookupImage(rgbId);
+        expect(registeredRgb, isNotNull);
+        expect(registeredRgb!.pixelWidth, equals(20));
+        expect(registeredRgb.pixelHeight, equals(20));
+        expect(registeredRgb.gridCols, equals(2));
+        expect(registeredRgb.gridRows, equals(1));
+        expect(replies, isEmpty);
+
+        // 3. Explicit-ID a=t (q=0) repeating a=t without i= registers and emits OK.
+        final transmitPx = Uint8List.fromList([11, 22, 33, 255]);
+        final transmitB64 = base64Encode(transmitPx);
+        final tMid = transmitB64.length ~/ 2;
+        vt.writeString(
+          '\x1b_Ga=t,i=801,f=32,s=1,v=1,m=1;${transmitB64.substring(0, tMid)}\x1b\\',
+        );
+        expect(replies, isEmpty);
+        expect(vt.imageRegistry.lookupImage(801), isNull);
+        vt.writeString('\x1b_Ga=t,m=0;${transmitB64.substring(tMid)}\x1b\\');
+        expect(replies, equals(['\x1b_Gi=801;OK\x1b\\']));
+        expect(
+          vt.imageRegistry.lookupImage(801)?.rgbaPixels,
+          equals(transmitPx),
+        );
+
+        // 4. Explicit-ID a=q (q=0) repeating a=q without i= emits OK without registering.
+        replies.clear();
+        final queryB64 = base64Encode(zlib.encode(const [9, 8, 7, 6]));
+        final qMid = queryB64.length ~/ 2;
+        vt.writeString(
+          '\x1b_Ga=q,t=d,f=32,o=z,s=1,v=1,i=802,m=1;${queryB64.substring(0, qMid)}\x1b\\',
+        );
+        expect(replies, isEmpty);
+        vt.writeString('\x1b_Ga=q,m=0;${queryB64.substring(qMid)}\x1b\\');
+        expect(replies, equals(['\x1b_Gi=802;OK\x1b\\']));
+        expect(vt.imageRegistry.lookupImage(802), isNull);
+
+        // 5. Explicit-ID a=T,m=1 (q=0) resists bare cross-action a=t and new-metadata a=T.
+        replies.clear();
+        final isoPx = Uint8List.fromList([44, 55, 66, 255]);
+        final isoB64 = base64Encode(isoPx);
+        final isoMid = isoB64.length ~/ 2;
+        final otherPx = Uint8List.fromList([99, 88, 77, 255]);
+        final otherB64 = base64Encode(otherPx);
+
+        vt.writeString(
+          '\x1b_Ga=T,i=803,f=32,s=1,v=1,U=1,m=1;${isoB64.substring(0, isoMid)}\x1b\\',
+        );
+        // Bare cross-action a=t (no i=, no metadata) must not hijack open a=T i=803.
+        vt.writeString('\x1b_Ga=t;$otherB64\x1b\\');
+        expect(vt.imageRegistry.lookupImage(803), isNull);
+        expect(replies, isEmpty);
+
+        // Single-chunk new-metadata a=T must not hijack or overwrite _lastActiveUploadId.
+        vt.writeString('\x1b_Ga=T,f=32,s=1,v=1,U=1;$otherB64\x1b\\');
+        expect(vt.imageRegistry.lookupImage(803), isNull);
+        expect(replies, isEmpty);
+
+        // Final repeated a=T without i= completes i=803 and emits OK.
+        vt.writeString('\x1b_Ga=T;${isoB64.substring(isoMid)}\x1b\\');
+        expect(replies, equals(['\x1b_Gi=803;OK\x1b\\']));
+        expect(vt.imageRegistry.lookupImage(803)?.rgbaPixels, equals(isoPx));
+      },
+    );
   });
 }

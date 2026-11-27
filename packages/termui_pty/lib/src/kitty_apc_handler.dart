@@ -775,8 +775,7 @@ final class KittyApcHandler {
       return existing.explicitNumber == explicitNumber &&
           _matchesContinuationMetadata(existing, control);
     }
-    if (_hasNewUploadMetadata(control)) return false;
-    return !control.containsKey('a') || !existing.hasAddressableId;
+    return !_hasNewUploadMetadata(control);
   }
 
   _PendingUpload _obtainPendingUpload(
