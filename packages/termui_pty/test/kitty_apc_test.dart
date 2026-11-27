@@ -842,14 +842,21 @@ void main() {
     );
 
     test(
-      'normalizeMacosShmName enforces leading slash, path safety, and 30-byte PSHMNAMLEN cap',
+      'normalizeMacosShmName enforces leading slash, path safety, IPC blocklist, and 30-byte PSHMNAMLEN cap',
       () {
         expect(normalizeMacosShmName('/peng-123-1'), equals('/peng-123-1'));
         expect(normalizeMacosShmName('peng-123-1'), equals('/peng-123-1'));
+        expect(normalizeMacosShmName('/icat-ABC123'), equals('/icat-ABC123'));
         expect(normalizeMacosShmName(''), isNull);
         expect(normalizeMacosShmName('/'), isNull);
         expect(normalizeMacosShmName('.'), isNull);
         expect(normalizeMacosShmName('..'), isNull);
+        expect(normalizeMacosShmName('/.hidden-shm'), isNull);
+        expect(normalizeMacosShmName('/sem.my-lock'), isNull);
+        expect(normalizeMacosShmName('/org.chromium.Chromium.abc'), isNull);
+        expect(normalizeMacosShmName('/pulse-shm-12345'), isNull);
+        expect(normalizeMacosShmName('/org.mozilla.ipc.99'), isNull);
+        expect(normalizeMacosShmName('/PostgreSQL.1234'), isNull);
         expect(normalizeMacosShmName('/foo/bar'), isNull);
         expect(normalizeMacosShmName(r'/foo\bar'), isNull);
         expect(normalizeMacosShmName('/foo\x00bar'), isNull);
@@ -1026,6 +1033,132 @@ void main() {
         expect(vt.buffer.getCharacter(0, 4), equals(' '));
         expect(vt.buffer.getCharacter(1, 4), equals(' '));
         expect(vt.buffer.getCharacter(2, 4), equals(' '));
+      },
+    );
+
+    test(
+      'Hardens POSIX local media: non-blocking FIFO rejection, nested openat walk, post-validation unlink, shm IPC blocklist, and allowLocalKittyShm opt-out',
+      () {
+        final rgba = Uint8List.fromList([11, 22, 33, 255]);
+        final replies = <String>[];
+        final vt = VirtualTerminal(
+          width: 10,
+          height: 5,
+          onReply: replies.add,
+          allowLocalKittyMedia: true,
+        );
+
+        // 1. Nested subdirectory inside systemTemp succeeds via openat walk & unlinks.
+        final subDir = Directory.systemTemp.createTempSync('kitty-sub-$pid-');
+        addTearDown(() {
+          if (subDir.existsSync()) subDir.deleteSync(recursive: true);
+        });
+        final nestedFile = File(
+          '${subDir.path}/tty-graphics-protocol-nested-$pid.rgba',
+        )..writeAsBytesSync(rgba);
+        vt.writeString(
+          '\x1b_Ga=t,f=32,s=1,v=1,i=210,t=t;'
+          '${base64Encode(utf8.encode(nestedFile.path))}\x1b\\',
+        );
+        expect(replies.last, equals('\x1b_Gi=210;OK\x1b\\'));
+        expect(vt.imageRegistry.lookupImage(210)?.rgbaPixels, equals(rgba));
+        expect(nestedFile.existsSync(), isFalse);
+
+        // 2. Invalid payload (e.g. non-PNG bytes with f=100) must NOT unlink the file.
+        final badPngFile = File(
+          '${subDir.path}/tty-graphics-protocol-badpng-$pid.png',
+        )..writeAsBytesSync(const [1, 2, 3, 4, 5, 6, 7, 8]);
+        replies.clear();
+        vt.writeString(
+          '\x1b_Ga=t,f=100,i=211,t=t;'
+          '${base64Encode(utf8.encode(badPngFile.path))}\x1b\\',
+        );
+        expect(replies.single, startsWith('\x1b_Gi=211;EINVAL:'));
+        expect(badPngFile.existsSync(), isTrue);
+
+        // 3. allowLocalKittyShm: false permits t=t while rejecting t=s.
+        final tOnlyReplies = <String>[];
+        final tOnlyVt = VirtualTerminal(
+          width: 10,
+          height: 5,
+          onReply: tOnlyReplies.add,
+          allowLocalKittyMedia: true,
+          allowLocalKittyShm: false,
+        );
+        final tOnlyFile = File(
+          '${subDir.path}/tty-graphics-protocol-tonly-$pid.rgba',
+        )..writeAsBytesSync(rgba);
+        tOnlyVt.writeString(
+          '\x1b_Ga=t,f=32,s=1,v=1,i=212,t=t;'
+          '${base64Encode(utf8.encode(tOnlyFile.path))}\x1b\\',
+        );
+        tOnlyVt.writeString(
+          '\x1b_Ga=t,f=32,s=1,v=1,i=213,t=s;'
+          '${base64Encode(utf8.encode('/icat-blocked-$pid'))}\x1b\\',
+        );
+        expect(
+          tOnlyReplies,
+          equals([
+            '\x1b_Gi=212;OK\x1b\\',
+            '\x1b_Gi=213;EINVAL:unsupported transmission medium\x1b\\',
+          ]),
+        );
+
+        // 4. POSIX FIFO (named pipe) inside temp root is rejected immediately (no hang) and preserved.
+        if (Platform.isLinux || Platform.isMacOS) {
+          final fifoPath =
+              '${subDir.path}/tty-graphics-protocol-fifo-$pid.rgba';
+          final mkfifo = Process.runSync('mkfifo', [fifoPath]);
+          if (mkfifo.exitCode == 0) {
+            replies.clear();
+            vt.writeString(
+              '\x1b_Ga=t,f=32,s=1,v=1,i=214,t=t;'
+              '${base64Encode(utf8.encode(fifoPath))}\x1b\\',
+            );
+            expect(replies.single, startsWith('\x1b_Gi=214;EINVAL:'));
+            expect(
+              FileSystemEntity.typeSync(fifoPath, followLinks: false),
+              isNot(FileSystemEntityType.notFound),
+            );
+          }
+        }
+
+        // 5. Linux /dev/shm blocks system/browser IPC objects without reading or unlinking them,
+        // while still accepting legitimate Kitty clients like kitten icat (/icat-*).
+        if (Platform.isLinux && Directory('/dev/shm').existsSync()) {
+          final blockedShm = File('/dev/shm/pulse-shm-termui-test-$pid')
+            ..writeAsBytesSync(rgba);
+          final hiddenShm = File('/dev/shm/.org.chromium.termui-test-$pid')
+            ..writeAsBytesSync(rgba);
+          final icatShm = File('/dev/shm/icat-termui-test-$pid')
+            ..writeAsBytesSync(rgba);
+          addTearDown(() {
+            for (final f in [blockedShm, hiddenShm, icatShm]) {
+              if (f.existsSync()) f.deleteSync();
+            }
+          });
+
+          replies.clear();
+          vt.writeString(
+            '\x1b_Ga=t,f=32,s=1,v=1,i=215,t=s;'
+            '${base64Encode(utf8.encode('/pulse-shm-termui-test-$pid'))}\x1b\\',
+          );
+          vt.writeString(
+            '\x1b_Ga=t,f=32,s=1,v=1,i=216,t=s;'
+            '${base64Encode(utf8.encode('/.org.chromium.termui-test-$pid'))}\x1b\\',
+          );
+          vt.writeString(
+            '\x1b_Ga=t,f=32,s=1,v=1,i=217,t=s;'
+            '${base64Encode(utf8.encode('/icat-termui-test-$pid'))}\x1b\\',
+          );
+          expect(replies[0], startsWith('\x1b_Gi=215;EINVAL:'));
+          expect(replies[1], startsWith('\x1b_Gi=216;EINVAL:'));
+          expect(replies[2], equals('\x1b_Gi=217;OK\x1b\\'));
+          expect(blockedShm.existsSync(), isTrue);
+          expect(hiddenShm.existsSync(), isTrue);
+          expect(icatShm.existsSync(), isFalse);
+          expect(vt.imageRegistry.lookupImage(217)?.rgbaPixels, equals(rgba));
+        }
       },
     );
   });

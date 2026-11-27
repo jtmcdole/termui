@@ -11,6 +11,7 @@ const int _enoent = 2;
 const int _protRead = 1;
 const int _mapShared = 1;
 const int _darwinStatBytes = 144;
+const int _darwinStatUidUint32Index = 16 ~/ 4;
 const int _darwinStatSizeInt64Index = 96 ~/ 8;
 const int _macosMaxShmNameBytes = 30;
 final RegExp _pathSeparatorRegex = RegExp(r'[/\\]');
@@ -38,6 +39,8 @@ typedef _ErrnoNative = Pointer<Int32> Function();
 typedef _ErrnoDart = Pointer<Int32> Function();
 typedef _GetPageSizeNative = Int32 Function();
 typedef _GetPageSizeDart = int Function();
+typedef _GetEuidNative = Uint32 Function();
+typedef _GetEuidDart = int Function();
 
 final class _MacosShmBindings {
   final _ShmOpenDart shmOpen;
@@ -50,6 +53,7 @@ final class _MacosShmBindings {
   final _FreeDart free;
   final _ErrnoDart errnoPtr;
   final _GetPageSizeDart getpagesize;
+  final _GetEuidDart geteuid;
 
   _MacosShmBindings(DynamicLibrary lib)
     : shmOpen = lib.lookupFunction<_ShmOpenNative, _ShmOpenDart>(
@@ -85,6 +89,10 @@ final class _MacosShmBindings {
       getpagesize = lib.lookupFunction<_GetPageSizeNative, _GetPageSizeDart>(
         'getpagesize',
         isLeaf: true,
+      ),
+      geteuid = lib.lookupFunction<_GetEuidNative, _GetEuidDart>(
+        'geteuid',
+        isLeaf: true,
       );
 }
 
@@ -106,26 +114,25 @@ _MacosShmBindings? _loadMacosBindings() {
 }
 
 /// Validates and normalizes a POSIX shared-memory object name for macOS
-/// (`shm_open` requires a leading `/` and at most 30 bytes before NUL).
+/// (`shm_open` requires a leading `/` and at most 30 bytes before NUL, and the
+/// name must be scoped to Kitty Graphics Protocol clients via
+/// [isAllowedKittyShmName]).
 String? normalizeMacosShmName(String decoded) {
+  if (!isAllowedKittyShmName(decoded)) return null;
   final clean = decoded.startsWith('/') ? decoded.substring(1) : decoded;
-  if (clean.isEmpty ||
-      clean.contains(_pathSeparatorRegex) ||
-      clean.contains('\x00') ||
-      clean == '.' ||
-      clean == '..') {
-    return null;
-  }
+  if (clean.contains(_pathSeparatorRegex)) return null;
   final normalized = '/$clean';
   if (utf8.encode(normalized).length > _macosMaxShmNameBytes) return null;
   return normalized;
 }
 
-int? _readMacosFdSize(_MacosShmBindings lib, int fd) {
+int? _readMacosOwnedFdSize(_MacosShmBindings lib, int fd) {
   final statBuf = lib.malloc(_darwinStatBytes);
   if (statBuf == nullptr) return null;
   try {
     if (lib.fstat(fd, statBuf) != 0) return null;
+    final uid = statBuf.cast<Uint32>()[_darwinStatUidUint32Index];
+    if (uid != lib.geteuid()) return null;
     return statBuf.cast<Int64>()[_darwinStatSizeInt64Index];
   } finally {
     lib.free(statBuf);
@@ -183,6 +190,7 @@ KittyMediumReadResult readMacosPosixShm(
   int offset = 0,
   int? size,
   bool unlink = true,
+  bool Function(Uint8List bytes)? shouldUnlink,
 }) {
   if (offset < 0 || maxBytes < 0 || (size != null && size < 0)) {
     return const KittyMediumReadInvalid();
@@ -207,7 +215,7 @@ KittyMediumReadResult readMacosPosixShm(
           : const KittyMediumReadInvalid();
     }
     try {
-      final fileLen = _readMacosFdSize(lib, fd);
+      final fileLen = _readMacosOwnedFdSize(lib, fd);
       if (fileLen == null) return const KittyMediumReadInvalid();
       final result = _mmapReadSlice(
         lib,
@@ -217,7 +225,9 @@ KittyMediumReadResult readMacosPosixShm(
         offset: offset,
         size: size,
       );
-      if (unlink && result is KittyMediumReadOk) {
+      if (unlink &&
+          result is KittyMediumReadOk &&
+          (shouldUnlink == null || shouldUnlink(result.bytes))) {
         lib.shmUnlink(namePtr);
       }
       return result;

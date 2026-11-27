@@ -794,11 +794,18 @@ final class VirtualTerminal implements TerminalHandler {
   final Map<String, _PendingOsc99> _pendingOsc99 = {};
 
   /// Whether local Kitty Graphics Protocol transmission media (`t=t` temp files
-  /// and `t=s` POSIX shared memory) are permitted on this terminal.
+  /// and, unless [allowLocalKittyShm] overrides it, `t=s` POSIX shared memory)
+  /// are permitted on this terminal.
   ///
   /// Defaults to `false` so untrusted or remote PTY streams cannot read or
   /// unlink local temp/shared-memory files unless explicitly opted in.
   final bool allowLocalKittyMedia;
+
+  /// Whether POSIX shared-memory (`t=s`) transmission is permitted.
+  ///
+  /// Defaults to [allowLocalKittyMedia]. Pass `allowLocalKittyMedia: true` with
+  /// `allowLocalKittyShm: false` to allow only `t=t` temp files.
+  final bool allowLocalKittyShm;
 
   late final KittyApcHandler _kittyApcHandler = KittyApcHandler(
     registry: imageRegistry,
@@ -807,6 +814,7 @@ final class VirtualTerminal implements TerminalHandler {
     onClearPlacements: _clearKittyPlacements,
     cellPixelSize: () => (_cellPixelWidth, _cellPixelHeight),
     allowLocalMedia: allowLocalKittyMedia,
+    allowLocalShm: allowLocalKittyShm,
   );
 
   late final AudioApcHandler _audioApcHandler = AudioApcHandler(
@@ -837,7 +845,9 @@ final class VirtualTerminal implements TerminalHandler {
     this.onShaderEvent,
     this.shaderCapabilitiesProvider,
     this.allowLocalKittyMedia = false,
-  }) : width = math.max(1, width),
+    bool? allowLocalKittyShm,
+  }) : allowLocalKittyShm = allowLocalKittyShm ?? allowLocalKittyMedia,
+       width = math.max(1, width),
        _colorScheme =
            colorScheme ?? theme?.brightness ?? TerminalBrightness.dark,
        height = math.max(1, height),

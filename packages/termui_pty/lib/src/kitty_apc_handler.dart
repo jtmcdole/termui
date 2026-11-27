@@ -155,9 +155,13 @@ final class KittyApcHandler {
   /// Callback returning the live terminal cell dimensions in pixels `(width, height)`.
   final (int width, int height) Function() cellPixelSize;
 
-  /// Whether local filesystem (`t=t`) and POSIX shared-memory (`t=s`)
-  /// transmission media are enabled. Defaults to `false`.
+  /// Whether local filesystem (`t=t`) transmission media is enabled.
+  /// Defaults to `false`.
   final bool allowLocalMedia;
+
+  /// Whether POSIX shared-memory (`t=s`) transmission media is enabled.
+  /// Defaults to [allowLocalMedia].
+  final bool allowLocalShm;
 
   final Map<int, _PendingUpload> _pendingUploads = {};
   final Set<(int imageId, int placementId, bool isVirtual)> _placements = {};
@@ -174,7 +178,8 @@ final class KittyApcHandler {
     required this.cellPixelSize,
     this.onClearPlacements,
     this.allowLocalMedia = false,
-  });
+    bool? allowLocalShm,
+  }) : allowLocalShm = allowLocalShm ?? allowLocalMedia;
 
   /// Clears all pending chunked uploads, placements, and wipes [registry].
   void reset() {
@@ -316,7 +321,9 @@ final class KittyApcHandler {
   bool _isSupportedMedium(Map<String, String> control) =>
       switch (_parseMedium(control)) {
         'd' => true,
-        final medium => allowLocalMedia && platformSupportsKittyMedium(medium),
+        't' => allowLocalMedia && platformSupportsKittyMedium('t'),
+        's' => allowLocalShm && platformSupportsKittyMedium('s'),
+        _ => false,
       };
 
   /// Returns whether [format] is a supported Kitty Graphics `f=` transmission code:
@@ -489,6 +496,7 @@ final class KittyApcHandler {
     required int dataOffset,
     required int? dataSize,
     required bool unlink,
+    bool Function(Uint8List bytes)? shouldUnlink,
   }) {
     if (medium == 'd') return decoded;
     return switch (readPlatformKittyMedium(
@@ -498,6 +506,7 @@ final class KittyApcHandler {
       offset: dataOffset,
       size: dataSize,
       unlink: unlink,
+      shouldUnlink: shouldUnlink,
     )) {
       KittyMediumReadOk(:final bytes) => bytes,
       KittyMediumReadNotFound() => throw const _MediumNotFoundException(),
@@ -885,9 +894,8 @@ final class KittyApcHandler {
     }
 
     try {
-      final rawBytes = _decodePayloadBytes(pending);
+      final rawData = _decodeAndBuildImageData(pending);
       final existing = registry.lookupImage(pending.imageId);
-      final rawData = _buildImageData(pending, rawBytes);
       final imageData = existing != null
           ? rawData.copyWith(version: existing.version + 1)
           : rawData;
@@ -917,16 +925,30 @@ final class KittyApcHandler {
     }
   }
 
-  static Uint8List _decodePayloadBytes(_PendingUpload pending) {
+  KittyImageData _decodeAndBuildImageData(_PendingUpload pending) {
     final decoded = _decodeBase64Payload(pending.base64Data.toString());
-    final payloadBytes = _readMediumBytes(
+    if (pending.medium == 'd') {
+      final rawBytes = pending.compressed
+          ? _inflateZlibBytes(decoded)
+          : decoded;
+      return _buildImageData(pending, rawBytes);
+    }
+    late final KittyImageData built;
+    _readMediumBytes(
       pending.medium,
       decoded,
       dataOffset: pending.dataOffset,
       dataSize: pending.dataSize,
       unlink: true,
+      shouldUnlink: (payloadBytes) {
+        final rawBytes = pending.compressed
+            ? _inflateZlibBytes(payloadBytes)
+            : payloadBytes;
+        built = _buildImageData(pending, rawBytes);
+        return true;
+      },
     );
-    return pending.compressed ? _inflateZlibBytes(payloadBytes) : payloadBytes;
+    return built;
   }
 
   KittyImageData _buildImageData(_PendingUpload pending, Uint8List rawBytes) =>

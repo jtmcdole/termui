@@ -17,4 +17,5 @@ KittyMediumReadResult readPlatformKittyMedium(
   int offset = 0,
   int? size,
   bool unlink = true,
+  bool Function(Uint8List bytes)? shouldUnlink,
 }) => const KittyMediumReadUnsupported();
