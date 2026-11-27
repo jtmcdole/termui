@@ -1305,5 +1305,82 @@ void main() {
       expect(identical(returned, atlas), isTrue);
       expect(atlas.isDisposed, isTrue);
     });
+
+    testWidgets(
+      'TerminalSurface evicts superseded Kitty GPU images when imageId is replaced across versions',
+      (tester) async {
+        final registry = KittyImageRegistry();
+        final terminal = FlutterTerminal();
+        addTearDown(terminal.dispose);
+        late void Function(Buffer) drawFrame;
+
+        await tester.pumpWidget(
+          _testApp(
+            home: SizedBox(
+              width: 300,
+              height: 200,
+              child: Terminal(
+                terminal: terminal,
+                onRun: (_, onDraw) async {
+                  drawFrame = onDraw;
+                },
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        for (var v = 1; v <= 6; v++) {
+          final pixels = Uint8List(4 * 4 * 4);
+          for (var i = 0; i < pixels.length; i += 4) {
+            pixels[i] = (v * 40) & 0xFF;
+            pixels[i + 1] = 128;
+            pixels[i + 2] = 64;
+            pixels[i + 3] = 255;
+          }
+          registry.registerImage(
+            KittyImageData(
+              imageId: 1,
+              pixelWidth: 4,
+              pixelHeight: 4,
+              rgbaPixels: pixels,
+              gridCols: 2,
+              gridRows: 1,
+              version: v,
+            ),
+          );
+          final buf = Buffer(4, 2)
+            ..registerKittyRegistry(const tui_geom.Rect(0, 0, 4, 2), registry);
+          buf.setAttributes(
+            0,
+            0,
+            char: kittyPlaceholderCell(0, 0),
+            fg: 0xFF000001,
+            bg: 0xFF000000,
+            modifiers: Modifier.kittyPlaceholder,
+          );
+          drawFrame(buf);
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 50)),
+          );
+          await tester.pumpAndSettle();
+        }
+
+        final paintWidget = tester.widget<CustomPaint>(
+          find.descendant(
+            of: find.byType(PrivateTuiView),
+            matching: find.byType(CustomPaint),
+          ),
+        );
+        final activePainter = paintWidget.painter! as TuiAtlasPainter;
+        expect(
+          activePainter.kittyImages.length,
+          equals(1),
+          reason:
+              'Superseded KittyImageData versions for the same (registry, imageId) '
+              'must be evicted once the newer version has decoded.',
+        );
+      },
+    );
   });
 }

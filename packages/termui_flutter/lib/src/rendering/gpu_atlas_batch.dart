@@ -38,6 +38,19 @@ final class GpuKittyQuad {
   /// Decoded Kitty GPU image to sample.
   final ui.Image image;
 
+  /// Optional CPU-side tightly-packed RGBA8888 pixel buffer matching [image].
+  ///
+  /// Populated when the quad resolves directly to an exact `formatRgba32`
+  /// [KittyImageData] entry with matching dimensions so host-visible GPU
+  /// backends (such as Windows Impeller OpenGL ES) can upload directly via
+  /// `Texture.overwrite` without invoking `ui.Image.toByteData()` on the
+  /// Flutter IO thread.
+  final Uint8List? rawRgbaPixels;
+
+  /// Optional stable `(KittyImageRegistry, imageId)` slot key allowing GPU
+  /// texture caches to evict superseded versions of the same Kitty image ID.
+  final Object? cacheSlot;
+
   /// Destination X origin in physical pixels.
   final double dstX;
 
@@ -65,6 +78,8 @@ final class GpuKittyQuad {
   /// Creates an immutable Kitty textured quad descriptor.
   const GpuKittyQuad({
     required this.image,
+    this.rawRgbaPixels,
+    this.cacheSlot,
     required this.dstX,
     required this.dstY,
     required this.dstWidth,
@@ -734,7 +749,8 @@ final class GpuAtlasBatchBuilder {
     );
     final runCols = endIdx - index;
 
-    final gpuImage = kittyImages[data] ?? kittyImagesById[(registry, imageId)];
+    final exactImage = kittyImages[data];
+    final gpuImage = exactImage ?? kittyImagesById[(registry, imageId)];
     if (gpuImage == null) {
       final needsSubpixelCanvas = data.format != KittyImageData.formatPng;
       return (
@@ -753,6 +769,8 @@ final class GpuAtlasBatchBuilder {
       nextIndex: endIdx,
       quad: GpuKittyQuad(
         image: gpuImage,
+        rawRgbaPixels: _resolveRawRgbaPixels(exactImage, data),
+        cacheSlot: exactImage != null ? (registry, imageId) : null,
         dstX: x * dpr,
         dstY: y * dpr,
         dstWidth: (runCols * w + kittyTileOverlapLogical) * dpr,
@@ -764,6 +782,24 @@ final class GpuAtlasBatchBuilder {
       ),
       needsCanvasFallback: false,
     );
+  }
+
+  static Uint8List? _resolveRawRgbaPixels(
+    ui.Image? exactImage,
+    KittyImageData data,
+  ) {
+    if (exactImage == null || data.format != KittyImageData.formatRgba32) {
+      return null;
+    }
+    if (exactImage.width != data.pixelWidth ||
+        exactImage.height != data.pixelHeight) {
+      return null;
+    }
+    final expectedBytes = data.pixelWidth * data.pixelHeight * 4;
+    if (expectedBytes <= 0 || data.rgbaPixels.length < expectedBytes) {
+      return null;
+    }
+    return data.rgbaPixels;
   }
 
   void _appendOutOfBoundsDimming({

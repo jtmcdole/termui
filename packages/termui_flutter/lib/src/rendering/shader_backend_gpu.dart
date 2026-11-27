@@ -442,6 +442,7 @@ final class FlutterGpuShaderBackend
       LinkedHashMap<ui.Image, gpu.Texture>.identity();
   final LinkedHashMap<ui.Image, gpu.Texture> _uploadedKittyTextures =
       LinkedHashMap<ui.Image, gpu.Texture>.identity();
+  final Map<Object, ui.Image> _uploadedKittyImageBySlot = <Object, ui.Image>{};
   int _uploadedKittyCapacity = _maxUploadedKittyTextures;
   final Map<ui.Image, Future<bool>> _pixelUploadsInFlight =
       Map<ui.Image, Future<bool>>.identity();
@@ -875,6 +876,7 @@ final class FlutterGpuShaderBackend
     _uploadedWallpaperTextures.clear();
     _uploadedInputTextures.clear();
     _uploadedKittyTextures.clear();
+    _uploadedKittyImageBySlot.clear();
     _uploadedKittyCapacity = _maxUploadedKittyTextures;
     _pixelUploadsInFlight.clear();
     _cachedRegionMasks.clear();
@@ -938,9 +940,17 @@ final class FlutterGpuShaderBackend
     if (quads.isEmpty) return const <gpu.Texture>[];
     if (_usePixelUploadForImages) {
       final wrapped = <gpu.Texture>[];
+      var ensuredCapacity = false;
       for (final quad in quads) {
-        final tex = _touchLruTexture(_uploadedKittyTextures, quad.image);
-        if (tex == null) return null;
+        var tex = _touchLruTexture(_uploadedKittyTextures, quad.image);
+        if (tex == null) {
+          if (!ensuredCapacity) {
+            _ensureKittyUploadCapacityForQuads(quads);
+            ensuredCapacity = true;
+          }
+          tex = _tryUploadRawRgbaKittyTexture(quad);
+          if (tex == null) return null;
+        }
         wrapped.add(tex);
       }
       return wrapped;
@@ -957,6 +967,42 @@ final class FlutterGpuShaderBackend
       wrapped.add(tex);
     }
     return wrapped;
+  }
+
+  void _ensureKittyUploadCapacityForQuads(List<GpuKittyQuad> quads) {
+    final distinct = LinkedHashSet<ui.Image>.identity();
+    for (final quad in quads) {
+      distinct.add(quad.image);
+    }
+    if (distinct.length > _uploadedKittyCapacity) {
+      _uploadedKittyCapacity = distinct.length;
+    }
+  }
+
+  gpu.Texture? _tryUploadRawRgbaKittyTexture(GpuKittyQuad quad) {
+    final raw = quad.rawRgbaPixels;
+    if (raw == null) return null;
+    final image = quad.image;
+    final width = image.width;
+    final height = image.height;
+    if (width <= 0 || height <= 0) return null;
+    final expectedBytes = width * height * 4;
+    if (raw.length < expectedBytes) return null;
+    try {
+      final tex = _context.createTexture(
+        gpu.StorageMode.hostVisible,
+        width,
+        height,
+        format: gpu.PixelFormat.r8g8b8a8UNormInt,
+        enableRenderTargetUsage: false,
+        enableShaderReadUsage: true,
+      );
+      tex.overwrite(ByteData.sublistView(raw, 0, expectedBytes));
+      _storeUploadedKittyTexture(image, tex, cacheSlot: quad.cacheSlot);
+      return tex;
+    } on Object {
+      return null;
+    }
   }
 
   void _markPanePrimed(Object paneKey) {
@@ -3509,13 +3555,29 @@ final class FlutterGpuShaderBackend
         maxEntries: _maxUploadedInputTextures,
       );
 
-  void _storeUploadedKittyTexture(ui.Image image, gpu.Texture texture) =>
-      _storeLruTexture(
-        _uploadedKittyTextures,
-        image,
-        texture,
-        maxEntries: _uploadedKittyCapacity,
+  void _storeUploadedKittyTexture(
+    ui.Image image,
+    gpu.Texture texture, {
+    Object? cacheSlot,
+  }) {
+    if (cacheSlot != null) {
+      final previous = _uploadedKittyImageBySlot[cacheSlot];
+      if (previous != null && !identical(previous, image)) {
+        _uploadedKittyTextures.remove(previous);
+      }
+      _uploadedKittyImageBySlot[cacheSlot] = image;
+    }
+    _uploadedKittyTextures.remove(image);
+    while (_uploadedKittyTextures.length >= _uploadedKittyCapacity &&
+        _uploadedKittyTextures.isNotEmpty) {
+      final evicted = _uploadedKittyTextures.keys.first;
+      _uploadedKittyTextures.remove(evicted);
+      _uploadedKittyImageBySlot.removeWhere(
+        (_, tracked) => identical(tracked, evicted),
       );
+    }
+    _uploadedKittyTextures[image] = texture;
+  }
 
   Future<bool> _primeDirectPixelUploads({
     required ui.Image atlasImage,

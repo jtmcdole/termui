@@ -420,7 +420,12 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   }
 
   bool get _shouldAnimate {
-    if (_isInactive || !_tickerModeEnabled || !_isBackendActive) return false;
+    if (_isInactive ||
+        !_tickerModeEnabled ||
+        !_isBackendActive ||
+        _directPrepareInFlight) {
+      return false;
+    }
     final ctrl = widget.controller;
     if (ctrl == null || ctrl.ambientTicksPaused) return false;
     final regionUsesTime = widget.cliShaderRegistry?.anyShaderUsesTime ?? false;
@@ -1254,6 +1259,13 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     if (!_hasCompiledBackgroundPasses) {
       return null;
     }
+    // Avoid submitting concurrent background GPU frames while direct resource
+    // priming (which may invoke IO-thread ui.Image.toByteData on Windows) is
+    // still in flight, preventing ANGLE/D3D11 Present-vs-readback deadlocks.
+    if (_directPrepareInFlight &&
+        _directFallbackReason == _DirectFallbackReason.priming) {
+      return _backgroundOutputImage;
+    }
     final physicalSize = Size(
       logicalSize.width * _devicePixelRatio,
       logicalSize.height * _devicePixelRatio,
@@ -1835,6 +1847,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   ) {
     if (_directPrepareInFlight) return;
     _directPrepareInFlight = true;
+    _syncTicker();
     final generation = ++_directPrepareGeneration;
     final wallpaper = _effectiveWallpaper;
     final kittyImages = <ui.Image>[
@@ -1854,6 +1867,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
               return;
             }
             _directPrepareInFlight = false;
+            _syncTicker();
             if (!ready) return;
             _lastPrimedAtlas = atlasImage;
             _lastPrimedWallpaper = wallpaper;
@@ -1871,8 +1885,9 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
             _frameNotifier.notify();
           })
           .catchError((Object _) {
-            if (generation == _directPrepareGeneration) {
+            if (mounted && generation == _directPrepareGeneration) {
               _directPrepareInFlight = false;
+              _syncTicker();
             }
           }),
     );
