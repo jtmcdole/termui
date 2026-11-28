@@ -261,14 +261,8 @@ void _writeUntilClosed(_WriterIsolateArgs ctx) {
       shutdown();
       return;
     }
-    final Uint8List bytes;
-    if (message is TransferableTypedData) {
-      bytes = message.materialize().asUint8List();
-    } else if (message is Uint8List) {
-      bytes = message;
-    } else {
-      return;
-    }
+    if (message is! TransferableTypedData) return;
+    final bytes = message.materialize().asUint8List();
     if (!ctx.writer.write(bytes)) {
       shutdown();
     }
