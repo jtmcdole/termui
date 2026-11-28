@@ -112,9 +112,24 @@ void main() {
       final raw = buildRawRgbaVisualTile();
       final msb = buildMsb32BitVisualTile();
       final png = buildPngVisualTile();
+      final animFrames = buildAnimatedVisualTileFrames();
       expect((raw.pixelWidth, raw.pixelHeight), equals((144, 96)));
       expect((msb.pixelWidth, msb.pixelHeight), equals((144, 96)));
       expect((png.pixelWidth, png.pixelHeight, png.format), (144, 96, 100));
+      expect(animFrames, hasLength(2));
+      expect(animFrames[0].imageId, equals(kttyVisualAnimatedImageId));
+      expect(animFrames[1].imageId, equals(kttyVisualAnimatedImageId));
+      expect(animFrames[0].version, isNot(equals(animFrames[1].version)));
+      final animApc = buildAnimatedTileApcCommands(animFrames[1]);
+      expect(animApc, contains('a=f,i=$kttyVisualAnimatedImageId,s='));
+      expect(animApc, isNot(contains('a=f,i=$kttyVisualAnimatedImageId,r=2')));
+      expect(animApc, contains('a=a,i=$kttyVisualAnimatedImageId'));
+      final probeApc = buildKittyApcProbeCommands();
+      expect(probeApc, contains('i=$kttyProbeAnimId,a=f,s=2,v=2,f=32,z=40'));
+      expect(
+        probeApc,
+        isNot(contains('i=$kttyProbeAnimId,a=f,s=2,v=2,f=32,r=2')),
+      );
     });
   });
 
@@ -150,8 +165,8 @@ void main() {
 
       expect(report.isComplete, isTrue);
       expect(report.supportedCount, equals(18));
-      expect(report.coreUnsupportedCount, equals(8));
-      expect(report.optionalDisabledCount, equals(2));
+      expect(report.coreUnsupportedCount, equals(15));
+      expect(report.optionalDisabledCount, equals(5));
       expect(report.xtVersion, equals('kitty(0.37.0)'));
       expect(report.kittyKeyboardFlags, equals(11));
       expect(report.defaultForegroundHex, equals('#EFF1F5'));
@@ -339,11 +354,247 @@ void main() {
         );
       },
     );
+
+    test(
+      'parses XTGETTCAP, DECRQSS, OSC 66 CPR, OSC 30001/30101, OSC 5522, crop/anim APC, and optional Shader/Audio/t=f replies',
+      () {
+        final report = KttyProbeReport()..resetForNewProbe();
+        final interceptor = KttyReplyInterceptor(report);
+        final wireStream =
+            '\x1b_Gi=$kttyProbeCropLayerId,p=$kttyProbeCropPlacementId;OK\x1b\\'
+            '\x1b_Gi=$kttyProbeAnimId,r=2;OK\x1b\\'
+            '\x1b_Gi=$kttyProbeAnimId;OK\x1b\\'
+            '\x1b_Gi=$kttyProbeAnimId;OK\x1b\\'
+            '\x1b_Gi=$kttyProbeFileId;OK\x1b\\'
+            '\x1b_Sa=caps,backend=impeller,glsl=1,xform=1,region=1,max_slots=16,max_regions=8\x1b\\'
+            '\x1b_Aa=waver,q=999;AAAA\x1b\\' // mismatched q= must be ignored
+            '\x1b_Aa=waver,q=$kttyProbeAudioWaveRequestId;${base64Encode(Uint8List(16))}\x1b\\'
+            '\x1bP1+r524742=382f382f38\x1b\\'
+            '\x1bP1+r53796e63=31\x1b\\'
+            '\x1bP0+r466f6f\x1b\\'
+            '\x1bP1\$r0;1m\x1b\\'
+            '\x1bP1\$r2 q\x1b\\'
+            '\x1b]4;255;rgb:eeee/eeee/eeee\x1b\\'
+            '\x1b]4;255;rgb:0101/fefe/0202\x1b\\'
+            '\x1b]4;255;rgb:eeee/eeee/eeee\x1b\\'
+            '\x1b[1;1R'
+            '\x1b[1;3R'
+            '\x1b]5522;type=write:status=EINVAL:id=unrelated\x1b\\' // mismatched id= ignored
+            '\x1b]5522;type=write:status=DONE:id=$kttyProbeOsc5522Id\x1b\\'
+            // Interrupted control string followed immediately by ESC [ DA1 must preserve 0x1B!
+            '\x1b]999;unterminated\x1b[?62;22c'
+            // After DA1, CSI 1;2 R (Shift+F3) must pass through untouched!
+            '\x1b[1;2R';
+
+        final passthrough = BytesBuilder();
+        for (final byte in utf8.encode(wireStream)) {
+          passthrough.add(interceptor.processChunk([byte]));
+        }
+
+        expect(utf8.decode(passthrough.takeBytes()), equals('\x1b[1;2R'));
+        expect(
+          report['apc_crop_layer']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(
+          report['apc_animation']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(
+          report['apc_animation']?.detail,
+          equals('OK (i=$kttyProbeAnimId, a=f/a/c)'),
+        );
+        expect(
+          report['apc_file_medium']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(
+          report['termui_shader_apc']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(
+          report['termui_shader_apc']?.detail,
+          contains('backend=impeller'),
+        );
+        expect(
+          report['termui_audio_apc']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(report['termui_audio_apc']?.detail, contains('4 f32 samples'));
+        expect(
+          report['xtgettcap']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(report.xtgettcapCapabilities['RGB'], equals('8/8/8'));
+        expect(report.xtgettcapCapabilities['Sync'], equals('1'));
+        expect(report.xtgettcapUnsupported, contains('Foo'));
+        expect(
+          report['decrqss']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(report['decrqss']?.detail, contains('SGR=0;1m'));
+        expect(report['decrqss']?.detail, contains('DECSCUSR=2 q'));
+        expect(
+          report['osc_30001_colors']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(
+          report['osc_66_sizing']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(
+          report['osc_5522_clip']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+      },
+    );
+
+    test(
+      'flags unsupported replies for OSC 66 zero delta, OSC 30001 non-restore, OSC 5522 EINVAL, DECRQSS 0\$r, and animation error',
+      () {
+        final report = KttyProbeReport()..resetForNewProbe();
+        final interceptor = KttyReplyInterceptor(report);
+        final wireStream =
+            '\x1b_Gi=$kttyProbeAnimId,r=2;OK\x1b\\'
+            '\x1b_Gi=$kttyProbeAnimId;EINVAL:unsupported\x1b\\'
+            '\x1b_Sa=caps,backend=none,glsl=0,xform=0,region=0\x1b\\'
+            '\x1bP0+r524742\x1b\\'
+            '\x1bP0\$r\x1b\\'
+            '\x1b]4;255;rgb:eeee/eeee/eeee\x1b\\'
+            '\x1b]4;255;rgb:0101/fefe/0202\x1b\\'
+            '\x1b]4;255;rgb:0101/fefe/0202\x1b\\'
+            '\x1b[5;1R'
+            '\x1b[5;1R'
+            '\x1b]5522;type=write:status=EINVAL:id=$kttyProbeOsc5522Id\x1b\\'
+            '\x1b[?62;22c';
+
+        interceptor.processChunk(utf8.encode(wireStream));
+
+        expect(
+          report['apc_animation']?.status,
+          equals(KttyCapabilityStatus.unsupported),
+        );
+        expect(
+          report['termui_shader_apc']?.status,
+          equals(KttyCapabilityStatus.optionalDisabled),
+        );
+        expect(
+          report['xtgettcap']?.status,
+          equals(KttyCapabilityStatus.unsupported),
+        );
+        expect(
+          report['decrqss']?.status,
+          equals(KttyCapabilityStatus.unsupported),
+        );
+        expect(
+          report['osc_30001_colors']?.status,
+          equals(KttyCapabilityStatus.unsupported),
+        );
+        expect(
+          report['osc_66_sizing']?.status,
+          equals(KttyCapabilityStatus.unsupported),
+        );
+        expect(
+          report['osc_5522_clip']?.status,
+          equals(KttyCapabilityStatus.unsupported),
+        );
+      },
+    );
+  });
+
+  group('KttyProbeReport diffAgainstBaseline & diagnostics', () {
+    test(
+      'detects PASS -> MISS regressions, improvements, and unchanged counts',
+      () {
+        final baseline = KttyProbeReport()
+          ..resetForNewProbe()
+          ..recordXtVersion('kitty(0.39.0)')
+          ..recordXtgettcapReply('RGB', value: '8/8/8', supported: true)
+          ..recordApcReply(kttyProbeFileId, 'OK')
+          ..recordCursorPositionReport(1, 1)
+          ..recordCursorPositionReport(1, 3)
+          ..recordDa1Sentinel('62;22');
+
+        final current = KttyProbeReport()
+          ..resetForNewProbe()
+          ..recordXtVersion('kitty(0.39.0)')
+          ..recordDecrqssReply(valid: true, body: '0m')
+          ..recordCursorPositionReport(1, 1)
+          ..recordCursorPositionReport(1, 1) // regressed OSC 66
+          ..recordDa1Sentinel('62;22'); // apc_file_medium -> optionalDisabled
+
+        final baselineMap = baseline.toJsonMap();
+        final diff = current.diffAgainstBaseline(baselineMap);
+
+        expect(diff.hasRegressions, isTrue);
+        expect(
+          diff.regressions,
+          containsAll(['xtgettcap', 'osc_66_sizing', 'apc_file_medium']),
+        );
+        expect(diff.improvements, equals(['decrqss']));
+        expect(diff.unchangedCount, greaterThan(20));
+        expect(
+          diff.formatPlainSummary(ansiColor: false),
+          contains('REGRESSION (PASS -> MISS): osc_66_sizing'),
+        );
+        expect(
+          () => current.diffAgainstBaseline(const {'notCaps': 1}),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test(
+      'buildDiagnosticSummary combines TERM, COLORTERM, XTGETTCAP, and tmux hints',
+      () {
+        final unhealthy = KttyProbeReport()
+          ..resetForNewProbe()
+          ..multiplexerDiagnostics = const KttyMultiplexerDiagnostics(
+            multiplexer: 'tmux',
+            allowPassthrough: 'off',
+            hasTrueColor: false,
+            hints: [kttyTmuxPassthroughHint],
+          )
+          ..recordDa1Sentinel('62;22');
+
+        final hints = unhealthy.buildDiagnosticHints(
+          environment: const {'TERM': 'dumb'},
+        );
+        expect(hints.any((h) => h.contains('TERM=xterm-256color')), isTrue);
+        expect(hints.any((h) => h.contains('COLORTERM=truecolor')), isTrue);
+        expect(hints.any((h) => h.contains('XTGETTCAP')), isTrue);
+        expect(hints.any((h) => h.contains('allow-passthrough')), isTrue);
+
+        final summary = unhealthy.buildDiagnosticSummary(
+          environment: const {'TERM': 'dumb', 'TERM_PROGRAM': 'tmux'},
+        );
+        expect(summary, contains('KTTY Doctor / Environment Diagnostics'));
+        expect(summary, contains('TERM         : dumb'));
+        expect(summary, contains('Multiplexer  : tmux'));
+
+        final healthy = KttyProbeReport()
+          ..resetForNewProbe()
+          ..recordXtVersion('termui')
+          ..recordXtgettcapReply('RGB', value: '8/8/8', supported: true)
+          ..recordXtgettcapReply('Smulx', value: '1', supported: true)
+          ..recordXtgettcapReply('Setulc', value: '1', supported: true)
+          ..recordXtgettcapReply('Sync', value: '1', supported: true)
+          ..recordDecrqm(2026, 2)
+          ..recordCursorPositionReport(1, 1)
+          ..recordCursorPositionReport(1, 3)
+          ..recordDa1Sentinel('62;22');
+
+        final healthySummary = healthy.buildDiagnosticSummary(
+          environment: const {'TERM': 'xterm-kitty', 'COLORTERM': 'truecolor'},
+        );
+        expect(healthySummary, contains('look healthy'));
+      },
+    );
   });
 
   group('VirtualTerminal end-to-end KTTY probe', () {
     test(
-      'runKttyBatchProbe passes all 26 core capabilities and cleans up temporary probe images',
+      'runKttyBatchProbe passes all 33 core capabilities and cleans up temporary probe images, placements, and animations',
       () async {
         final replies = StreamController<List<int>>.broadcast();
         final vt = VirtualTerminal(
@@ -365,20 +616,26 @@ void main() {
         );
 
         expect(report.isComplete, isTrue);
-        expect(report.coreSupportedCount, equals(26));
-        expect(report.coreTotalCount, equals(26));
+        expect(report.coreSupportedCount, equals(33));
+        expect(report.coreTotalCount, equals(33));
         expect(report.coreUnsupportedCount, equals(0));
-        expect(report.optionalDisabledCount, equals(2));
+        expect(
+          report['termui_shader_apc']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(report.optionalDisabledCount, equals(4));
         expect(
           report.formatPlainReport(ansiColor: false),
-          contains('26/26 core supported'),
+          contains('33/33 core supported'),
         );
-        expect(report.toJsonMap()['coreSupported'], equals(26));
-        // Temporary probes (905, 906, I=907) must be cleaned up before DA1.
+        expect(report.toJsonMap()['coreSupported'], equals(33));
+        // Temporary probes (905, 906, I=907, 911 crop/layer, 912 animation) must be cleaned up before DA1.
         expect(
           vt.imageRegistry.registeredImageIds.toSet(),
           equals({kttyProbeRgbaId, kttyProbeZlibId, kttyProbePngId}),
         );
+        expect(vt.imageRegistry.allPlacements, isEmpty);
+        expect(vt.imageRegistry.lookupAnimation(kttyProbeAnimId), isNull);
 
         await replies.close();
         vt.dispose();
@@ -406,7 +663,7 @@ void main() {
         expect(initialScreen, contains('Scheme:dark'));
         expect(initialScreen, contains('Ptr:default'));
         expect(initialScreen, contains('KTTY PROBE'));
-        expect(initialScreen, contains('26/26 PASS'));
+        expect(initialScreen, contains('33/33 PASS'));
 
         // Verify U+10EEEE Kitty placeholder cells, SGR 58 underline colors, and OSC 8 URIs
         // all made it across the VirtualTerminal -> TerminalView wire!
@@ -458,7 +715,7 @@ void main() {
         final finalReport = await probeFuture.timeout(
           const Duration(seconds: 3),
         );
-        expect(finalReport.coreSupportedCount, equals(26));
+        expect(finalReport.coreSupportedCount, equals(33));
         expect(finalReport.hasOsc99Ack, isTrue);
         expect(
           finalReport.lastOsc99Ack,
@@ -595,8 +852,8 @@ void main() {
           timeout: const Duration(milliseconds: 25),
         );
         expect(timedOut.isComplete, isTrue);
-        expect(timedOut.coreUnsupportedCount, equals(26));
-        expect(timedOut.optionalDisabledCount, equals(2));
+        expect(timedOut.coreUnsupportedCount, equals(33));
+        expect(timedOut.optionalDisabledCount, equals(5));
         expect(timedOut['da1']?.detail, equals('Timed out waiting for DA1'));
 
         final stopHandle = KttyProbeStopHandle();
@@ -615,8 +872,10 @@ void main() {
 
   group('bin/ktty_probe.dart CLI flags', () {
     Future<({int exitCode, String stdout, String stderr})> runCli(
-      List<String> args,
-    ) async {
+      List<String> args, {
+      Map<String, String>? environment,
+      Future<KttyProbeReport> Function(KttyProbeOptions options)? probeOverride,
+    }) async {
       final out = StringBuffer();
       final err = StringBuffer();
       final code = await ktty_cli.runKttyProbeCli(
@@ -625,6 +884,8 @@ void main() {
         stderrSink: err,
         stdinHasTerminal: false,
         stdoutSupportsAnsi: false,
+        environment: environment,
+        probeOverride: probeOverride,
       );
       return (exitCode: code, stdout: out.toString(), stderr: err.toString());
     }
@@ -633,6 +894,8 @@ void main() {
       final result = await runCli(const ['--help']);
       expect(result.exitCode, equals(0));
       expect(result.stdout, contains('--strict'));
+      expect(result.stdout, contains('--diagnose'));
+      expect(result.stdout, contains('--compare'));
       expect(result.stdout, contains('--tmux-passthrough'));
       expect(result.stdout, isNot(contains('--local-media')));
     });
@@ -656,7 +919,7 @@ void main() {
     );
 
     test(
-      '--self-test --json --strict automatically probes t=t without unlinking and cleans up',
+      '--self-test --json --strict automatically probes t=t and t=f without unlinking and cleans up',
       () async {
         final result = await runCli(const [
           '--self-test',
@@ -666,12 +929,14 @@ void main() {
         expect(result.exitCode, equals(0), reason: result.stderr);
         expect(result.stderr, isNot(contains('unexpectedly unlinked')));
         final decoded = jsonDecode(result.stdout) as Map<String, Object?>;
-        expect(decoded['coreSupported'], equals(26));
+        expect(decoded['coreSupported'], equals(33));
         expect(decoded['coreUnsupported'], equals(0));
         final caps = (decoded['capabilities'] as List<Object?>)
             .cast<Map<String, Object?>>();
         final tempCap = caps.firstWhere((c) => c['id'] == 'apc_temp_file');
+        final fileCap = caps.firstWhere((c) => c['id'] == 'apc_file_medium');
         expect(tempCap['status'], equals('supported'));
+        expect(fileCap['status'], equals('supported'));
         if (Platform.isWindows) {
           final shmCap = caps.firstWhere((c) => c['id'] == 'apc_shm');
           expect(shmCap['status'], equals('optionalDisabled'));
@@ -688,6 +953,132 @@ void main() {
       ]);
       expect(result.exitCode, equals(0), reason: result.stderr);
     });
+
+    test(
+      '--self-test --diagnose appends doctor block in plain and JSON modes',
+      () async {
+        final plain = await runCli(
+          const ['--self-test', '--strict', '--diagnose'],
+          environment: const {'TERM': 'xterm-kitty', 'COLORTERM': 'truecolor'},
+        );
+        expect(plain.exitCode, equals(0), reason: plain.stderr);
+        expect(plain.stdout, contains('KTTY Doctor / Environment Diagnostics'));
+        expect(plain.stdout, contains('TERM         : xterm-kitty'));
+        expect(plain.stdout, contains('XTGETTCAP    : RGB'));
+
+        final jsonRes = await runCli(
+          const ['--self-test', '--json', '--diagnose'],
+          environment: const {'TERM': 'dumb'},
+        );
+        expect(jsonRes.exitCode, equals(0), reason: jsonRes.stderr);
+        final decoded = jsonDecode(jsonRes.stdout) as Map<String, Object?>;
+        final diag = decoded['diagnostics'] as Map<String, Object?>;
+        expect(diag['term'], equals('dumb'));
+        expect((diag['hints'] as List<Object?>), isNotEmpty);
+      },
+    );
+
+    test(
+      '--compare exits 0 when unchanged, 1 on PASS -> MISS regression, and 64 on missing baseline',
+      () async {
+        final tempDir = Directory.systemTemp.createTempSync(
+          'ktty-compare-test-',
+        );
+        addTearDown(() => tempDir.deleteSync(recursive: true));
+        final baselineFile = File('${tempDir.path}/baseline.json');
+
+        final baseRes = await runCli(const ['--self-test', '--json']);
+        expect(baseRes.exitCode, equals(0));
+        baselineFile.writeAsStringSync(baseRes.stdout);
+
+        final passRes = await runCli([
+          '--self-test',
+          '--compare',
+          baselineFile.path,
+        ]);
+        expect(passRes.exitCode, equals(0), reason: passRes.stderr);
+        expect(passRes.stdout, contains('0 regressions'));
+
+        final regressedReport = KttyProbeReport()
+          ..resetForNewProbe()
+          ..recordDa1Sentinel('62;22');
+        final failRes = await runCli([
+          '--report',
+          '--compare',
+          baselineFile.path,
+          '--json',
+        ], probeOverride: (_) async => regressedReport);
+        expect(failRes.exitCode, equals(1));
+        final failJson = jsonDecode(failRes.stdout) as Map<String, Object?>;
+        final comparison = failJson['comparison'] as Map<String, Object?>;
+        expect(comparison['hasRegressions'], isTrue);
+        expect(
+          (comparison['regressions'] as List<Object?>),
+          contains('osc_66_sizing'),
+        );
+
+        final missingRes = await runCli([
+          '--self-test',
+          '--compare',
+          '${tempDir.path}/does_not_exist.json',
+        ]);
+        expect(missingRes.exitCode, equals(64));
+        expect(missingRes.stderr, contains('Baseline file not found'));
+
+        // Optional capability regression (supported -> optionalDisabled) also exits 1.
+        final localMediaBase = await runCli(const [
+          '--self-test',
+          '--local-media',
+          '--json',
+        ]);
+        expect(localMediaBase.exitCode, equals(0));
+        final optBaseFile = File('${tempDir.path}/opt_baseline.json')
+          ..writeAsStringSync(localMediaBase.stdout);
+        final optRegress = await runCli([
+          '--self-test',
+          '--compare',
+          optBaseFile.path,
+          '--json',
+        ]);
+        expect(optRegress.exitCode, equals(1));
+        final optRegressJson =
+            jsonDecode(optRegress.stdout) as Map<String, Object?>;
+        final optComp = optRegressJson['comparison'] as Map<String, Object?>;
+        expect(
+          (optComp['regressions'] as List<Object?>),
+          contains('apc_file_medium'),
+        );
+
+        // Malformed JSON and missing "capabilities" exit 64.
+        final brokenFile = File('${tempDir.path}/broken.json')
+          ..writeAsStringSync('{broken');
+        final brokenRes = await runCli([
+          '--self-test',
+          '--compare',
+          brokenFile.path,
+        ]);
+        expect(brokenRes.exitCode, equals(64));
+
+        final missingCapsFile = File('${tempDir.path}/no_caps.json')
+          ..writeAsStringSync('{"coreSupported": 33}');
+        final noCapsRes = await runCli([
+          '--self-test',
+          '--compare',
+          missingCapsFile.path,
+        ]);
+        expect(noCapsRes.exitCode, equals(64));
+        expect(noCapsRes.stderr, contains('capabilities'));
+
+        // --compare and --diagnose require --report or --self-test.
+        final compareNoMode = await runCli(['--compare', baselineFile.path]);
+        expect(compareNoMode.exitCode, equals(64));
+        expect(compareNoMode.stderr, contains('--report or --self-test'));
+
+        final diagnoseNoMode = await runCli(const ['--diagnose']);
+        expect(diagnoseNoMode.exitCode, equals(64));
+        expect(diagnoseNoMode.stderr, contains('--report or --self-test'));
+      },
+    );
 
     test('--report without a TTY on stdin exits 2', () async {
       final result = await runCli(const ['--report']);
