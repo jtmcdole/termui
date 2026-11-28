@@ -517,5 +517,50 @@ void main() {
         expect(renderer.frontBuffer.hasTextSizing, isFalse);
       },
     );
+
+    test(
+      'uncovering an overlaid OSC 66 continuation cell re-emits its owning anchor and preserves sibling overlays (PR #501 H1)',
+      () {
+        final renderer = Renderer(4, 2);
+        final frame1 = Buffer.blank(4, 2);
+        _writeOsc66Box(frame1, 0, 0, 'H', scale: 2);
+        final out1 = StringBuffer();
+        renderer.render(frame1, out1);
+        expect(out1.toString(), contains('\x1b]66;s=2;H\x1b\\'));
+
+        // Frame 2: floating overlay overwrites continuation cells (1, 0) and (0, 1)
+        // while leaving the anchor (0, 0) untouched.
+        final frame2 = Buffer.blank(4, 2);
+        _writeOsc66Box(frame2, 0, 0, 'H', scale: 2);
+        frame2
+          ..setCell(1, 0, 'X', 0, 0, Modifier.none, blend: false)
+          ..setTextSizing(1, 0, KittyTextSizing.none)
+          ..setCell(0, 1, 'Y', 0, 0, Modifier.none, blend: false)
+          ..setTextSizing(0, 1, KittyTextSizing.none);
+        final out2 = StringBuffer();
+        renderer.render(frame2, out2);
+        expect(out2.toString(), contains('X'));
+        expect(out2.toString(), contains('Y'));
+
+        // Frame 3: overlay at (0, 1) closes while sibling overlay 'X' remains at (1, 0).
+        // Anchor (0, 0) MUST re-emit OSC 66 to clear stale 'Y', and 'X' MUST repaint on top.
+        final frame3 = Buffer.blank(4, 2);
+        _writeOsc66Box(frame3, 0, 0, 'H', scale: 2);
+        frame3
+          ..setCell(1, 0, 'X', 0, 0, Modifier.none, blend: false)
+          ..setTextSizing(1, 0, KittyTextSizing.none);
+        final out3 = StringBuffer();
+        renderer.render(frame3, out3);
+        expect(out3.toString(), contains('\x1b[1;1H\x1b]66;s=2;H\x1b\\'));
+        expect(out3.toString(), contains('\x1b[1;2HX'));
+
+        // Frame 4: final overlay 'X' closes -> re-emits anchor cleanly.
+        final frame4 = Buffer.blank(4, 2);
+        _writeOsc66Box(frame4, 0, 0, 'H', scale: 2);
+        final out4 = StringBuffer();
+        renderer.render(frame4, out4);
+        expect(out4.toString(), contains('\x1b[1;1H\x1b]66;s=2;H\x1b\\'));
+      },
+    );
   });
 }
