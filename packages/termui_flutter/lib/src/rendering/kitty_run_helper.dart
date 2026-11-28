@@ -126,19 +126,22 @@ KittySourceUv resolveKittySourceUv({
   );
 }
 
-/// Resolves logical sub-cell `(dx, dy)` pixel offsets from [placement]'s `X`/`Y`
-/// fields, clamped cleanly within `[0.0, cellWidth]` x `[0.0, cellHeight]`.
+/// Resolves logical sub-cell `(dx, dy)` pixel offsets from [placement]'s
+/// physical `X`/`Y` fields, dividing by [devicePixelRatio] and clamping cleanly
+/// within `[0.0, cellWidth]` x `[0.0, cellHeight]`.
 ({double dx, double dy}) resolveKittyCellOffset({
   required KittyPlacement? placement,
   required double cellWidth,
   required double cellHeight,
+  double devicePixelRatio = 1.0,
 }) {
   if (placement == null) return (dx: 0.0, dy: 0.0);
+  final scale = devicePixelRatio > 0.0 ? devicePixelRatio : 1.0;
   final maxDx = math.max(0.0, cellWidth);
   final maxDy = math.max(0.0, cellHeight);
   return (
-    dx: placement.cellOffsetX.toDouble().clamp(0.0, maxDx),
-    dy: placement.cellOffsetY.toDouble().clamp(0.0, maxDy),
+    dx: (placement.cellOffsetX / scale).clamp(0.0, maxDx),
+    dy: (placement.cellOffsetY / scale).clamp(0.0, maxDy),
   );
 }
 
@@ -172,6 +175,7 @@ LayeredDirectKittyPlacements collectLayeredDirectKittyPlacements(
   Buffer buffer, {
   required double cellWidth,
   required double cellHeight,
+  double devicePixelRatio = 1.0,
 }) {
   if (buffer.width <= 0 ||
       buffer.height <= 0 ||
@@ -193,6 +197,7 @@ LayeredDirectKittyPlacements collectLayeredDirectKittyPlacements(
       registry: source.registry,
       cellWidth: cellWidth,
       cellHeight: cellHeight,
+      devicePixelRatio: devicePixelRatio,
       underBg: underBg,
       bg: bg,
       fg: fg,
@@ -234,6 +239,7 @@ void _appendSourcePlacements({
   required KittyImageRegistry registry,
   required double cellWidth,
   required double cellHeight,
+  required double devicePixelRatio,
   required List<ResolvedKittyDirectPlacement> underBg,
   required List<ResolvedKittyDirectPlacement> bg,
   required List<ResolvedKittyDirectPlacement> fg,
@@ -260,6 +266,7 @@ void _appendSourcePlacements({
       bufRow: bounds.y + anchor.row + scrollShift,
       cellWidth: cellWidth,
       cellHeight: cellHeight,
+      devicePixelRatio: devicePixelRatio,
       out: target,
     );
   }
@@ -326,12 +333,14 @@ void _emitClippedVisiblePlacementQuads({
   required int bufRow,
   required double cellWidth,
   required double cellHeight,
+  required double devicePixelRatio,
   required List<ResolvedKittyDirectPlacement> out,
 }) {
   final offset = resolveKittyCellOffset(
     placement: placement,
     cellWidth: cellWidth,
     cellHeight: cellHeight,
+    devicePixelRatio: devicePixelRatio,
   );
   final fullLeft = bufCol * cellWidth + offset.dx;
   final fullTop = bufRow * cellHeight + offset.dy;
