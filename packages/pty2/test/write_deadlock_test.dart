@@ -3,10 +3,12 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:ffi/ffi.dart';
 import 'package:pty2/pty2.dart';
 import 'package:pty2/src/pty_core.dart';
 import 'package:test/test.dart';
@@ -16,12 +18,19 @@ final class _FakePtyCore implements PtyCore {
 
   final PtyCoreWorker _worker;
   final PtyCoreWriter _writer;
+  bool _writerTaken = false;
 
   @override
   PtyCoreWorker get worker => _worker;
 
   @override
-  PtyCoreWriter get writer => _writer;
+  PtyCoreWriter takeWriter() {
+    if (_writerTaken) {
+      throw StateError('PTY writer ownership has already been transferred.');
+    }
+    _writerTaken = true;
+    return _writer;
+  }
 
   @override
   Uint8List? read() => null;
@@ -51,13 +60,29 @@ final class _FakePtyCore implements PtyCore {
 }
 
 final class _FakeWorker implements PtyCoreWorker {
-  const _FakeWorker();
+  const _FakeWorker({this.stopFlagAddress = 0});
+
+  final int stopFlagAddress;
+
+  void _waitUntilStopped() {
+    if (stopFlagAddress == 0) return;
+    final ptr = Pointer<Int32>.fromAddress(stopFlagAddress);
+    while (ptr.value == 0) {
+      sleep(const Duration(milliseconds: 1));
+    }
+  }
 
   @override
-  Uint8List? read() => null;
+  Uint8List? read() {
+    _waitUntilStopped();
+    return null;
+  }
 
   @override
-  int exitCodeBlocking() => 0;
+  int exitCodeBlocking() {
+    _waitUntilStopped();
+    return 0;
+  }
 
   @override
   void free() {}
@@ -71,13 +96,13 @@ final class _FakeWriter implements PtyCoreWriter {
   int _writeCount = 0;
 
   @override
-  bool write(Uint8List data) {
+  PtyWriteStatus write(Uint8List data) {
     _writeCount++;
     eventsPort.send('write:${utf8.decode(data)}');
     if (failAfterWrites >= 0 && _writeCount >= failAfterWrites) {
-      return false;
+      return PtyWriteStatus.closed;
     }
-    return true;
+    return PtyWriteStatus.written;
   }
 
   @override
@@ -430,9 +455,15 @@ Future<void> main() async {
         });
         addTearDown(sub.cancel);
 
+        final stopFlag = calloc<Int32>();
+        addTearDown(() {
+          stopFlag.value = 1;
+          calloc.free(stopFlag);
+        });
+
         final pty = BlockingPseudoTerminal(
           _FakePtyCore(
-            const _FakeWorker(),
+            _FakeWorker(stopFlagAddress: stopFlag.address),
             _FakeWriter(eventsPort.sendPort, failAfterWrites: 2),
           ),
           false,
@@ -445,7 +476,9 @@ Future<void> main() async {
           ..write('third-dropped-after-fail');
 
         await freed.future.timeout(const Duration(seconds: 5));
+        stopFlag.value = 1;
         await pty.exitCode.timeout(const Duration(seconds: 5));
+        await pty.out.drain<void>().timeout(const Duration(seconds: 5));
 
         expect(events, equals(['write:first-🚀', 'write:second-世界', 'free']));
       },
@@ -482,6 +515,34 @@ Future<void> main() async {
         await pty.exitCode.timeout(const Duration(seconds: 5));
 
         expect(events, equals(['free']));
+      },
+    );
+
+    test(
+      'init() rejects re-entrant calls and ClosedPtyCoreWriter returns closed',
+      () async {
+        final eventsPort = ReceivePort();
+        addTearDown(eventsPort.close);
+
+        final freed = Completer<void>();
+        final sub = eventsPort.listen((msg) {
+          if (msg == 'free' && !freed.isCompleted) freed.complete();
+        });
+        addTearDown(sub.cancel);
+
+        final pty = BlockingPseudoTerminal(
+          _FakePtyCore(const _FakeWorker(), _FakeWriter(eventsPort.sendPort)),
+          false,
+        )..init();
+
+        expect(pty.init, throwsStateError);
+        pty.kill();
+        await freed.future.timeout(const Duration(seconds: 5));
+        await pty.exitCode.timeout(const Duration(seconds: 5));
+
+        const closed = ClosedPtyCoreWriter();
+        expect(closed.write(Uint8List(0)), equals(PtyWriteStatus.closed));
+        closed.free();
       },
     );
   });
