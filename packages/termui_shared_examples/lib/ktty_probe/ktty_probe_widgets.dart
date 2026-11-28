@@ -422,6 +422,10 @@ final class _KttyAnimatedTileElement extends Element {
   int _cachedRows = -1;
   int _cachedMsb = -1;
   int? _registeredImageId;
+  int _registeredCols = -1;
+  int _registeredRows = -1;
+  int _registeredGapMs = -1;
+  List<KittyImageData>? _registeredFrames;
 
   _KttyAnimatedTileElement(KttyAnimatedTileWidget super.widget);
 
@@ -431,6 +435,7 @@ final class _KttyAnimatedTileElement extends Element {
     if (id != null) {
       KittyImageRegistry.global.unregisterImage(id);
       _registeredImageId = null;
+      _registeredFrames = null;
     }
     super.unmount();
   }
@@ -463,6 +468,17 @@ final class _KttyAnimatedTileElement extends Element {
     return cells;
   }
 
+  static bool _sameFrameReferences(
+    List<KittyImageData>? previous,
+    List<KittyImageData> next,
+  ) {
+    if (previous == null || previous.length != next.length) return false;
+    for (var i = 0; i < next.length; i++) {
+      if (!identical(previous[i], next[i])) return false;
+    }
+    return true;
+  }
+
   void _ensureAnimationRegistered(
     List<KittyImageData> frames,
     int validId,
@@ -470,6 +486,21 @@ final class _KttyAnimatedTileElement extends Element {
     int rows,
     int gapMs,
   ) {
+    final prevId = _registeredImageId;
+    if (prevId != null && prevId != validId) {
+      KittyImageRegistry.global.unregisterImage(prevId);
+    }
+    final existing = KittyImageRegistry.global.lookupAnimation(validId);
+    if (prevId == validId &&
+        _registeredCols == cols &&
+        _registeredRows == rows &&
+        _registeredGapMs == gapMs &&
+        _sameFrameReferences(_registeredFrames, frames) &&
+        existing != null &&
+        existing.frames.length == frames.length) {
+      return;
+    }
+
     final base = frames.first;
     final sizedBase =
         base.imageId == validId &&
@@ -477,12 +508,9 @@ final class _KttyAnimatedTileElement extends Element {
             base.gridRows == rows
         ? base
         : base.copyWith(imageId: validId, gridCols: cols, gridRows: rows);
+    KittyImageRegistry.global.unregisterImage(validId);
     KittyImageRegistry.register(sizedBase);
 
-    final existing = KittyImageRegistry.global.lookupAnimation(validId);
-    if (existing != null && existing.frames.length >= frames.length) {
-      return;
-    }
     for (var i = 0; i < frames.length; i++) {
       final f = frames[i];
       final sized =
@@ -499,6 +527,11 @@ final class _KttyAnimatedTileElement extends Element {
       playback: KittyAnimationPlayback.running,
       loopCount: 0,
     );
+    _registeredImageId = validId;
+    _registeredCols = cols;
+    _registeredRows = rows;
+    _registeredGapMs = gapMs;
+    _registeredFrames = List<KittyImageData>.of(frames, growable: false);
   }
 
   @override
@@ -512,7 +545,6 @@ final class _KttyAnimatedTileElement extends Element {
     final rawId = w.frames.first.imageId & 0xFFFFFFFF;
     final validId = rawId == 0 ? kttyVisualAnimatedImageId : rawId;
     final msb = (validId >>> 24) & 0xFF;
-    _registeredImageId = validId;
     _ensureAnimationRegistered(w.frames, validId, cols, rows, w.frameGapMs);
     buffer.registerKittyRegistry(
       Rect(offset.dx, offset.dy, cols, rows),

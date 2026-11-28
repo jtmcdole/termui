@@ -40,12 +40,20 @@ final class KttyProbeOptions {
   /// Optional local regular RGBA file path for probing Kitty `a=q,t=f`.
   final String? fileProbeFilePath;
 
+  /// Whether to emit the destructive `OSC 5522` clipboard write probe.
+  ///
+  /// Defaults to `false` so live interactive and `--report` runs never
+  /// overwrite the user's system clipboard unless opted in (or running inside
+  /// headless `--self-test`).
+  final bool probeClipboardWrite;
+
   /// Creates [KttyProbeOptions].
   const KttyProbeOptions({
     this.wrapTmuxPassthrough = false,
     this.tempProbeFilePath,
     this.shmProbeName,
     this.fileProbeFilePath,
+    this.probeClipboardWrite = false,
   });
 }
 
@@ -458,34 +466,46 @@ final class KttyProbeReport {
       entry.detail = 'Probing...';
     }
     if (options != null) {
-      if (options.tempProbeFilePath == null ||
-          options.tempProbeFilePath!.isEmpty) {
-        _updateEntry(
-          'apc_temp_file',
-          .optionalDisabled,
-          'Unavailable on this platform',
-          notify: false,
-        );
-      }
-      if (options.shmProbeName == null || options.shmProbeName!.isEmpty) {
-        _updateEntry(
-          'apc_shm',
-          .optionalDisabled,
-          'Unavailable on this platform',
-          notify: false,
-        );
-      }
-      if (options.fileProbeFilePath == null ||
-          options.fileProbeFilePath!.isEmpty) {
-        _updateEntry(
-          'apc_file_medium',
-          .optionalDisabled,
-          'Unavailable on this platform',
-          notify: false,
-        );
-      }
+      _markUnavailableOptionals(options);
     }
     _notify();
+  }
+
+  void _markUnavailableOptionals(KttyProbeOptions options) {
+    if (options.tempProbeFilePath == null ||
+        options.tempProbeFilePath!.isEmpty) {
+      _updateEntry(
+        'apc_temp_file',
+        .optionalDisabled,
+        'Unavailable on this platform',
+        notify: false,
+      );
+    }
+    if (options.shmProbeName == null || options.shmProbeName!.isEmpty) {
+      _updateEntry(
+        'apc_shm',
+        .optionalDisabled,
+        'Unavailable on this platform',
+        notify: false,
+      );
+    }
+    if (options.fileProbeFilePath == null ||
+        options.fileProbeFilePath!.isEmpty) {
+      _updateEntry(
+        'apc_file_medium',
+        .optionalDisabled,
+        'Unavailable on this platform',
+        notify: false,
+      );
+    }
+    if (!options.probeClipboardWrite) {
+      _updateEntry(
+        'osc_5522_clip',
+        .optionalDisabled,
+        'Opt-in (--probe-clipboard or --self-test)',
+        notify: false,
+      );
+    }
   }
 
   static final RegExp _controlCharsRegex = RegExp(r'[\x00-\x1F\x7F-\x9F]');
@@ -528,11 +548,15 @@ final class KttyProbeReport {
       // OSC 66 text sizing cursor-advance probe (CSI 6 n delta == +2)
       ..write('\x1b7\r\x1b[6n\x1b]66;w=2; \x1b\\\x1b[6n\r  \r\x1b8')
       ..write('\x1b]22;?pointer,text,ktty-invalid\x1b\\')
-      ..write('\x1b]99;i=ktty-probe:p=?;\x1b\\')
+      ..write('\x1b]99;i=ktty-probe:p=?;\x1b\\');
+    if (options.probeClipboardWrite) {
       // OSC 5522 clipboard write probe (upstream Kitty 3-packet format with base64 mime=text/plain)
-      ..write('\x1b]5522;type=write:id=$kttyProbeOsc5522Id;\x1b\\')
-      ..write('\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;a3R0eQ==\x1b\\')
-      ..write('\x1b]5522;type=wdata;\x1b\\')
+      sb
+        ..write('\x1b]5522;type=write:id=$kttyProbeOsc5522Id;\x1b\\')
+        ..write('\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;a3R0eQ==\x1b\\')
+        ..write('\x1b]5522;type=wdata;\x1b\\');
+    }
+    sb
       ..write('\x1b[?2026\$p')
       ..write('\x1b[?1016\$p')
       ..write('\x1b[?2027\$p')
@@ -618,10 +642,19 @@ final class KttyProbeReport {
     } else {
       _animControlOkCount++;
     }
-    final summary = _animFrameOk && _animControlOkCount >= 2
-        ? 'OK (i=$kttyProbeAnimId, a=f/a/c)'
-        : _formatApcOkDetail(kttyProbeAnimId, frameNumber: frameNumber);
-    _updateEntry('apc_animation', .supported, summary);
+    if (_animFrameOk && _animControlOkCount >= 2) {
+      _updateEntry(
+        'apc_animation',
+        .supported,
+        'OK (i=$kttyProbeAnimId, a=f/a/c)',
+      );
+    } else {
+      _updateEntry(
+        'apc_animation',
+        .pending,
+        _formatApcOkDetail(kttyProbeAnimId, frameNumber: frameNumber),
+      );
+    }
   }
 
   /// Records a Kitty Graphics `APC` reply (`ESC _ G i=<id>,I=<num>,p=<pid>,r=<frame>;<status> ESC \`).

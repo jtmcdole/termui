@@ -432,6 +432,54 @@ void main() {
     );
 
     test(
+      'PR #504 L1: KttyAnimatedTileWidget updates frames on resize/rebuild and unregisters old imageId on ID change',
+      () {
+        KittyImageRegistry.global.clearImages();
+        final framesA = buildAnimatedVisualTileFrames(
+          cols: 8,
+          rows: 4,
+        ).map((f) => f.copyWith(imageId: 0x004B15)).toList();
+        final framesB = buildAnimatedVisualTileFrames(
+          cols: 12,
+          rows: 6,
+        ).map((f) => f.copyWith(imageId: 0x004B16)).toList();
+        final w1 = KttyAnimatedTileWidget(frames: framesA, frameGapMs: 120);
+        final el = w1.createElement()
+          ..mount(null)
+          ..layout(BoxConstraints.tight(const Size(8, 4)));
+        el.paint(Buffer(16, 8), Offset.zero);
+        expect(
+          KittyImageRegistry.global
+              .lookupAnimation(0x004B15)!
+              .frames
+              .first
+              .gapMs,
+          equals(120),
+        );
+
+        // Resize & change gapMs on same ID -> frames must update to new geometry & gap.
+        el.update(KttyAnimatedTileWidget(frames: framesA, frameGapMs: 300));
+        el.layout(BoxConstraints.tight(const Size(12, 6)));
+        el.paint(Buffer(16, 8), Offset.zero);
+        final resizedAnim = KittyImageRegistry.global.lookupAnimation(
+          0x004B15,
+        )!;
+        expect(resizedAnim.frames[1].imageData.gridCols, equals(12));
+        expect(resizedAnim.frames[1].gapMs, equals(300));
+
+        // Change imageId -> old ID 0x004B15 must be unregistered so it doesn't leak.
+        el.update(KttyAnimatedTileWidget(frames: framesB, frameGapMs: 200));
+        el.layout(BoxConstraints.tight(const Size(12, 6)));
+        el.paint(Buffer(16, 8), Offset.zero);
+        expect(KittyImageRegistry.global.lookupAnimation(0x004B15), isNull);
+        expect(KittyImageRegistry.global.lookupAnimation(0x004B16), isNotNull);
+
+        el.unmount();
+        expect(KittyImageRegistry.global.hasRunningAnimations, isFalse);
+      },
+    );
+
+    test(
       'KttyOsc22CursorSwatch renders all 5 pointer shapes and triggers hover callbacks',
       () {
         final observed = <String?>[];
