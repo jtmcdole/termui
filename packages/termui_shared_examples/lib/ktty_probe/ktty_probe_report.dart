@@ -1,3 +1,5 @@
+import 'package:characters/characters.dart';
+
 import 'ktty_probe_assets.dart';
 
 /// Support state for an individual terminal capability probe.
@@ -35,11 +37,15 @@ final class KttyProbeOptions {
   /// Optional POSIX shared-memory object name for probing Kitty `a=q,t=s`.
   final String? shmProbeName;
 
+  /// Optional local regular RGBA file path for probing Kitty `a=q,t=f`.
+  final String? fileProbeFilePath;
+
   /// Creates [KttyProbeOptions].
   const KttyProbeOptions({
     this.wrapTmuxPassthrough = false,
     this.tempProbeFilePath,
     this.shmProbeName,
+    this.fileProbeFilePath,
   });
 }
 
@@ -72,6 +78,77 @@ final class KttyMultiplexerDiagnostics {
     'hasTrueColor': hasTrueColor,
     'hints': hints,
   };
+}
+
+/// Comparison result produced by [KttyProbeReport.diffAgainstBaseline].
+final class KttyProbeDiff {
+  /// Capability IDs that regressed from `supported` (`PASS`) to `unsupported` (`MISS`).
+  final List<String> regressions;
+
+  /// Capability IDs that improved from non-`supported` to `supported` (`PASS`).
+  final List<String> improvements;
+
+  /// Capability IDs whose status did not change relative to the baseline.
+  final List<String> unchanged;
+
+  /// Capability IDs present in the current report but absent from the baseline.
+  final List<String> added;
+
+  /// Capability IDs present in the baseline but absent from the current report.
+  final List<String> removed;
+
+  /// Creates a [KttyProbeDiff].
+  const KttyProbeDiff({
+    required this.regressions,
+    required this.improvements,
+    required this.unchanged,
+    this.added = const [],
+    this.removed = const [],
+  });
+
+  /// Whether any capability regressed (`PASS -> MISS`).
+  bool get hasRegressions => regressions.isNotEmpty;
+
+  /// Count of capabilities whose status matched the baseline.
+  int get unchangedCount => unchanged.length;
+
+  /// Serializes this diff to a JSON-compatible map.
+  Map<String, Object?> toJsonMap() => {
+    'hasRegressions': hasRegressions,
+    'regressions': regressions,
+    'improvements': improvements,
+    'unchangedCount': unchangedCount,
+    'added': added,
+    'removed': removed,
+  };
+
+  /// Formats a human-readable baseline comparison summary.
+  String formatPlainSummary({bool ansiColor = true}) {
+    final reset = ansiColor ? '\x1b[0m' : '';
+    final red = ansiColor ? '\x1b[31m' : '';
+    final green = ansiColor ? '\x1b[32m' : '';
+    final cyan = ansiColor ? '\x1b[36m' : '';
+    final sb = StringBuffer()
+      ..writeln(
+        '${cyan}Baseline Comparison:$reset '
+        '${regressions.length} regressions, '
+        '${improvements.length} improvements, '
+        '$unchangedCount unchanged',
+      );
+    for (final id in regressions) {
+      sb.writeln('  ${red}REGRESSION (PASS -> MISS):$reset $id');
+    }
+    for (final id in improvements) {
+      sb.writeln('  ${green}IMPROVED (-> PASS):$reset $id');
+    }
+    if (added.isNotEmpty) {
+      sb.writeln('  Added probes (${added.length}): ${added.join(', ')}');
+    }
+    if (removed.isNotEmpty) {
+      sb.writeln('  Removed probes (${removed.length}): ${removed.join(', ')}');
+    }
+    return sb.toString();
+  }
 }
 
 /// Lifecycle handle for local temp-file (`t=t`) and shared-memory (`t=s`) probe
@@ -166,6 +243,17 @@ final class KttyCapabilityEntry {
 final class KttyProbeReport {
   final Map<String, KttyCapabilityEntry> _entries = {};
   final List<void Function()> _listeners = [];
+  final Map<String, String> _xtgettcapCapabilities = {};
+  final Set<String> _xtgettcapUnsupported = {};
+  final List<String> _decrqssReplies = [];
+
+  (int row, int col)? _cprBeforeOsc66;
+  int _colorStackSampleCount = 0;
+  String? _colorStackBaselineHex;
+  bool _colorStackOverrideSeen = false;
+  bool _animFrameOk = false;
+  int _animControlOkCount = 0;
+  String? _animError;
 
   /// Number of probe passes initiated in this session.
   int probeRunCount = 0;
@@ -218,13 +306,14 @@ final class KttyProbeReport {
   /// Whether at least one `OSC 99` reply has arrived during the active session.
   bool hasOsc99Ack = false;
 
-  /// Creates a [KttyProbeReport] initialized with all 28 standard KTTY probe entries.
+  /// Creates a [KttyProbeReport] initialized with all 38 KTTY probe entries
+  /// (33 core + 5 optional).
   KttyProbeReport() {
     _initEntries();
   }
 
   void _initEntries() {
-    final specs = <(String, String, String, KttyCapabilityTier)>[
+    const specs = <(String, String, String, KttyCapabilityTier)>[
       ('apc_query', 'Kitty Graphics Query', 'APC a=q', .core),
       ('apc_rgba', 'Kitty Graphics RGBA32', 'APC f=32', .core),
       ('apc_zlib', 'Kitty Graphics Zlib', 'APC o=z', .core),
@@ -232,14 +321,24 @@ final class KttyProbeReport {
       ('apc_chunked', 'Kitty Graphics Chunked', 'APC m=1/0', .core),
       ('apc_place_persist', 'Kitty Place Persistence', 'APC d=a/a=p', .core),
       ('apc_image_num', 'Kitty Image Number', 'APC I=', .core),
+      ('apc_crop_layer', 'Kitty Crop & Z-Layer', 'APC x,y,z=-1', .core),
+      ('apc_animation', 'Kitty Animation Frames', 'APC a=f/a/c', .core),
       ('apc_temp_file', 'Kitty Temp File Medium', 'APC t=t', .optional),
       ('apc_shm', 'Kitty Shared Memory', 'APC t=s', .optional),
+      ('apc_file_medium', 'Kitty File Medium', 'APC t=f', .optional),
+      ('termui_shader_apc', 'TermUI Shader APC', 'APC S query', .optional),
+      ('termui_audio_apc', 'TermUI Audio APC', 'APC A wave', .optional),
       ('kitty_kb', 'Kitty Keyboard Protocol', 'CSI ? u', .core),
       ('xtversion', 'Terminal Identity', 'XTVERSION', .core),
+      ('xtgettcap', 'Terminfo Capabilities', 'DCS +q', .core),
+      ('decrqss', 'Status String Query', r'DCS $q', .core),
       ('osc10', 'Default Foreground', 'OSC 10;?', .core),
       ('osc11', 'Default Background', 'OSC 11;?', .core),
+      ('osc_30001_colors', 'Color Stack Push/Pop', 'OSC 30001', .core),
+      ('osc_66_sizing', 'Kitty Text Sizing', 'OSC 66 + CPR', .core),
       ('osc_22_pointer', 'Mouse Pointer Shapes', 'OSC 22;?', .core),
       ('osc_99_query', 'Notification Query', 'OSC 99;p=?', .core),
+      ('osc_5522_clip', 'Kitty Clipboard Write', 'OSC 5522', .core),
       ('decrqm_2026', 'Synchronized Output', 'DECRQM ?2026', .core),
       ('decrqm_1016', 'SGR-Pixels Mouse', 'DECRQM ?1016', .core),
       ('decrqm_2027', 'Grapheme Clustering', 'DECRQM ?2027', .core),
@@ -267,6 +366,19 @@ final class KttyProbeReport {
   /// Ordered list of all capability entries in the report.
   List<KttyCapabilityEntry> get entries =>
       List<KttyCapabilityEntry>.unmodifiable(_entries.values);
+
+  /// Decoded supported `XTGETTCAP` capabilities (`name -> value`).
+  Map<String, String> get xtgettcapCapabilities =>
+      Map<String, String>.unmodifiable(_xtgettcapCapabilities);
+
+  /// Decoded unsupported `XTGETTCAP` capability names (`0+r`).
+  Set<String> get xtgettcapUnsupported =>
+      Set<String>.unmodifiable(_xtgettcapUnsupported);
+
+  /// Whether the active probe pass is awaiting `CSI row;col R` CPR replies for
+  /// `OSC 66` cursor-advance verification.
+  bool get isExpectingCpr =>
+      !isComplete && _entries['osc_66_sizing']?.status == .pending;
 
   /// Looks up a capability entry by [id].
   KttyCapabilityEntry? operator [](String id) => _entries[id];
@@ -331,6 +443,16 @@ final class KttyProbeReport {
     viewportPixelHeight = 0;
     lastOsc99Ack = _defaultOsc99Ack;
     hasOsc99Ack = false;
+    _xtgettcapCapabilities.clear();
+    _xtgettcapUnsupported.clear();
+    _decrqssReplies.clear();
+    _cprBeforeOsc66 = null;
+    _colorStackSampleCount = 0;
+    _colorStackBaselineHex = null;
+    _colorStackOverrideSeen = false;
+    _animFrameOk = false;
+    _animControlOkCount = 0;
+    _animError = null;
     for (final entry in _entries.values) {
       entry.status = .pending;
       entry.detail = 'Probing...';
@@ -362,9 +484,10 @@ final class KttyProbeReport {
 
   static String _sanitizeDetail(String raw) {
     final cleaned = raw.replaceAll(_controlCharsRegex, '').trim();
-    return cleaned.length <= _maxDetailLength
+    final chars = cleaned.characters;
+    return chars.length <= _maxDetailLength
         ? cleaned
-        : '${cleaned.substring(0, _maxDetailLength)}...';
+        : '${chars.take(_maxDetailLength)}...';
   }
 
   /// Builds the wire-protocol query burst ending with the `DA1` (`\x1b[c`) sentinel.
@@ -376,10 +499,31 @@ final class KttyProbeReport {
       ..write(apcCommands)
       ..write('\x1b[?u')
       ..write('\x1b[>0q')
+      // XTGETTCAP: RGB (524742), Smulx (536d756c78), Setulc (536574756c63), Sync (53796e63)
+      ..write('\x1bP+q524742;536d756c78;536574756c63;53796e63\x1b\\')
+      // DECRQSS: active SGR ('m') and cursor shape (' q')
+      ..write('\x1bP\$qm\x1b\\')
+      ..write('\x1bP\$q q\x1b\\')
       ..write('\x1b]10;?\x1b\\')
       ..write('\x1b]11;?\x1b\\')
+      // OSC 30001/30101 color stack push/override/pop verification on palette slot 255
+      ..write('\x1b]4;$kttyProbeColorStackIndex;?\x1b\\')
+      ..write('\x1b]30001\x1b\\')
+      ..write(
+        '\x1b]4;$kttyProbeColorStackIndex;$kttyProbeColorStackSentinelHex\x1b\\',
+      )
+      ..write('\x1b]4;$kttyProbeColorStackIndex;?\x1b\\')
+      ..write('\x1b]30101\x1b\\')
+      ..write('\x1b]4;$kttyProbeColorStackIndex;?\x1b\\')
+      ..write('\x1b]104;$kttyProbeColorStackIndex\x1b\\')
+      // OSC 66 text sizing cursor-advance probe (CSI 6 n delta == +2)
+      ..write('\x1b7\r\x1b[6n\x1b]66;w=2; \x1b\\\x1b[6n\r  \r\x1b8')
       ..write('\x1b]22;?pointer,text,ktty-invalid\x1b\\')
       ..write('\x1b]99;i=ktty-probe:p=?;\x1b\\')
+      // OSC 5522 clipboard write probe (upstream Kitty 3-packet format with base64 mime=text/plain)
+      ..write('\x1b]5522;type=write:id=$kttyProbeOsc5522Id;\x1b\\')
+      ..write('\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;a3R0eQ==\x1b\\')
+      ..write('\x1b]5522;type=wdata;\x1b\\')
       ..write('\x1b[?2026\$p')
       ..write('\x1b[?1016\$p')
       ..write('\x1b[?2027\$p')
@@ -423,8 +567,12 @@ final class KttyProbeReport {
       kttyProbeChunkedId => 'apc_chunked',
       kttyProbePlaceId =>
         placementId == kttyProbePlacementId ? 'apc_place_persist' : null,
+      kttyProbeCropLayerId =>
+        placementId == kttyProbeCropPlacementId ? 'apc_crop_layer' : null,
+      kttyProbeAnimId => 'apc_animation',
       kttyProbeTempId => 'apc_temp_file',
       kttyProbeShmId => 'apc_shm',
+      kttyProbeFileId => 'apc_file_medium',
       _ => null,
     };
   }
@@ -433,6 +581,7 @@ final class KttyProbeReport {
     int imageId, {
     int? imageNumber,
     int? placementId,
+    int? frameNumber,
   }) {
     if (imageNumber != null) {
       return imageId > 0
@@ -440,15 +589,39 @@ final class KttyProbeReport {
           : 'OK (I=$imageNumber)';
     }
     if (placementId != null) return 'OK (i=$imageId,p=$placementId)';
+    if (frameNumber != null) return 'OK (i=$imageId,r=$frameNumber)';
     return 'OK (i=$imageId)';
   }
 
-  /// Records a Kitty Graphics `APC` reply (`ESC _ G i=<id>,I=<num>,p=<pid>;<status> ESC \`).
+  void _recordAnimApcReply({
+    required bool ok,
+    required String detail,
+    int? frameNumber,
+  }) {
+    if (!ok) {
+      _animError = detail;
+      _updateEntry('apc_animation', .unsupported, detail);
+      return;
+    }
+    if (_animError != null) return;
+    if (frameNumber != null) {
+      _animFrameOk = true;
+    } else {
+      _animControlOkCount++;
+    }
+    final summary = _animFrameOk && _animControlOkCount >= 2
+        ? 'OK (i=$kttyProbeAnimId, a=f/a/c)'
+        : _formatApcOkDetail(kttyProbeAnimId, frameNumber: frameNumber);
+    _updateEntry('apc_animation', .supported, summary);
+  }
+
+  /// Records a Kitty Graphics `APC` reply (`ESC _ G i=<id>,I=<num>,p=<pid>,r=<frame>;<status> ESC \`).
   void recordApcReply(
     int imageId,
     String statusMessage, {
     int? imageNumber,
     int? placementId,
+    int? frameNumber,
   }) {
     final trimmed = _sanitizeDetail(statusMessage);
     final upper = trimmed.toUpperCase();
@@ -461,6 +634,11 @@ final class KttyProbeReport {
     if (key == null) return;
     final entry = _entries[key];
     if (entry == null) return;
+
+    if (key == 'apc_animation') {
+      _recordAnimApcReply(ok: ok, detail: trimmed, frameNumber: frameNumber);
+      return;
+    }
 
     final isOptionalDisabled =
         entry.tier == .optional &&
@@ -481,9 +659,47 @@ final class KttyProbeReport {
             imageId,
             imageNumber: imageNumber,
             placementId: placementId,
+            frameNumber: frameNumber,
           )
         : trimmed;
     _updateEntry(key, status, detail);
+  }
+
+  /// Records an optional TermUI Shader APC capability reply (`ESC _ S a=caps,... ST`).
+  void recordShaderApcReply(Map<String, String> control) {
+    final backend = _sanitizeDetail(control['backend'] ?? 'none');
+    final glsl = control['glsl'] == '1';
+    final xform = control['xform'] == '1';
+    final region = control['region'] == '1';
+    final hasBackend = backend != 'none' && backend != 'disabled';
+    final active = hasBackend || glsl || xform || region;
+    if (!active) {
+      _updateEntry(
+        'termui_shader_apc',
+        .optionalDisabled,
+        'Disabled (backend=$backend)',
+      );
+      return;
+    }
+    _updateEntry(
+      'termui_shader_apc',
+      .supported,
+      'backend=$backend glsl=${glsl ? 1 : 0} xform=${xform ? 1 : 0} region=${region ? 1 : 0}',
+    );
+  }
+
+  /// Records an optional TermUI Audio APC waveform reply (`ESC _ A a=waver,q=<id>;... ST`).
+  void recordAudioApcReply({
+    required String requestId,
+    required int sampleCount,
+  }) {
+    final safeId = _sanitizeDetail(requestId);
+    final payloadInfo = sampleCount > 0 ? '$sampleCount f32 samples' : 'silent';
+    _updateEntry(
+      'termui_audio_apc',
+      .supported,
+      'OK (q=$safeId, $payloadInfo)',
+    );
   }
 
   /// Records a Kitty Keyboard query reply (`CSI ? <flags> u`).
@@ -501,6 +717,112 @@ final class KttyProbeReport {
     final safe = _sanitizeDetail(version);
     xtVersion = safe;
     _updateEntry('xtversion', .supported, safe);
+  }
+
+  /// Records a decoded `XTGETTCAP` (`DCS 1+r` or `0+r`) capability reply.
+  void recordXtgettcapReply(
+    String name, {
+    String value = '',
+    required bool supported,
+  }) {
+    final safeName = _sanitizeDetail(name);
+    if (safeName.isEmpty) return;
+    if (supported) {
+      _xtgettcapCapabilities[safeName] = _sanitizeDetail(value);
+      _xtgettcapUnsupported.remove(safeName);
+    } else if (!_xtgettcapCapabilities.containsKey(safeName)) {
+      _xtgettcapUnsupported.add(safeName);
+    }
+    if (_xtgettcapCapabilities.isNotEmpty) {
+      _updateEntry(
+        'xtgettcap',
+        .supported,
+        _xtgettcapCapabilities.keys.join(', '),
+      );
+    } else {
+      _updateEntry(
+        'xtgettcap',
+        .unsupported,
+        'Unsupported (${_xtgettcapUnsupported.join(', ')})',
+      );
+    }
+  }
+
+  /// Records a `DECRQSS` (`DCS 1$r...` or `DCS 0$r`) status string reply.
+  void recordDecrqssReply({required bool valid, required String body}) {
+    final safeBody = _sanitizeDetail(body);
+    if (valid && safeBody.isNotEmpty) {
+      final label = safeBody.endsWith(' q')
+          ? 'DECSCUSR=$safeBody'
+          : safeBody.endsWith('m')
+          ? 'SGR=$safeBody'
+          : safeBody;
+      if (!_decrqssReplies.contains(label)) {
+        _decrqssReplies.add(label);
+      }
+      _updateEntry('decrqss', .supported, _decrqssReplies.join(', '));
+      return;
+    }
+    if (_decrqssReplies.isEmpty) {
+      _updateEntry('decrqss', .unsupported, 'Rejected (0\$r)');
+    }
+  }
+
+  /// Records a `CSI row;col R` Cursor Position Report for `OSC 66` delta verification.
+  void recordCursorPositionReport(int row, int col) {
+    if (!isExpectingCpr) return;
+    final first = _cprBeforeOsc66;
+    if (first == null) {
+      _cprBeforeOsc66 = (row, col);
+      return;
+    }
+    final deltaCol = col - first.$2;
+    final sameRow = row == first.$1;
+    if (sameRow && deltaCol == 2) {
+      _updateEntry('osc_66_sizing', .supported, 'OK (CPR delta=+2)');
+    } else {
+      _updateEntry(
+        'osc_66_sizing',
+        .unsupported,
+        'CPR delta=$deltaCol (row ${first.$1}->$row, expected +2)',
+      );
+    }
+  }
+
+  /// Records an `OSC 4;255` color sample for `OSC 30001`/`30101` stack verification.
+  void recordOsc4ColorStackSample(String? normalizedHex, {String? rawSpec}) {
+    final entry = _entries['osc_30001_colors'];
+    if (entry == null || entry.status != .pending) return;
+    final color = normalizedHex ?? _sanitizeDetail(rawSpec ?? '');
+    _colorStackSampleCount++;
+    if (_colorStackSampleCount == 1) {
+      _colorStackBaselineHex = color;
+      return;
+    }
+    if (_colorStackSampleCount == 2) {
+      _colorStackOverrideSeen =
+          color.toUpperCase() == kttyProbeColorStackSentinelHex;
+      return;
+    }
+    final restored =
+        _colorStackOverrideSeen &&
+        _colorStackBaselineHex != null &&
+        color == _colorStackBaselineHex;
+    if (restored) {
+      _updateEntry(
+        'osc_30001_colors',
+        .supported,
+        'OK (restored $_colorStackBaselineHex)',
+      );
+    } else if (!_colorStackOverrideSeen) {
+      _updateEntry('osc_30001_colors', .unsupported, 'OSC 4 override ignored');
+    } else {
+      _updateEntry(
+        'osc_30001_colors',
+        .unsupported,
+        'Not restored (got $color, expected $_colorStackBaselineHex)',
+      );
+    }
   }
 
   /// Records an `OSC 10` (foreground) or `OSC 11` (background) color reply.
@@ -542,6 +864,22 @@ final class KttyProbeReport {
       hasCaps ? .supported : .unsupported,
       hasCaps ? trimmed : 'Empty capability reply',
     );
+  }
+
+  /// Records an `OSC 5522` clipboard status reply (`type=write:status=DONE`).
+  void recordOsc5522Reply({
+    required String type,
+    required String status,
+    String raw = '',
+  }) {
+    if (type != 'write') return;
+    final safeStatus = _sanitizeDetail(status);
+    if (safeStatus == 'DONE') {
+      _updateEntry('osc_5522_clip', .supported, 'OK (type=write:status=DONE)');
+    } else {
+      final info = safeStatus.isNotEmpty ? safeStatus : _sanitizeDetail(raw);
+      _updateEntry('osc_5522_clip', .unsupported, 'type=write:status=$info');
+    }
   }
 
   /// Records an `OSC 52` clipboard read reply if the terminal sent one.
@@ -647,6 +985,196 @@ final class KttyProbeReport {
     _notify();
   }
 
+  static Map<String, String> _parseBaselineStatuses(
+    Map<String, Object?> baselineJson,
+  ) {
+    final rawCaps = baselineJson['capabilities'];
+    if (rawCaps is! List<Object?>) {
+      throw const FormatException('Baseline JSON missing "capabilities" list.');
+    }
+    final statuses = <String, String>{};
+    for (final item in rawCaps) {
+      if (item is! Map<Object?, Object?>) continue;
+      final id = item['id'];
+      final status = item['status'];
+      if (id is String && status is String && id.isNotEmpty) {
+        statuses[id] = status;
+      }
+    }
+    return statuses;
+  }
+
+  /// Compares this report against a previously saved JSON report [baselineJson],
+  /// identifying `PASS -> MISS` regressions, improvements, and unchanged rows.
+  KttyProbeDiff diffAgainstBaseline(Map<String, Object?> baselineJson) {
+    final baselineStatuses = _parseBaselineStatuses(baselineJson);
+    final regressions = <String>[];
+    final improvements = <String>[];
+    final unchanged = <String>[];
+    final added = <String>[];
+    final removed = <String>[];
+
+    for (final entry in _entries.values) {
+      final prev = baselineStatuses[entry.id];
+      if (prev == null) {
+        added.add(entry.id);
+      } else if (prev == KttyCapabilityStatus.supported.name &&
+          entry.status != .supported) {
+        regressions.add(entry.id);
+      } else if (prev != KttyCapabilityStatus.supported.name &&
+          entry.status == .supported) {
+        improvements.add(entry.id);
+      } else if (prev == entry.status.name) {
+        unchanged.add(entry.id);
+      }
+    }
+    for (final id in baselineStatuses.keys) {
+      if (!_entries.containsKey(id)) removed.add(id);
+    }
+
+    return KttyProbeDiff(
+      regressions: List<String>.unmodifiable(regressions),
+      improvements: List<String>.unmodifiable(improvements),
+      unchanged: List<String>.unmodifiable(unchanged),
+      added: List<String>.unmodifiable(added),
+      removed: List<String>.unmodifiable(removed),
+    );
+  }
+
+  /// Computes actionable terminfo, environment, `XTGETTCAP`, and multiplexer
+  /// diagnostic hints in pure Dart.
+  List<String> buildDiagnosticHints({
+    Map<String, String> environment = const {},
+  }) {
+    final hints = <String>[];
+    void addHint(String hint) {
+      if (!hints.contains(hint)) hints.add(hint);
+    }
+
+    final termEnv = (environment['TERM'] ?? '').trim();
+    final colorTerm = (environment['COLORTERM'] ?? '').trim().toLowerCase();
+    final hasTrueColorCap =
+        _xtgettcapCapabilities.containsKey('RGB') ||
+        _xtgettcapCapabilities.containsKey('Tc');
+
+    if (termEnv.isEmpty || termEnv == 'dumb' || termEnv == 'vt100') {
+      addHint(
+        'Set TERM=xterm-256color (or terminal native terminfo like xterm-kitty).',
+      );
+    }
+    if (colorTerm != 'truecolor' && colorTerm != '24bit' && !hasTrueColorCap) {
+      addHint(
+        'Truecolor not advertised via COLORTERM or XTGETTCAP (RGB/Tc); '
+        'export COLORTERM=truecolor.',
+      );
+    }
+    _appendProtocolDiagnosticHints(addHint);
+    _appendMultiplexerDiagnosticHints(addHint);
+    return List<String>.unmodifiable(hints);
+  }
+
+  void _appendProtocolDiagnosticHints(void Function(String hint) addHint) {
+    if (_entries['xtgettcap']?.status == .unsupported) {
+      addHint(
+        'XTGETTCAP (DCS +q) unanswered; terminal or multiplexer may strip DCS queries.',
+      );
+    } else if (_entries['xtgettcap']?.status == .supported &&
+        (!_xtgettcapCapabilities.containsKey('Smulx') ||
+            !_xtgettcapCapabilities.containsKey('Setulc'))) {
+      addHint(
+        'Terminfo lacks Smulx/Setulc; colored or curly underlines (SGR 4:3 / 58) may degrade.',
+      );
+    }
+    if (_entries['decrqm_2026']?.status == .unsupported &&
+        !_xtgettcapCapabilities.containsKey('Sync')) {
+      addHint(
+        'Synchronized output (?2026 / Sync) unsupported; rapid redraws may tear.',
+      );
+    }
+    if (_entries['osc_66_sizing']?.status == .unsupported) {
+      addHint(
+        'Kitty Text Sizing (OSC 66) unsupported by this terminal emulator.',
+      );
+    }
+  }
+
+  void _appendMultiplexerDiagnosticHints(void Function(String hint) addHint) {
+    final mux = multiplexerDiagnostics;
+    if (mux == null) return;
+    if (mux.multiplexer == 'tmux' &&
+        _entries['apc_query']?.status == .unsupported) {
+      addHint(
+        'Kitty Graphics failed inside tmux; enable allow-passthrough and pass --tmux-passthrough.',
+      );
+    }
+    for (final hint in mux.hints) {
+      addHint(hint);
+    }
+  }
+
+  static String _formatEnvValue(Map<String, String> env, String key) {
+    final trimmed = (env[key] ?? '').trim();
+    return trimmed.isEmpty ? '(unset)' : trimmed;
+  }
+
+  String _formatMultiplexerStatus() {
+    final mux = multiplexerDiagnostics;
+    if (mux == null) return 'none';
+    final passthrough = mux.allowPassthrough ?? 'unknown';
+    final trueColor = mux.hasTrueColor ? 'yes' : 'no';
+    return '${mux.multiplexer} (allow-passthrough=$passthrough, truecolor=$trueColor)';
+  }
+
+  /// Builds a formatted diagnostic report combining `$TERM`, `$COLORTERM`,
+  /// `XTGETTCAP`, multiplexer status, and actionable remediation hints.
+  String buildDiagnosticSummary({
+    Map<String, String> environment = const {},
+    bool ansiColor = false,
+  }) {
+    final colors = ansiColor
+        ? (
+            reset: '\x1b[0m',
+            bold: '\x1b[1m',
+            cyan: '\x1b[36m',
+            yellow: '\x1b[33m',
+            green: '\x1b[32m',
+          )
+        : (reset: '', bold: '', cyan: '', yellow: '', green: '');
+
+    final termProgram = (environment['TERM_PROGRAM'] ?? '').trim();
+    final capsText = _xtgettcapCapabilities.isEmpty
+        ? '(none)'
+        : _xtgettcapCapabilities.keys.join(', ');
+
+    final sb = StringBuffer()
+      ..writeln(
+        '${colors.bold}${colors.cyan}KTTY Doctor / Environment Diagnostics${colors.reset}',
+      )
+      ..writeln('  TERM         : ${_formatEnvValue(environment, 'TERM')}')
+      ..writeln(
+        '  COLORTERM    : ${_formatEnvValue(environment, 'COLORTERM')}',
+      );
+    if (termProgram.isNotEmpty) {
+      sb.writeln('  TERM_PROGRAM : $termProgram');
+    }
+    sb
+      ..writeln('  XTVERSION    : ${xtVersion ?? "(unanswered)"}')
+      ..writeln('  XTGETTCAP    : $capsText')
+      ..writeln('  Multiplexer  : ${_formatMultiplexerStatus()}');
+
+    final hints = buildDiagnosticHints(environment: environment);
+    if (hints.isEmpty) {
+      sb.writeln(
+        '  ${colors.green}Status:${colors.reset} All inspected environment and protocol checks look healthy.',
+      );
+    } else {
+      for (final hint in hints) {
+        sb.writeln('  ${colors.yellow}Hint:${colors.reset} $hint');
+      }
+    }
+    return sb.toString();
+  }
+
   /// Serializes the capability report to a JSON-compatible map.
   Map<String, Object?> toJsonMap() => {
     'probeRunCount': probeRunCount,
@@ -657,6 +1185,7 @@ final class KttyProbeReport {
     'coreTotal': coreTotalCount,
     'coreUnsupported': coreUnsupportedCount,
     'xtVersion': xtVersion,
+    'xtgettcap': _xtgettcapCapabilities,
     'kittyKeyboardFlags': kittyKeyboardFlags,
     'defaultForeground': defaultForegroundHex,
     'defaultBackground': defaultBackgroundHex,
