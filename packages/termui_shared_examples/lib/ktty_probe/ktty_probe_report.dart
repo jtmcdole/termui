@@ -40,20 +40,12 @@ final class KttyProbeOptions {
   /// Optional local regular RGBA file path for probing Kitty `a=q,t=f`.
   final String? fileProbeFilePath;
 
-  /// Whether to emit the destructive `OSC 5522` clipboard write probe.
-  ///
-  /// Defaults to `false` so live interactive and `--report` runs never
-  /// overwrite the user's system clipboard unless opted in (or running inside
-  /// headless `--self-test`).
-  final bool probeClipboardWrite;
-
   /// Creates [KttyProbeOptions].
   const KttyProbeOptions({
     this.wrapTmuxPassthrough = false,
     this.tempProbeFilePath,
     this.shmProbeName,
     this.fileProbeFilePath,
-    this.probeClipboardWrite = false,
   });
 }
 
@@ -247,6 +239,41 @@ final class KttyCapabilityEntry {
   });
 }
 
+final class _ColorStackProbeTracker {
+  final String entryId;
+  final String sentinelHex;
+  int sampleCount = 0;
+  String? baselineHex;
+  bool overrideSeen = false;
+
+  _ColorStackProbeTracker({required this.entryId, required this.sentinelHex});
+
+  void reset() {
+    sampleCount = 0;
+    baselineHex = null;
+    overrideSeen = false;
+  }
+
+  (KttyCapabilityStatus, String)? recordSample(String color) {
+    sampleCount++;
+    if (sampleCount == 1) {
+      baselineHex = color;
+      return null;
+    }
+    if (sampleCount == 2) {
+      overrideSeen = color.toUpperCase() == sentinelHex;
+      return null;
+    }
+    if (overrideSeen && baselineHex != null && color == baselineHex) {
+      return (.supported, 'OK (restored $baselineHex)');
+    }
+    if (!overrideSeen) {
+      return (.unsupported, 'OSC 4 override ignored');
+    }
+    return (.unsupported, 'Not restored (got $color, expected $baselineHex)');
+  }
+}
+
 /// Reactive model holding all probed KTTY and VT capability results.
 final class KttyProbeReport {
   final Map<String, KttyCapabilityEntry> _entries = {};
@@ -256,12 +283,19 @@ final class KttyProbeReport {
   final List<String> _decrqssReplies = [];
 
   (int row, int col)? _cprBeforeOsc66;
-  int _colorStackSampleCount = 0;
-  String? _colorStackBaselineHex;
-  bool _colorStackOverrideSeen = false;
+  final _ColorStackProbeTracker _oscColorStack = _ColorStackProbeTracker(
+    entryId: 'osc_30001_colors',
+    sentinelHex: kttyProbeColorStackSentinelHex,
+  );
+  final _ColorStackProbeTracker _csiColorStack = _ColorStackProbeTracker(
+    entryId: 'csi_xtpushcolors',
+    sentinelHex: kttyProbeCsiColorStackSentinelHex,
+  );
   bool _animFrameOk = false;
   int _animControlOkCount = 0;
   String? _animError;
+  int _osc5522ReadDataChars = 0;
+  String? _inBandResizeSummary;
 
   /// Number of probe passes initiated in this session.
   int probeRunCount = 0;
@@ -314,8 +348,8 @@ final class KttyProbeReport {
   /// Whether at least one `OSC 99` reply has arrived during the active session.
   bool hasOsc99Ack = false;
 
-  /// Creates a [KttyProbeReport] initialized with all 38 KTTY probe entries
-  /// (33 core + 5 optional).
+  /// Creates a [KttyProbeReport] initialized with all 43 KTTY probe entries
+  /// (36 core + 7 optional).
   KttyProbeReport() {
     _initEntries();
   }
@@ -331,6 +365,7 @@ final class KttyProbeReport {
       ('apc_image_num', 'Kitty Image Number', 'APC I=', .core),
       ('apc_crop_layer', 'Kitty Crop & Z-Layer', 'APC x,y,z=-1', .core),
       ('apc_animation', 'Kitty Animation Frames', 'APC a=f/a/c', .core),
+      ('apc_rel_place', 'Kitty Relative Place', 'APC P,Q,H,V', .core),
       ('apc_temp_file', 'Kitty Temp File Medium', 'APC t=t', .optional),
       ('apc_shm', 'Kitty Shared Memory', 'APC t=s', .optional),
       ('apc_file_medium', 'Kitty File Medium', 'APC t=f', .optional),
@@ -343,10 +378,13 @@ final class KttyProbeReport {
       ('osc10', 'Default Foreground', 'OSC 10;?', .core),
       ('osc11', 'Default Background', 'OSC 11;?', .core),
       ('osc_30001_colors', 'Color Stack Push/Pop', 'OSC 30001', .core),
+      ('csi_xtpushcolors', 'Color Stack CSI #P/Q', 'CSI #P/#Q', .core),
       ('osc_66_sizing', 'Kitty Text Sizing', 'OSC 66 + CPR', .core),
       ('osc_22_pointer', 'Mouse Pointer Shapes', 'OSC 22;?', .core),
       ('osc_99_query', 'Notification Query', 'OSC 99;p=?', .core),
       ('osc_5522_clip', 'Kitty Clipboard Write', 'OSC 5522', .core),
+      ('osc_5522_read', 'Kitty Clipboard Read', 'OSC 5522 rd', .optional),
+      ('osc_52_read', 'OSC 52 Clipboard Read', 'OSC 52;?', .optional),
       ('decrqm_2026', 'Synchronized Output', 'DECRQM ?2026', .core),
       ('decrqm_1016', 'SGR-Pixels Mouse', 'DECRQM ?1016', .core),
       ('decrqm_2027', 'Grapheme Clustering', 'DECRQM ?2027', .core),
@@ -354,6 +392,7 @@ final class KttyProbeReport {
       ('decrqm_1004', 'Focus Reporting', 'DECRQM ?1004', .core),
       ('decrqm_1006', 'SGR Mouse Encoding', 'DECRQM ?1006', .core),
       ('decrqm_2031', 'Color Scheme Updates', 'DECRQM ?2031', .core),
+      ('decrqm_2048', 'In-Band Window Resize', 'DECRQM ?2048', .core),
       ('csi_996_scheme', 'Color Scheme Query', 'CSI ? 996 n', .core),
       ('xtwinops_14t', 'Viewport Pixel Size', 'CSI 14 t', .core),
       ('xtwinops_16t', 'Cell Pixel Size', 'CSI 16 t', .core),
@@ -455,12 +494,13 @@ final class KttyProbeReport {
     _xtgettcapUnsupported.clear();
     _decrqssReplies.clear();
     _cprBeforeOsc66 = null;
-    _colorStackSampleCount = 0;
-    _colorStackBaselineHex = null;
-    _colorStackOverrideSeen = false;
+    _oscColorStack.reset();
+    _csiColorStack.reset();
     _animFrameOk = false;
     _animControlOkCount = 0;
     _animError = null;
+    _osc5522ReadDataChars = 0;
+    _inBandResizeSummary = null;
     for (final entry in _entries.values) {
       entry.status = .pending;
       entry.detail = 'Probing...';
@@ -495,14 +535,6 @@ final class KttyProbeReport {
         'apc_file_medium',
         .optionalDisabled,
         'Unavailable on this platform',
-        notify: false,
-      );
-    }
-    if (!options.probeClipboardWrite) {
-      _updateEntry(
-        'osc_5522_clip',
-        .optionalDisabled,
-        'Opt-in (--probe-clipboard or --self-test)',
         notify: false,
       );
     }
@@ -545,18 +577,29 @@ final class KttyProbeReport {
       ..write('\x1b]30101\x1b\\')
       ..write('\x1b]4;$kttyProbeColorStackIndex;?\x1b\\')
       ..write('\x1b]104;$kttyProbeColorStackIndex\x1b\\')
+      // CSI #P / CSI #Q (XTPUSHCOLORS/XTPOPCOLORS) verification on palette slot 254
+      ..write('\x1b]4;$kttyProbeCsiColorStackIndex;?\x1b\\')
+      ..write('\x1b[#P')
+      ..write(
+        '\x1b]4;$kttyProbeCsiColorStackIndex;$kttyProbeCsiColorStackSentinelHex\x1b\\',
+      )
+      ..write('\x1b]4;$kttyProbeCsiColorStackIndex;?\x1b\\')
+      ..write('\x1b[#Q')
+      ..write('\x1b]4;$kttyProbeCsiColorStackIndex;?\x1b\\')
+      ..write('\x1b]104;$kttyProbeCsiColorStackIndex\x1b\\')
       // OSC 66 text sizing cursor-advance probe (CSI 6 n delta == +2)
       ..write('\x1b7\r\x1b[6n\x1b]66;w=2; \x1b\\\x1b[6n\r  \r\x1b8')
       ..write('\x1b]22;?pointer,text,ktty-invalid\x1b\\')
-      ..write('\x1b]99;i=ktty-probe:p=?;\x1b\\');
-    if (options.probeClipboardWrite) {
-      // OSC 5522 clipboard write probe (upstream Kitty 3-packet format with base64 mime=text/plain)
-      sb
-        ..write('\x1b]5522;type=write:id=$kttyProbeOsc5522Id;\x1b\\')
-        ..write('\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;a3R0eQ==\x1b\\')
-        ..write('\x1b]5522;type=wdata;\x1b\\');
-    }
-    sb
+      ..write('\x1b]99;i=ktty-probe:p=?;\x1b\\')
+      // OSC 5522 clipboard write & read probes (base64 mime=text/plain)
+      ..write('\x1b]5522;type=write:id=$kttyProbeOsc5522Id;\x1b\\')
+      ..write('\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;a3R0eQ==\x1b\\')
+      ..write('\x1b]5522;type=wdata;\x1b\\')
+      ..write(
+        '\x1b]5522;type=read:id=$kttyProbeOsc5522ReadId;dGV4dC9wbGFpbg==\x1b\\',
+      )
+      // OSC 52 clipboard read probe (optional; answered only when host allows reads)
+      ..write('\x1b]52;c;?\x1b\\')
       ..write('\x1b[?2026\$p')
       ..write('\x1b[?1016\$p')
       ..write('\x1b[?2027\$p')
@@ -564,6 +607,8 @@ final class KttyProbeReport {
       ..write('\x1b[?1004\$p')
       ..write('\x1b[?1006\$p')
       ..write('\x1b[?2031\$p')
+      ..write('\x1b[?2048\$p')
+      ..write('\x1b[?2048h\x1b[?2048l')
       ..write('\x1b[?996n')
       ..write('\x1b[14t')
       ..write('\x1b[16t')
@@ -603,6 +648,8 @@ final class KttyProbeReport {
       kttyProbeCropLayerId =>
         placementId == kttyProbeCropPlacementId ? 'apc_crop_layer' : null,
       kttyProbeAnimId => 'apc_animation',
+      kttyProbeRelChildId =>
+        placementId == kttyProbeRelChildPlacementId ? 'apc_rel_place' : null,
       kttyProbeTempId => 'apc_temp_file',
       kttyProbeShmId => 'apc_shm',
       kttyProbeFileId => 'apc_file_medium',
@@ -831,41 +878,35 @@ final class KttyProbeReport {
     }
   }
 
-  /// Records an `OSC 4;255` color sample for `OSC 30001`/`30101` stack verification.
-  void recordOsc4ColorStackSample(String? normalizedHex, {String? rawSpec}) {
-    final entry = _entries['osc_30001_colors'];
+  void _recordTrackedColorStackSample(
+    _ColorStackProbeTracker tracker,
+    String? normalizedHex, {
+    String? rawSpec,
+  }) {
+    final entry = _entries[tracker.entryId];
     if (entry == null || entry.status != .pending) return;
     final color = normalizedHex ?? _sanitizeDetail(rawSpec ?? '');
-    _colorStackSampleCount++;
-    if (_colorStackSampleCount == 1) {
-      _colorStackBaselineHex = color;
-      return;
-    }
-    if (_colorStackSampleCount == 2) {
-      _colorStackOverrideSeen =
-          color.toUpperCase() == kttyProbeColorStackSentinelHex;
-      return;
-    }
-    final restored =
-        _colorStackOverrideSeen &&
-        _colorStackBaselineHex != null &&
-        color == _colorStackBaselineHex;
-    if (restored) {
-      _updateEntry(
-        'osc_30001_colors',
-        .supported,
-        'OK (restored $_colorStackBaselineHex)',
-      );
-    } else if (!_colorStackOverrideSeen) {
-      _updateEntry('osc_30001_colors', .unsupported, 'OSC 4 override ignored');
-    } else {
-      _updateEntry(
-        'osc_30001_colors',
-        .unsupported,
-        'Not restored (got $color, expected $_colorStackBaselineHex)',
-      );
+    final result = tracker.recordSample(color);
+    if (result != null) {
+      _updateEntry(tracker.entryId, result.$1, result.$2);
     }
   }
+
+  /// Records an `OSC 4;255` color sample for `OSC 30001`/`30101` stack verification.
+  void recordOsc4ColorStackSample(String? normalizedHex, {String? rawSpec}) =>
+      _recordTrackedColorStackSample(
+        _oscColorStack,
+        normalizedHex,
+        rawSpec: rawSpec,
+      );
+
+  /// Records an `OSC 4;254` color sample for `CSI #P`/`CSI #Q` stack verification.
+  void recordCsiColorStackSample(String? normalizedHex, {String? rawSpec}) =>
+      _recordTrackedColorStackSample(
+        _csiColorStack,
+        normalizedHex,
+        rawSpec: rawSpec,
+      );
 
   /// Records an `OSC 10` (foreground) or `OSC 11` (background) color reply.
   void recordOscColor(int oscCode, String rawSpec, String? normalizedHex) {
@@ -908,26 +949,76 @@ final class KttyProbeReport {
     );
   }
 
-  /// Records an `OSC 5522` clipboard status reply (`type=write:status=DONE`).
+  /// Records an `OSC 5522` clipboard write or read status reply.
   void recordOsc5522Reply({
     required String type,
     required String status,
+    String id = '',
+    String body = '',
     String raw = '',
   }) {
-    if (type != 'write') return;
     final safeStatus = _sanitizeDetail(status);
-    if (safeStatus == 'DONE') {
-      _updateEntry('osc_5522_clip', .supported, 'OK (type=write:status=DONE)');
-    } else {
-      final info = safeStatus.isNotEmpty ? safeStatus : _sanitizeDetail(raw);
-      _updateEntry('osc_5522_clip', .unsupported, 'type=write:status=$info');
+    if (type == 'write' && (id.isEmpty || id == kttyProbeOsc5522Id)) {
+      _recordOsc5522WriteReply(safeStatus, raw: raw);
+    } else if (type == 'read' && (id.isEmpty || id == kttyProbeOsc5522ReadId)) {
+      _recordOsc5522ReadReply(safeStatus, body: body, raw: raw);
     }
+  }
+
+  void _recordOsc5522WriteReply(String status, {required String raw}) {
+    if (status == 'DONE') {
+      _updateEntry('osc_5522_clip', .supported, 'OK (type=write:status=DONE)');
+      return;
+    }
+    if (status == 'EPERM') {
+      _updateEntry(
+        'osc_5522_clip',
+        .optionalDisabled,
+        'Blocked by policy (EPERM)',
+      );
+      return;
+    }
+    final info = status.isNotEmpty ? status : _sanitizeDetail(raw);
+    _updateEntry('osc_5522_clip', .unsupported, 'type=write:status=$info');
+  }
+
+  void _recordOsc5522ReadReply(
+    String status, {
+    required String body,
+    required String raw,
+  }) {
+    if (status == 'OK') return;
+    if (status == 'DATA') {
+      _osc5522ReadDataChars += body.trim().length;
+      return;
+    }
+    if (status == 'DONE') {
+      final detail = _osc5522ReadDataChars > 0
+          ? 'OK (allowed, $_osc5522ReadDataChars b64 chars)'
+          : 'OK (allowed, empty)';
+      _updateEntry('osc_5522_read', .supported, detail);
+      return;
+    }
+    if (status == 'EPERM') {
+      _updateEntry(
+        'osc_5522_read',
+        .optionalDisabled,
+        'Blocked by policy (EPERM)',
+      );
+      return;
+    }
+    final info = status.isNotEmpty ? status : _sanitizeDetail(raw);
+    _updateEntry('osc_5522_read', .optionalDisabled, 'type=read:status=$info');
   }
 
   /// Records an `OSC 52` clipboard read reply if the terminal sent one.
   void recordOsc52Reply(String decodedText) {
     osc52ClipboardReply = decodedText;
-    _notify();
+    _updateEntry(
+      'osc_52_read',
+      .supported,
+      'OK (allowed, ${decodedText.length} chars)',
+    );
   }
 
   /// Records an incoming `OSC 99` notification activation or close reply (`ESC ] 99 ; ... ST`).
@@ -942,11 +1033,28 @@ final class KttyProbeReport {
     final id = 'decrqm_$mode';
     if (!_entries.containsKey(id)) return;
     final state = DecrqmModeState.fromCode(stateCode);
-    _updateEntry(
-      id,
-      state.isSupported ? .supported : .unsupported,
-      state.label,
-    );
+    var detail = state.label;
+    if (mode == 2048 && _inBandResizeSummary != null && state.isSupported) {
+      detail = '$detail, $_inBandResizeSummary';
+    }
+    _updateEntry(id, state.isSupported ? .supported : .unsupported, detail);
+  }
+
+  /// Records a `DECSET 2048` in-band resize report (`CSI 48 ; rows ; cols ; pxH ; pxW t`).
+  void recordInBandResize({
+    required int rows,
+    required int cols,
+    required int pixelHeight,
+    required int pixelWidth,
+  }) {
+    final summary = '48t: ${cols}x$rows (${pixelWidth}x${pixelHeight}px)';
+    _inBandResizeSummary = summary;
+    final entry = _entries['decrqm_2048'];
+    if (entry == null) return;
+    final detail = entry.status == .supported && !entry.detail.contains('48t:')
+        ? '${entry.detail}, $summary'
+        : summary;
+    _updateEntry('decrqm_2048', .supported, detail);
   }
 
   /// Records a color scheme query reply (`CSI ? 997 ; 1|2 n`).

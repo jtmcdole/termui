@@ -17,6 +17,9 @@ final class KttyReplyInterceptor {
   static final RegExp _xtwinops14Regex = RegExp(r'^4;(\d+);(\d+)t$');
   static final RegExp _xtwinops16Regex = RegExp(r'^6;(\d+);(\d+)t$');
   static final RegExp _xtwinops18Regex = RegExp(r'^8;(\d+);(\d+)t$');
+  static final RegExp _inBandResizeRegex = RegExp(
+    r'^48;(\d+);(\d+);(\d+);(\d+)t$',
+  );
   static final RegExp _colorSchemeRegex = RegExp(r'^\?997;(\d+)n$');
   static final RegExp _cprRegex = RegExp(r'^(\d+);(\d+)R$');
   static final RegExp _sgrMouseBodyRegex = RegExp(
@@ -274,6 +277,16 @@ final class KttyReplyInterceptor {
   }
 
   bool _handleDeviceAttrsCsi(String body) {
+    final resize = _inBandResizeRegex.firstMatch(body);
+    if (resize != null) {
+      report.recordInBandResize(
+        rows: int.tryParse(resize.group(1)!) ?? 0,
+        cols: int.tryParse(resize.group(2)!) ?? 0,
+        pixelHeight: int.tryParse(resize.group(3)!) ?? 0,
+        pixelWidth: int.tryParse(resize.group(4)!) ?? 0,
+      );
+      return true;
+    }
     if (report.isExpectingCpr) {
       final cpr = _cprRegex.firstMatch(body);
       if (cpr != null) {
@@ -405,17 +418,19 @@ final class KttyReplyInterceptor {
     final semi = rest.indexOf(';');
     if (semi <= 0) return;
     final index = int.tryParse(rest.substring(0, semi).trim());
-    if (index != kttyProbeColorStackIndex) return;
     final spec = rest.substring(semi + 1);
-    report.recordOsc4ColorStackSample(
-      parseOscColorSpecToHex(spec),
-      rawSpec: spec,
-    );
+    final hex = parseOscColorSpecToHex(spec);
+    if (index == kttyProbeColorStackIndex) {
+      report.recordOsc4ColorStackSample(hex, rawSpec: spec);
+    } else if (index == kttyProbeCsiColorStackIndex) {
+      report.recordCsiColorStackSample(hex, rawSpec: spec);
+    }
   }
 
   void _recordOsc5522Reply(String rest) {
     final semi = rest.indexOf(';');
     final meta = semi >= 0 ? rest.substring(0, semi) : rest;
+    final body = semi >= 0 ? rest.substring(semi + 1) : '';
     var type = '';
     var status = '';
     var id = '';
@@ -433,8 +448,15 @@ final class KttyReplyInterceptor {
           id = v;
       }
     }
-    if (type.isNotEmpty && id == kttyProbeOsc5522Id) {
-      report.recordOsc5522Reply(type: type, status: status, raw: rest);
+    if (type.isNotEmpty &&
+        (id == kttyProbeOsc5522Id || id == kttyProbeOsc5522ReadId)) {
+      report.recordOsc5522Reply(
+        type: type,
+        status: status,
+        id: id,
+        body: body,
+        raw: rest,
+      );
     }
   }
 
