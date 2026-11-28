@@ -51,7 +51,7 @@ List<Rect> splitRect(
   Rect area,
   List<Constraint> constraints,
   LayoutDirection direction, {
-  MainAxisAlignment mainAxisAlignment = MainAxisAlignment.start,
+  MainAxisAlignment mainAxisAlignment = .start,
 }) {
   final clampedArea = Rect(
     area.x,
@@ -59,9 +59,8 @@ List<Rect> splitRect(
     max(0, area.width),
     max(0, area.height),
   );
-  final totalSize = direction == LayoutDirection.horizontal
-      ? clampedArea.width
-      : clampedArea.height;
+  final isHorizontal = direction == .horizontal;
+  final totalSize = isHorizontal ? clampedArea.width : clampedArea.height;
   final sizes = List<int>.filled(constraints.length, 0);
 
   var usedSize = 0;
@@ -89,26 +88,19 @@ List<Rect> splitRect(
 
   // 2. Distribute remaining space among Flex constraints
   if (totalFlex > 0 && usedSize < totalSize) {
-    final remaining = totalSize - usedSize;
-    var distributed = 0;
-    for (var j = 0; j < flexIndices.length; j++) {
-      final idx = flexIndices[j];
-      final flex = (constraints[idx] as FlexConstraint).flex;
-      final size = j == flexIndices.length - 1
-          ? remaining - distributed
-          : (remaining * flex / totalFlex).floor();
-      sizes[idx] = size;
-      distributed += size;
-    }
-    usedSize += distributed;
+    usedSize += _distributeFlexSpace(
+      constraints,
+      flexIndices,
+      sizes,
+      totalSize - usedSize,
+      totalFlex,
+    );
   }
 
-  // 3. (Removed: Scale down if used size exceeds total size)
-  // We no longer forcefully scale down rigid constraints. This allows layouts
-  // to correctly overflow their bounds so the rendering engine can detect it
-  // and display a visual warning, rather than silently hiding elements.
+  // Rigid constraints are intentionally not scaled down on overflow so
+  // RowElement and ColumnElement can detect overflow and render warnings.
 
-  // 4. Respect Max Constraints on MinMax
+  // 3. Respect Max Constraints on MinMax
   for (var i = 0; i < constraints.length; i++) {
     if (constraints[i] case MinMaxConstraint(:final min, :final max)) {
       sizes[i] = sizes[i].clamp(min, max);
@@ -116,55 +108,80 @@ List<Rect> splitRect(
     sizes[i] = max(0, sizes[i]);
   }
 
-  // 5. Construct child Rects
-  final rects = <Rect>[];
-  final N = sizes.length;
+  // 4. Construct child Rects
+  final count = sizes.length;
+  if (count == 0) return [];
+
   final remaining = totalSize - usedSize;
-
-  if (N == 0) return rects;
-
-  final sumOfSizes = List<int>.filled(N + 1, 0);
-  for (var i = 0; i < N; i++) {
-    sumOfSizes[i + 1] = sumOfSizes[i] + sizes[i];
-  }
-
-  int getChildOffset(int i) {
-    if (remaining <= 0) {
-      return switch (mainAxisAlignment) {
-        .start => sumOfSizes[i],
-        .end => remaining + sumOfSizes[i],
-        .center => (remaining ~/ 2) + sumOfSizes[i],
-        _ =>
-          sumOfSizes[i], // Fallback to start for spaced alignments when overflowing
-      };
-    }
-    return switch (mainAxisAlignment) {
-      .start => sumOfSizes[i],
-      .end => remaining + sumOfSizes[i],
-      .center => (remaining ~/ 2) + sumOfSizes[i],
-      .spaceBetween =>
-        N <= 1 ? sumOfSizes[i] : ((remaining * i) ~/ (N - 1)) + sumOfSizes[i],
-      .spaceAround =>
-        (remaining * (i * 2 + 1) / (N * 2)).floor() + sumOfSizes[i],
-      .spaceEvenly => (remaining * (i + 1) / (N + 1)).floor() + sumOfSizes[i],
-    };
-  }
-
-  for (var i = 0; i < N; i++) {
+  var prefixSum = 0;
+  final rects = <Rect>[];
+  for (var i = 0; i < count; i++) {
+    final offset = _resolveSplitChildOffset(
+      mainAxisAlignment,
+      remaining,
+      prefixSum,
+      i,
+      count,
+    );
     final size = sizes[i];
-    final offset = getChildOffset(i);
-    if (direction == LayoutDirection.horizontal) {
-      rects.add(
-        Rect(clampedArea.x + offset, clampedArea.y, size, clampedArea.height),
-      );
-    } else {
-      rects.add(
-        Rect(clampedArea.x, clampedArea.y + offset, clampedArea.width, size),
-      );
-    }
+    prefixSum += size;
+    rects.add(
+      isHorizontal
+          ? Rect(
+              clampedArea.x + offset,
+              clampedArea.y,
+              size,
+              clampedArea.height,
+            )
+          : Rect(
+              clampedArea.x,
+              clampedArea.y + offset,
+              clampedArea.width,
+              size,
+            ),
+    );
   }
-
   return rects;
+}
+
+int _distributeFlexSpace(
+  List<Constraint> constraints,
+  List<int> flexIndices,
+  List<int> sizes,
+  int remaining,
+  int totalFlex,
+) {
+  var distributed = 0;
+  for (var j = 0; j < flexIndices.length; j++) {
+    final idx = flexIndices[j];
+    final flex = (constraints[idx] as FlexConstraint).flex;
+    final size = j == flexIndices.length - 1
+        ? remaining - distributed
+        : (remaining * flex / totalFlex).floor();
+    sizes[idx] = size;
+    distributed += size;
+  }
+  return distributed;
+}
+
+int _resolveSplitChildOffset(
+  MainAxisAlignment alignment,
+  int remaining,
+  int prefixSum,
+  int index,
+  int count,
+) {
+  final spacing = max(0, remaining);
+  return switch (alignment) {
+    .start => prefixSum,
+    .end => remaining + prefixSum,
+    .center => (remaining ~/ 2) + prefixSum,
+    .spaceBetween =>
+      count <= 1 ? prefixSum : ((spacing * index) ~/ (count - 1)) + prefixSum,
+    .spaceAround =>
+      (spacing * (index * 2 + 1) / (count * 2)).floor() + prefixSum,
+    .spaceEvenly => (spacing * (index + 1) / (count + 1)).floor() + prefixSum,
+  };
 }
 
 /// Retrieves the layout constraint for the given [widget].
