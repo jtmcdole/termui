@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:termui/termui.dart';
@@ -803,6 +804,212 @@ void main() {
           replies,
           equals(['\x1b]5522;type=read:status=EPERM:id=r5\x1b\\']),
         );
+        vt.dispose();
+      },
+    );
+
+    test(
+      'serializes async OSC 5522 and OSC 52 replies in FIFO order ahead of DA1 and drains on error',
+      () async {
+        final replies = <String>[];
+        final first = Completer<String?>();
+        final second = Completer<String?>();
+        final third = Completer<String?>();
+        var callIndex = 0;
+        final vt = VirtualTerminal(
+          allowClipboardRead: true,
+          onReply: replies.add,
+          onClipboardRead: (_) => switch (callIndex++) {
+            0 => first.future,
+            1 => second.future,
+            _ => third.future,
+          },
+        );
+
+        vt.writeString(
+          '\x1b]5522;type=read:id=a1;\x1b\\'
+          '\x1b]52;c;?\x1b\\'
+          '\x1b]52;c;?\x1b\\'
+          '\x1b[c',
+        );
+        // Nothing emitted yet while first async read is pending.
+        expect(replies, isEmpty);
+
+        // Second finishes before first, third errors before first -> still blocked on first.
+        second.complete('second-clip');
+        third.completeError(StateError('boom'));
+        await Future<void>.microtask(() {});
+        await Future<void>.microtask(() {});
+        expect(replies, isEmpty);
+
+        // Once first finishes, all replies flush in strict FIFO order with DA1 last.
+        first.complete('first-clip');
+        await Future<void>.microtask(() {});
+        await Future<void>.microtask(() {});
+        expect(
+          replies,
+          equals(<String>[
+            '\x1b]5522;type=read:status=OK:id=a1\x1b\\',
+            '\x1b]5522;type=read:status=DATA:mime=dGV4dC9wbGFpbg==:id=a1;'
+                '${base64Encode(utf8.encode('first-clip'))}\x1b\\',
+            '\x1b]5522;type=read:status=DONE:id=a1\x1b\\',
+            '\x1b]52;c;${base64Encode(utf8.encode('second-clip'))}\x1b\\',
+            '\x1b[?62;22c',
+          ]),
+        );
+        vt.dispose();
+      },
+    );
+
+    test(
+      're-checks clipboard read policy, focus, and reset/dispose epoch when async reads complete',
+      () async {
+        final replies = <String>[];
+        final blocked = <String>[];
+        var focused = true;
+        final pending = <Completer<String?>>[];
+        final vt = VirtualTerminal(
+          allowClipboardRead: true,
+          canReadClipboard: () => focused,
+          onReply: replies.add,
+          onClipboardRead: (_) {
+            final c = Completer<String?>();
+            pending.add(c);
+            return c.future;
+          },
+        )..onClipboardReadBlocked = blocked.add;
+
+        // 1. Focus lost mid-flight: OSC 5522 emits EPERM, OSC 52 drops, DA1 still drains.
+        vt.writeString(
+          '\x1b]5522;type=read:id=f1;\x1b\\'
+          '\x1b]52;c;?\x1b\\'
+          '\x1b[c',
+        );
+        focused = false;
+        pending[0].complete('secret-1');
+        pending[1].complete('secret-2');
+        await Future<void>.microtask(() {});
+        await Future<void>.microtask(() {});
+        expect(blocked, equals(['c', 'c']));
+        expect(
+          replies,
+          equals(<String>[
+            '\x1b]5522;type=read:status=EPERM:id=f1\x1b\\',
+            '\x1b[?62;22c',
+          ]),
+        );
+
+        // 2. Policy disabled mid-flight (even on error) emits EPERM and drains DA1.
+        focused = true;
+        replies.clear();
+        blocked.clear();
+        vt.writeString('\x1b]5522;type=read:id=f2;\x1b\\\x1b[c');
+        vt.allowClipboardRead = false;
+        pending[2].completeError(StateError('disk'));
+        await Future<void>.microtask(() {});
+        await Future<void>.microtask(() {});
+        expect(blocked, equals(['c']));
+        expect(
+          replies,
+          equals(<String>[
+            '\x1b]5522;type=read:status=EPERM:id=f2\x1b\\',
+            '\x1b[?62;22c',
+          ]),
+        );
+
+        // 3. Full reset (RIS) invalidates in-flight reads silently.
+        vt.allowClipboardRead = true;
+        replies.clear();
+        blocked.clear();
+        vt.writeString('\x1b]5522;type=read:id=f3;\x1b\\\x1b]52;c;?\x1b\\');
+        vt.writeString('\x1bc');
+        pending[3].complete('stale-1');
+        pending[4].complete('stale-2');
+        await Future<void>.microtask(() {});
+        await Future<void>.microtask(() {});
+        expect(replies, isEmpty);
+        expect(blocked, isEmpty);
+
+        // 4. dispose() invalidates in-flight reads silently.
+        vt.writeString('\x1b]5522;type=read:id=f4;\x1b\\');
+        vt.dispose();
+        pending[5].complete('stale-disposed');
+        await Future<void>.microtask(() {});
+        await Future<void>.microtask(() {});
+        expect(replies, isEmpty);
+      },
+    );
+
+    test(
+      'rejects unsanitized or overly long OSC 52 read selections without reflecting into PTY stdin',
+      () {
+        final replies = <String>[];
+        final reads = <String>[];
+        final blocked = <String>[];
+        final vt = VirtualTerminal(
+          allowClipboardRead: true,
+          onReply: replies.add,
+          onClipboardRead: (sel) {
+            reads.add(sel);
+            return 'secret';
+          },
+        )..onClipboardReadBlocked = blocked.add;
+
+        // Control chars, invalid letters, spaces, and selections > 8 chars are rejected.
+        vt.writeString(
+          '\x1b]52;c\x7f\u009cinject;?\x1b\\'
+          '\x1b]52;ccccccccc;?\x1b\\'
+          '\x1b]52;bad;?\x1b\\'
+          '\x1b]52;c p;?\x1b\\',
+        );
+        expect(reads, isEmpty);
+        expect(blocked, isEmpty);
+        expect(replies, isEmpty);
+
+        // Valid multi-target selection up to 8 chars still works.
+        vt.writeString('\x1b]52;cp0;?\x1b\\');
+        expect(reads, equals(['cp0']));
+        expect(
+          replies,
+          equals(['\x1b]52;cp0;${base64Encode(utf8.encode('secret'))}\x1b\\']),
+        );
+        vt.dispose();
+      },
+    );
+
+    test(
+      're-checks allowLocalKittyFiles before reading file bytes on chunked m=1 -> m=0 upload',
+      () {
+        final regularFile = File(
+          '${Directory.systemTemp.path}/termui-pty-chunked-tf-$pid.rgba',
+        )..writeAsBytesSync(const [1, 2, 3, 255]);
+        addTearDown(() {
+          if (regularFile.existsSync()) regularFile.deleteSync();
+        });
+        final pathB64 = base64Encode(utf8.encode(regularFile.path));
+        final splitAt = pathB64.length ~/ 2;
+        final chunk1 = pathB64.substring(0, splitAt);
+        final chunk2 = pathB64.substring(splitAt);
+
+        final replies = <String>[];
+        final vt = VirtualTerminal(
+          allowLocalKittyFiles: true,
+          onReply: replies.add,
+        );
+
+        // Start chunked t=f upload while enabled.
+        vt.writeString('\x1b_Ga=t,f=32,s=1,v=1,i=777,t=f,m=1;$chunk1\x1b\\');
+        expect(replies, isEmpty);
+
+        // Disable t=f before final chunk arrives.
+        vt.allowLocalKittyFiles = false;
+        vt.writeString('\x1b_Gm=0;$chunk2\x1b\\');
+
+        expect(
+          replies,
+          equals(['\x1b_Gi=777;EINVAL:unsupported transmission medium\x1b\\']),
+        );
+        expect(vt.imageRegistry.lookupImage(777), isNull);
         vt.dispose();
       },
     );

@@ -4043,7 +4043,9 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
           allowRead: _preferences.localClipboardRead,
         )
         ..setClipboardReadHandler(
-          onRead: (_) => _clipboardReader(),
+          onRead: (selection) => (selection.contains('c') || selection.isEmpty)
+              ? _clipboardReader()
+              : null,
           canRead: () => _canPaneReadClipboard(paneId),
         );
     }

@@ -710,6 +710,45 @@ void main() {
     );
 
     test(
+      'runKttyBatchProbe receives async onClipboardRead replies before DA1 completes',
+      () async {
+        final replies = StreamController<List<int>>.broadcast();
+        final vt = VirtualTerminal(
+          width: 80,
+          height: 24,
+          allowClipboardRead: true,
+          onClipboardRead: (_) => Future<String?>.microtask(() => 'async-clip'),
+          onReply: (reply) {
+            final bytes = utf8.encode(reply);
+            scheduleMicrotask(() {
+              if (!replies.isClosed) replies.add(bytes);
+            });
+          },
+        );
+
+        final report = await runKttyBatchProbe(
+          wireInput: replies.stream,
+          onWriteWire: vt.writeString,
+        );
+
+        expect(report.isComplete, isTrue);
+        expect(
+          report['osc_5522_read']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(
+          report['osc_52_read']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(report.osc52ClipboardReply, equals('async-clip'));
+        expect(report.coreUnsupportedCount, equals(0));
+
+        await replies.close();
+        vt.dispose();
+      },
+    );
+
+    test(
       'runVirtualTerminalKttyProbe renders dashboard, graphics, OSC actions, and exits cleanly',
       () async {
         final hostBackend = _TestHostBackend(width: 110, height: 34);
