@@ -864,7 +864,7 @@ void main() {
 
         // 8. Unsupported action replies EINVAL:unsupported action.
         replies.clear();
-        vt.writeString('\x1b_Ga=f,i=140;$b64\x1b\\');
+        vt.writeString('\x1b_Ga=x,i=140;$b64\x1b\\');
         expect(
           replies,
           equals(['\x1b_Gi=140;EINVAL:unsupported action\x1b\\']),
