@@ -280,10 +280,15 @@ void main() {
         final tempFile = File(
           '${Directory.systemTemp.path}/tty-graphics-protocol-fterm-settings-$pid.rgba',
         )..writeAsBytesSync(const [10, 20, 30, 255]);
+        final regularFile = File(
+          '${Directory.systemTemp.path}/fterm-regular-file-settings-$pid.rgba',
+        )..writeAsBytesSync(const [40, 50, 60, 255]);
         addTearDown(() {
           if (tempFile.existsSync()) tempFile.deleteSync();
+          if (regularFile.existsSync()) regularFile.deleteSync();
         });
         final tmpB64 = base64Encode(utf8.encode(tempFile.path));
+        final regB64 = base64Encode(utf8.encode(regularFile.path));
 
         final backends = <_FakeRoutedBackend>[];
         final router = PtyRouter();
@@ -320,12 +325,16 @@ void main() {
         expect(backends, hasLength(1));
         final firstBackend = backends.first;
 
-        // Default is enabled -> a=q,t=t succeeds.
+        // Default is enabled -> a=q,t=t and a=q,t=f succeed.
         firstBackend.emitOutput(
-          '\x1b_Ga=q,f=32,s=1,v=1,i=401,t=t;$tmpB64\x1b\\',
+          '\x1b_Ga=q,f=32,s=1,v=1,i=401,t=t;$tmpB64\x1b\\'
+          '\x1b_Ga=q,f=32,s=1,v=1,i=403,t=f;$regB64\x1b\\',
         );
         await tester.pump();
-        expect(firstBackend.replies, equals(<String>['\x1b_Gi=401;OK\x1b\\']));
+        expect(
+          firstBackend.replies,
+          equals(<String>['\x1b_Gi=401;OK\x1b\\', '\x1b_Gi=403;OK\x1b\\']),
+        );
 
         final palette = FtermOverlayPalette.fromTerminalTheme(
           ws.activeTerminalTheme,
@@ -350,7 +359,7 @@ void main() {
           ),
         );
 
-        // Linux desktop: both t=t and t=s toggles are visible under System.
+        // Linux desktop: t=t, t=f, and t=s toggles are visible under System.
         await tester.pumpWidget(
           buildSystemSection(isWeb: false, platform: .linux),
         );
@@ -363,30 +372,40 @@ void main() {
           findsOneWidget,
         );
         expect(
+          find.byKey(const ValueKey('settings-kitty-file-medium')),
+          findsOneWidget,
+        );
+        expect(
           find.byKey(const ValueKey('settings-kitty-shared-memory')),
           findsOneWidget,
         );
 
-        // Toggle Temp File Medium OFF -> live pane immediately rejects t=t.
+        // Toggle Temp File Medium and Regular File Medium OFF -> live pane immediately rejects both.
         await tester.tap(
           find.byKey(const ValueKey('settings-kitty-temp-file')),
         );
+        await tester.tap(
+          find.byKey(const ValueKey('settings-kitty-file-medium')),
+        );
         await tester.pump();
         expect(ws.preferences.kittyTempFileMedium, isFalse);
+        expect(ws.preferences.kittyFileMedium, isFalse);
 
         firstBackend.replies.clear();
         firstBackend.emitOutput(
-          '\x1b_Ga=q,f=32,s=1,v=1,i=402,t=t;$tmpB64\x1b\\',
+          '\x1b_Ga=q,f=32,s=1,v=1,i=402,t=t;$tmpB64\x1b\\'
+          '\x1b_Ga=q,f=32,s=1,v=1,i=404,t=f;$regB64\x1b\\',
         );
         await tester.pump();
         expect(
           firstBackend.replies,
           equals(<String>[
             '\x1b_Gi=402;EINVAL:unsupported transmission medium\x1b\\',
+            '\x1b_Gi=404;EINVAL:unsupported transmission medium\x1b\\',
           ]),
         );
 
-        // Toggle Shared Memory OFF too and verify newly opened shell inherits both.
+        // Toggle Shared Memory OFF too and verify newly opened shell inherits all three.
         await tester.tap(
           find.byKey(const ValueKey('settings-kitty-shared-memory')),
         );
@@ -397,17 +416,20 @@ void main() {
         expect(backends, hasLength(2));
         final sessions = router.sessions.values.toList();
         expect(sessions.last.terminal.allowLocalKittyMedia, isFalse);
+        expect(sessions.last.terminal.allowLocalKittyFiles, isFalse);
         expect(sessions.last.terminal.allowLocalKittyShm, isFalse);
 
         // Resetting settings restores defaults and re-enables active shells live.
         ws.resetSettingsToDefaults();
         await tester.pump();
         expect(ws.preferences.kittyTempFileMedium, isTrue);
+        expect(ws.preferences.kittyFileMedium, isTrue);
         expect(ws.preferences.kittySharedMemoryMedium, isTrue);
         expect(sessions.last.terminal.allowLocalKittyMedia, isTrue);
+        expect(sessions.last.terminal.allowLocalKittyFiles, isTrue);
         expect(sessions.last.terminal.allowLocalKittyShm, isTrue);
 
-        // Windows desktop shows t=t and hides POSIX t=s.
+        // Windows desktop shows t=t and t=f and hides POSIX t=s.
         await tester.pumpWidget(
           buildSystemSection(isWeb: false, platform: .windows),
         );
@@ -417,6 +439,10 @@ void main() {
         );
         expect(
           find.byKey(const ValueKey('settings-kitty-temp-file')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('settings-kitty-file-medium')),
           findsOneWidget,
         );
         expect(
@@ -550,6 +576,21 @@ void main() {
             '\x1b]5522;type=read:status=DATA:mime=$plainMimeB64:id=r2;'
                 '${base64Encode(utf8.encode('secret-clip'))}\x1b\\',
             '\x1b]5522;type=read:status=DONE:id=r2\x1b\\',
+          ]),
+        );
+
+        // Primary selection reads do not leak system clipboard text.
+        backend.replies.clear();
+        backend.emitOutput(
+          '\x1b]52;p;?\x1b\\'
+          '\x1b]5522;type=read:loc=primary:id=rp;$plainMimeB64\x1b\\',
+        );
+        await tester.pump();
+        expect(
+          backend.replies,
+          equals(<String>[
+            '\x1b]5522;type=read:status=OK:id=rp\x1b\\',
+            '\x1b]5522;type=read:status=DONE:id=rp\x1b\\',
           ]),
         );
 

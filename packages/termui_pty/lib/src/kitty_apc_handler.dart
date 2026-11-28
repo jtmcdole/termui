@@ -464,13 +464,15 @@ final class KittyApcHandler {
       control['t'] ?? 'd';
 
   bool _isSupportedMedium(Map<String, String> control) =>
-      switch (_parseMedium(control)) {
-        'd' => true,
-        't' => allowLocalMedia && platformSupportsKittyMedium('t'),
-        's' => allowLocalShm && platformSupportsKittyMedium('s'),
-        'f' => allowLocalFiles && platformSupportsKittyMedium('f'),
-        _ => false,
-      };
+      _isMediumAllowed(_parseMedium(control));
+
+  bool _isMediumAllowed(String medium) => switch (medium) {
+    'd' => true,
+    't' => allowLocalMedia && platformSupportsKittyMedium('t'),
+    's' => allowLocalShm && platformSupportsKittyMedium('s'),
+    'f' => allowLocalFiles && platformSupportsKittyMedium('f'),
+    _ => false,
+  };
 
   /// Returns whether [format] is a supported Kitty Graphics `f=` transmission code:
   /// [KittyImageData.formatRgb24] (`24`), [KittyImageData.formatRgba32] (`32`),
@@ -680,7 +682,7 @@ final class KittyApcHandler {
     );
   }
 
-  static Uint8List _readMediumBytes(
+  Uint8List _readMediumBytes(
     String medium,
     Uint8List decoded, {
     required int dataOffset,
@@ -689,6 +691,9 @@ final class KittyApcHandler {
     bool Function(Uint8List bytes)? shouldUnlink,
   }) {
     if (medium == 'd') return decoded;
+    if (!_isMediumAllowed(medium)) {
+      throw const _UnsupportedMediumException();
+    }
     return switch (readPlatformKittyMedium(
       medium,
       decoded,

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -239,6 +240,8 @@ final class VirtualTerminal implements TerminalHandler {
 
   static final RegExp _whitespaceRegex = RegExp(r'\s+');
   static final RegExp _conEmuOsc9Regex = RegExp(r'^\d+;');
+  static final RegExp _osc52ReadSelectionRegex = RegExp(r'^[cpsq0-7]{1,8}$');
+  static const int _maxQueuedReplies = 256;
   static const int _maxOsc52PayloadLength = 1_400_000;
   static const int _maxOsc52DecodedBytes = 1_048_576;
   static const int _maxTitleStackDepth = 20;
@@ -890,13 +893,13 @@ final class VirtualTerminal implements TerminalHandler {
   /// Emits a Kitty `OSC 99` activation event reply (`\x1b]99;i=<id>;\x1b\\`) via [onReply].
   void reportNotificationActivated(String id) {
     final safeId = _sanitizeOsc99Id(id);
-    onReply?.call('\x1b]99;i=$safeId;\x1b\\');
+    _emitReply('\x1b]99;i=$safeId;\x1b\\');
   }
 
   /// Emits a Kitty `OSC 99` close event reply (`\x1b]99;i=<id>:p=close;\x1b\\`) via [onReply].
   void reportNotificationClosed(String id) {
     final safeId = _sanitizeOsc99Id(id);
-    onReply?.call('\x1b]99;i=$safeId:p=close;\x1b\\');
+    _emitReply('\x1b]99;i=$safeId:p=close;\x1b\\');
   }
 
   final Map<String, _PendingOsc99> _pendingOsc99 = {};
@@ -905,7 +908,58 @@ final class VirtualTerminal implements TerminalHandler {
   bool _allowLocalKittyShm;
   bool _allowLocalKittyFiles;
   bool _disposed = false;
+  bool _drainingReplyQueue = false;
+  int _clipboardReadEpoch = 0;
+  final Queue<_ReplyQueueEntry> _replyQueue = Queue<_ReplyQueueEntry>();
   KittyApcHandler? _kittyApcHandlerInstance;
+
+  void _emitReply(String reply) {
+    if (_disposed) return;
+    if (_drainingReplyQueue || _replyQueue.isNotEmpty) {
+      if (_replyQueue.length < _maxQueuedReplies) {
+        _replyQueue.addLast(_ReplyQueueEntry.ready(reply));
+      }
+      return;
+    }
+    onReply?.call(reply);
+  }
+
+  _ReplyQueueEntry? _enqueuePendingAsyncReply() {
+    if (_replyQueue.length >= _maxQueuedReplies) return null;
+    final entry = _ReplyQueueEntry.pending();
+    _replyQueue.addLast(entry);
+    return entry;
+  }
+
+  void _finishAsyncReplySlot(_ReplyQueueEntry? slot, List<String> replies) {
+    if (slot != null) {
+      slot.replies = replies;
+      slot.ready = true;
+      _drainReplyQueue();
+      return;
+    }
+    for (final reply in replies) {
+      _emitReply(reply);
+    }
+  }
+
+  void _drainReplyQueue() {
+    if (_drainingReplyQueue) return;
+    _drainingReplyQueue = true;
+    try {
+      while (!_disposed && _replyQueue.isNotEmpty && _replyQueue.first.ready) {
+        final entry = _replyQueue.removeFirst();
+        final replies = entry.replies;
+        if (replies == null) continue;
+        for (final reply in replies) {
+          if (_disposed) return;
+          onReply?.call(reply);
+        }
+      }
+    } finally {
+      _drainingReplyQueue = false;
+    }
+  }
 
   /// Whether local Kitty Graphics Protocol transmission media (`t=t` temp files
   /// and, unless [allowLocalKittyShm] overrides it, `t=s` POSIX shared memory)
@@ -949,7 +1003,7 @@ final class VirtualTerminal implements TerminalHandler {
   KittyApcHandler get _kittyApcHandler =>
       _kittyApcHandlerInstance ??= KittyApcHandler(
         registry: imageRegistry,
-        onReply: (reply) => onReply?.call(reply),
+        onReply: _emitReply,
         onPlaceVirtual: _placeVirtualImage,
         onClearPlacements: _clearKittyPlacements,
         cellPixelSize: () => (_cellPixelWidth, _cellPixelHeight),
@@ -1330,6 +1384,8 @@ final class VirtualTerminal implements TerminalHandler {
   /// Disposes of resources.
   void dispose() {
     _disposed = true;
+    _clipboardReadEpoch++;
+    _replyQueue.clear();
     _syncSafetyTimer?.cancel();
     _syncSafetyTimer = null;
     _pendingOsc99.clear();
@@ -1454,6 +1510,8 @@ final class VirtualTerminal implements TerminalHandler {
     _scrollTop = 0;
     _scrollBottom = height - 1;
     if (fullReset) {
+      _clipboardReadEpoch++;
+      _replyQueue.clear();
       _osc4Overrides.clear();
       _osc10Override = null;
       _osc11Override = null;
@@ -2714,7 +2772,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _replyColorScheme() {
     final mode = _colorScheme == .light ? 2 : 1;
-    onReply?.call('\x1b[?997;${mode}n');
+    _emitReply('\x1b[?997;${mode}n');
   }
 
   void _applyDecPrivateModeParam(int param, bool enable) {
@@ -2769,7 +2827,7 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   void _replyWindowResize() {
-    onReply?.call(
+    _emitReply(
       '\x1b[48;$height;$width;${height * _cellPixelHeight};${width * _cellPixelWidth}t',
     );
   }
@@ -2887,7 +2945,7 @@ final class VirtualTerminal implements TerminalHandler {
   ) {
     switch ((intermediate, command)) {
       case ('?', 'u'):
-        onReply?.call('\x1b[?${kittyKeyboardFlags}u');
+        _emitReply('\x1b[?${kittyKeyboardFlags}u');
       case ('>', 'u'):
         _markDirty();
         _pushKittyKeyboard(params);
@@ -2903,10 +2961,10 @@ final class VirtualTerminal implements TerminalHandler {
         _markDirty();
         _resetState(fullReset: false);
       case ('>', 'c'):
-        if (_isZeroOrEmptyParam(params)) onReply?.call('\x1b[>1;10;0c');
+        if (_isZeroOrEmptyParam(params)) _emitReply('\x1b[>1;10;0c');
       case ('>', 'q'):
         if (_isZeroOrEmptyParam(params)) {
-          onReply?.call('\x1bP>|termui(0.8.3)\x1b\\');
+          _emitReply('\x1bP>|termui(0.8.3)\x1b\\');
         }
       case (r'?$', 'p'):
         _replyDecrqm(params, decPrivate: true);
@@ -2987,10 +3045,10 @@ final class VirtualTerminal implements TerminalHandler {
   bool _tryHandleQueryCsi(String command, List<int> params) {
     switch (command) {
       case 'c':
-        if (_isZeroOrEmptyParam(params)) onReply?.call('\x1b[?62;22c');
+        if (_isZeroOrEmptyParam(params)) _emitReply('\x1b[?62;22c');
       case 'n':
         if (params.length == 1 && params[0] == 5) {
-          onReply?.call('\x1b[0n');
+          _emitReply('\x1b[0n');
         } else if (params.length == 1 && params[0] == 6) {
           _replyCursorPosition(extended: false);
         }
@@ -3007,13 +3065,13 @@ final class VirtualTerminal implements TerminalHandler {
     final op = params[0];
     final target = params.length > 1 ? params[1] : 0;
     if (op == 14 && params.length == 1) {
-      onReply?.call(
+      _emitReply(
         '\x1b[4;${height * _cellPixelHeight};${width * _cellPixelWidth}t',
       );
     } else if (op == 16 && params.length == 1) {
-      onReply?.call('\x1b[6;$_cellPixelHeight;${_cellPixelWidth}t');
+      _emitReply('\x1b[6;$_cellPixelHeight;${_cellPixelWidth}t');
     } else if (op == 18 && params.length == 1) {
-      onReply?.call('\x1b[8;$height;${width}t');
+      _emitReply('\x1b[8;$height;${width}t');
     } else if (op == 22) {
       _pushTitleStack(target);
     } else if (op == 23) {
@@ -3047,24 +3105,22 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   void _replyCursorPosition({required bool extended}) {
-    final reply = onReply;
-    if (reply == null) return;
+    if (onReply == null) return;
     final row = _originMode
         ? cursorY.clamp(_scrollTop, _scrollBottom) - _scrollTop + 1
         : cursorY.clamp(0, height - 1) + 1;
     final col = cursorX.clamp(0, width - 1) + 1;
-    reply(extended ? '\x1b[?$row;$col;1R' : '\x1b[$row;${col}R');
+    _emitReply(extended ? '\x1b[?$row;$col;1R' : '\x1b[$row;${col}R');
   }
 
   void _replyDecrqm(List<int> params, {required bool decPrivate}) {
-    final reply = onReply;
-    if (reply == null || params.length != 1) return;
+    if (onReply == null || params.length != 1) return;
     final mode = params[0];
     final pm = decPrivate
         ? _decPrivateModeStatus(mode)
         : (mode == 4 ? (_insertMode ? 1 : 2) : 0);
     final prefix = decPrivate ? '?' : '';
-    reply('\x1b[$prefix$mode;$pm\$y');
+    _emitReply('\x1b[$prefix$mode;$pm\$y');
   }
 
   int _decPrivateModeStatus(int mode) {
@@ -3530,8 +3586,7 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   void _handleXtgettcap(String body) {
-    final reply = onReply;
-    if (reply == null || body.isEmpty) return;
+    if (onReply == null || body.isEmpty) return;
     final tokens = body.split(';');
     final limit = math.min(tokens.length, _maxXtgettcapQueries);
     for (var i = 0; i < limit; i++) {
@@ -3539,14 +3594,14 @@ final class VirtualTerminal implements TerminalHandler {
       if (token.isEmpty) continue;
       final capName = _decodeHexAscii(token);
       if (capName == null) {
-        reply('\x1bP0+r\x1b\\');
+        _emitReply('\x1bP0+r\x1b\\');
         continue;
       }
       final value = _xtgettcapValues[capName];
       if (value != null) {
-        reply('\x1bP1+r$token=${_encodeHexAscii(value)}\x1b\\');
+        _emitReply('\x1bP1+r$token=${_encodeHexAscii(value)}\x1b\\');
       } else {
-        reply('\x1bP0+r$token\x1b\\');
+        _emitReply('\x1bP0+r$token\x1b\\');
       }
     }
   }
@@ -3580,17 +3635,16 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   void _handleDecrqss(String query) {
-    final reply = onReply;
-    if (reply == null) return;
+    if (onReply == null) return;
     switch (query) {
       case 'm':
-        reply('\x1bP1\$r${_formatActiveSgr()}m\x1b\\');
+        _emitReply('\x1bP1\$r${_formatActiveSgr()}m\x1b\\');
       case ' q':
-        reply('\x1bP1\$r${_cursorShapeCode(_cursorShape)} q\x1b\\');
+        _emitReply('\x1bP1\$r${_cursorShapeCode(_cursorShape)} q\x1b\\');
       case 'r':
-        reply('\x1bP1\$r${_scrollTop + 1};${_scrollBottom + 1}r\x1b\\');
+        _emitReply('\x1bP1\$r${_scrollTop + 1};${_scrollBottom + 1}r\x1b\\');
       default:
-        reply('\x1bP0\$r\x1b\\');
+        _emitReply('\x1bP0\$r\x1b\\');
     }
   }
 
@@ -3699,7 +3753,7 @@ final class VirtualTerminal implements TerminalHandler {
   void _replyShaderCapabilities() {
     final caps =
         shaderCapabilitiesProvider?.call() ?? defaultDisabledShaderCapabilities;
-    onReply?.call(
+    _emitReply(
       ShaderApcEncoder.encodeCapsReply(
         backend: caps.backend,
         glsl: caps.glsl,
@@ -4282,10 +4336,14 @@ final class VirtualTerminal implements TerminalHandler {
     _ => null,
   };
 
-  void _replyOsc5522(String type, String status, String id) {
+  static String _formatOsc5522Reply(String type, String status, String id) {
     final safeId = _sanitizeOsc99Id(id);
     final idSuffix = safeId.isEmpty ? '' : ':id=$safeId';
-    onReply?.call('\x1b]5522;type=$type:status=$status$idSuffix\x1b\\');
+    return '\x1b]5522;type=$type:status=$status$idSuffix\x1b\\';
+  }
+
+  void _replyOsc5522(String type, String status, String id) {
+    _emitReply(_formatOsc5522Reply(type, status, id));
   }
 
   static const String _osc5522PlainTextMimeB64 = 'dGV4dC9wbGFpbg==';
@@ -4319,9 +4377,8 @@ final class VirtualTerminal implements TerminalHandler {
     return full.sublist(0, end);
   }
 
-  void _emitOsc5522ReadReply(String id, String? text) {
-    if (_disposed) return;
-    _replyOsc5522('read', 'OK', id);
+  List<String> _buildOsc5522ReadReplies(String id, String? text) {
+    final replies = <String>[_formatOsc5522Reply('read', 'OK', id)];
     if (text != null && text.isNotEmpty) {
       final safeId = _sanitizeOsc99Id(id);
       final idSuffix = safeId.isEmpty ? '' : ':id=$safeId';
@@ -4331,13 +4388,34 @@ final class VirtualTerminal implements TerminalHandler {
       for (var i = 0; i < encoded.length; i += _osc5522DataChunkChars) {
         final end = math.min(i + _osc5522DataChunkChars, encoded.length);
         final chunk = encoded.substring(i, end);
-        onReply?.call(
+        replies.add(
           '\x1b]5522;type=read:status=DATA:mime=$_osc5522PlainTextMimeB64'
           '$idSuffix;$chunk\x1b\\',
         );
       }
     }
-    _replyOsc5522('read', 'DONE', id);
+    replies.add(_formatOsc5522Reply('read', 'DONE', id));
+    return replies;
+  }
+
+  void _completeAsyncOsc5522Read({
+    required int epoch,
+    required _ReplyQueueEntry? slot,
+    required String selection,
+    required String id,
+    required String? text,
+    required bool failed,
+  }) {
+    if (_disposed || epoch != _clipboardReadEpoch) return;
+    if (!_isClipboardReadPermitted()) {
+      onClipboardReadBlocked?.call(selection);
+      _finishAsyncReplySlot(slot, [_formatOsc5522Reply('read', 'EPERM', id)]);
+      return;
+    }
+    final replies = failed
+        ? [_formatOsc5522Reply('read', 'EIO', id)]
+        : _buildOsc5522ReadReplies(id, text);
+    _finishAsyncReplySlot(slot, replies);
   }
 
   void _handleOsc5522Read(
@@ -4363,19 +4441,35 @@ final class VirtualTerminal implements TerminalHandler {
     try {
       final result = reader(selection);
       if (result is Future<String?>) {
+        final epoch = _clipboardReadEpoch;
+        final slot = _enqueuePendingAsyncReply();
         unawaited(
           result.then(
-            (text) => _emitOsc5522ReadReply(meta.id, text),
-            onError: (_, _) {
-              if (!_disposed) _replyOsc5522('read', 'EIO', meta.id);
-            },
+            (text) => _completeAsyncOsc5522Read(
+              epoch: epoch,
+              slot: slot,
+              selection: selection,
+              id: meta.id,
+              text: text,
+              failed: false,
+            ),
+            onError: (_, _) => _completeAsyncOsc5522Read(
+              epoch: epoch,
+              slot: slot,
+              selection: selection,
+              id: meta.id,
+              text: null,
+              failed: true,
+            ),
           ),
         );
       } else {
-        _emitOsc5522ReadReply(meta.id, result);
+        for (final reply in _buildOsc5522ReadReplies(meta.id, result)) {
+          _emitReply(reply);
+        }
       }
     } on Object {
-      if (!_disposed) _replyOsc5522('read', 'EIO', meta.id);
+      _replyOsc5522('read', 'EIO', meta.id);
     }
   }
 
@@ -4575,7 +4669,7 @@ final class VirtualTerminal implements TerminalHandler {
       final spec = parts[i + 1].trim();
       if (spec == '?') {
         final color = _resolveIndexedColor(index);
-        onReply?.call('\x1b]4;$index;${_formatX11Rgb(color)}\x1b\\');
+        _emitReply('\x1b]4;$index;${_formatX11Rgb(color)}\x1b\\');
         continue;
       }
       final parsed = _parseX11Color(spec);
@@ -4614,7 +4708,7 @@ final class VirtualTerminal implements TerminalHandler {
       final spec = parts[i].trim();
       if (spec == '?') {
         final color = _effectiveDynamicColor(code);
-        onReply?.call('\x1b]$code;${_formatX11Rgb(color)}\x1b\\');
+        _emitReply('\x1b]$code;${_formatX11Rgb(color)}\x1b\\');
         continue;
       }
       final parsed = _parseX11Color(spec);
@@ -4703,7 +4797,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _replyOsc22Query(String queryBody) {
     if (queryBody.isEmpty) {
-      onReply?.call('\x1b]22;\x1b\\');
+      _emitReply('\x1b]22;\x1b\\');
       return;
     }
     final results = <String>[];
@@ -4719,7 +4813,7 @@ final class VirtualTerminal implements TerminalHandler {
         results.add(MousePointer.fromOsc22Name(token) != null ? '1' : '0');
       }
     }
-    onReply?.call('\x1b]22;${results.join(',')}\x1b\\');
+    _emitReply('\x1b]22;${results.join(',')}\x1b\\');
   }
 
   static ({bool valid, String? value}) _parseOsc22Shape(String raw) {
@@ -4787,7 +4881,7 @@ final class VirtualTerminal implements TerminalHandler {
     if (meta.payloadType == '?') {
       final safeId = _sanitizeOsc99Id(meta.id);
       final idPrefix = safeId.isEmpty ? '' : 'i=$safeId:';
-      onReply?.call(
+      _emitReply(
         '\x1b]99;${idPrefix}p=?;a=report:c=1:p=title,body,close,?\x1b\\',
       );
       return;
@@ -4951,12 +5045,31 @@ final class VirtualTerminal implements TerminalHandler {
     return int.tryParse(token);
   }
 
-  void _emitOsc52ReadReply(String selection, String? text) {
-    if (_disposed || text == null) return;
+  static String? _formatOsc52ReadReply(String selection, String? text) {
+    if (text == null) return null;
     final encoded = base64Encode(
       _encodeBoundedClipboardUtf8(text, _maxOsc52DecodedBytes),
     );
-    onReply?.call('\x1b]52;$selection;$encoded\x1b\\');
+    return '\x1b]52;$selection;$encoded\x1b\\';
+  }
+
+  void _completeAsyncOsc52Read({
+    required int epoch,
+    required _ReplyQueueEntry? slot,
+    required String selection,
+    required String? text,
+  }) {
+    if (_disposed || epoch != _clipboardReadEpoch) return;
+    if (!_isClipboardReadPermitted()) {
+      onClipboardReadBlocked?.call(selection);
+      _finishAsyncReplySlot(slot, const <String>[]);
+      return;
+    }
+    final reply = _formatOsc52ReadReply(selection, text);
+    _finishAsyncReplySlot(
+      slot,
+      reply == null ? const <String>[] : <String>[reply],
+    );
   }
 
   void _dispatchOsc52Read(String selection) {
@@ -4964,14 +5077,27 @@ final class VirtualTerminal implements TerminalHandler {
     try {
       final result = reader(selection);
       if (result is Future<String?>) {
+        final epoch = _clipboardReadEpoch;
+        final slot = _enqueuePendingAsyncReply();
         unawaited(
           result.then(
-            (text) => _emitOsc52ReadReply(selection, text),
-            onError: (_, _) {},
+            (text) => _completeAsyncOsc52Read(
+              epoch: epoch,
+              slot: slot,
+              selection: selection,
+              text: text,
+            ),
+            onError: (_, _) => _completeAsyncOsc52Read(
+              epoch: epoch,
+              slot: slot,
+              selection: selection,
+              text: null,
+            ),
           ),
         );
       } else {
-        _emitOsc52ReadReply(selection, result);
+        final reply = _formatOsc52ReadReply(selection, result);
+        if (reply != null) _emitReply(reply);
       }
     } on Object {
       // Ignore host clipboard read errors.
@@ -4986,6 +5112,7 @@ final class VirtualTerminal implements TerminalHandler {
     final selection = rawSelection.isEmpty ? 'c' : rawSelection;
     final body = payload.substring(semi + 1).trim();
     if (body == '?') {
+      if (!_osc52ReadSelectionRegex.hasMatch(selection)) return;
       if (!_isClipboardReadPermitted()) {
         onClipboardReadBlocked?.call(selection);
         return;
@@ -5088,4 +5215,13 @@ final class _ParserStringSink extends StringConversionSinkBase {
 
   @override
   void close() {}
+}
+
+final class _ReplyQueueEntry {
+  bool ready;
+  List<String>? replies;
+
+  _ReplyQueueEntry.pending() : ready = false;
+
+  _ReplyQueueEntry.ready(String reply) : ready = true, replies = [reply];
 }
