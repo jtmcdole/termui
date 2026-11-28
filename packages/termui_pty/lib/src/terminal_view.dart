@@ -410,6 +410,7 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
       rowLength,
       underlineColors: sbLine.underlineColors,
       uris: sbLine.uris,
+      textSizing: sbLine.textSizing,
     );
   }
 
@@ -434,6 +435,10 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
         buffer.attributes[tAttrIdx + 2] = sbLine.attributes[sAttrIdx + 2];
         buffer.setUnderlineColorAt(tIdx, sbLine.underlineColors?[i] ?? 0);
         buffer.setUriAt(tIdx, sbLine.uris?[i]);
+        buffer.setTextSizingAt(
+          tIdx,
+          sbLine.textSizing?[i] ?? KittyTextSizing.none,
+        );
       }
     }
   }

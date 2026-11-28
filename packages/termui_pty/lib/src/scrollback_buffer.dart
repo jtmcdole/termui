@@ -31,6 +31,9 @@ final class ScrollbackLine {
   /// Optional per-cell OSC 8 hyperlink URIs (`null` when all `null`).
   final List<String?>? uris;
 
+  /// Optional per-cell `OSC 66` packed text sizing metadata (`null` when all `0`).
+  final Uint32List? textSizing;
+
   /// Whether this row began via right-margin auto-wrap from the preceding row.
   final bool isWrapped;
 
@@ -41,6 +44,7 @@ final class ScrollbackLine {
     required this.attributes,
     this.underlineColors,
     this.uris,
+    this.textSizing,
     this.isWrapped = false,
   }) : _glyphCells = _wrapCharacters(characters),
        assert(attributes.length == characters.length * 3);
@@ -51,6 +55,7 @@ final class ScrollbackLine {
     required this.attributes,
     this.underlineColors,
     this.uris,
+    this.textSizing,
     this.isWrapped = false,
   }) : _glyphCells = glyphCells,
        assert(attributes.length == glyphCells.length * 3);
@@ -63,6 +68,7 @@ final class ScrollbackLine {
     required Uint32List attributes,
     Uint32List? underlineColors,
     List<String?>? uris,
+    Uint32List? textSizing,
     bool isWrapped = false,
   }) => ScrollbackLine._(
     width: width,
@@ -70,6 +76,7 @@ final class ScrollbackLine {
     attributes: attributes,
     underlineColors: underlineColors,
     uris: uris,
+    textSizing: textSizing,
     isWrapped: isWrapped,
   );
 
@@ -112,6 +119,7 @@ final class ScrollbackLine {
       attributes: attrs,
       underlineColors: buffer.sliceUnderlineColors(rowStart, rowEnd),
       uris: buffer.sliceUris(rowStart, rowEnd),
+      textSizing: buffer.sliceTextSizing(rowStart, rowEnd),
       isWrapped: isWrapped,
     );
   }
@@ -128,7 +136,8 @@ final class ScrollbackLine {
   static bool _isDefaultBlankCell(Buffer buffer, int cellIdx) {
     if (buffer.glyphCodes[cellIdx] != GlyphCellList.spaceCode) return false;
     if (buffer.getUnderlineColorAt(cellIdx) != 0 ||
-        buffer.getUriAt(cellIdx) != null) {
+        buffer.getUriAt(cellIdx) != null ||
+        buffer.getTextSizingAt(cellIdx) != KittyTextSizing.none) {
       return false;
     }
     final attrIdx = cellIdx * 3;
