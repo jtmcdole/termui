@@ -919,6 +919,7 @@ final class VirtualTerminal implements TerminalHandler {
         cursorPosition: () => (cursorX, cursorY),
         viewportSize: () => (width, height),
         isAltScreen: () => _usingAltScreen,
+        resolvePendingWrap: _resolvePendingWrapBeforeWrite,
         onAdvanceCursor: _advanceCursorForKittyPlacement,
         onClearPlacementsAt: _clearKittyPlacementsAt,
         allowLocalMedia: _allowLocalKittyMedia,
@@ -4149,8 +4150,9 @@ final class VirtualTerminal implements TerminalHandler {
     required int actualRows,
   }) {
     final active = buffer;
-    final (fgArg, bgArg, modArg, bgTransparent) = _resolvePrintAttributes(text);
-    final spaceMod = bgTransparent ? (modArg | Modifier.transparent) : modArg;
+    final (fgArg, bgArg, rawModArg, _) = _resolvePrintAttributes(text);
+    final modArg = rawModArg & ~Modifier.transparent;
+    final spaceMod = modArg;
     final ulColor = _resolveOscColorArg(_currentStyle.underlineColor, null);
     final uri = _activeUri;
     for (var dy = 0; dy < actualRows; dy++) {
