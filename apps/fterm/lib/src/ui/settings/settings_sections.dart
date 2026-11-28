@@ -946,6 +946,14 @@ final class SettingsSystemSection extends StatelessWidget {
         resolvedCapabilities.isWindowsDesktop &&
         filter.showItem('system-gpu-driver');
     final showPerfHud = filter.showItem('system-perf-hud');
+    final showKittyTempFile =
+        resolvedCapabilities.hasLocalDesktopShell &&
+        filter.showItem('system-kitty-temp-file');
+    final showKittySharedMemory =
+        resolvedCapabilities.hasLocalDesktopShell &&
+        (resolvedCapabilities.isLinuxDesktop ||
+            resolvedCapabilities.isMacOsDesktop) &&
+        filter.showItem('system-kitty-shared-memory');
 
     return SettingsSpacedColumn(
       children: [
@@ -958,6 +966,16 @@ final class SettingsSystemSection extends StatelessWidget {
             filter: filter,
             showPerfHud: showPerfHud,
             showGpuDriver: showGpuDriver,
+          ),
+        if (filter.showPanel('system-kitty-media') &&
+            (showKittyTempFile || showKittySharedMemory))
+          _SystemKittyMediaPanel(
+            workspace: workspace,
+            palette: palette,
+            capabilities: resolvedCapabilities,
+            filter: filter,
+            showTempFile: showKittyTempFile,
+            showSharedMemory: showKittySharedMemory,
           ),
         if (filter.showPanel('system-sound'))
           _SystemSoundPanel(
@@ -1007,6 +1025,53 @@ final class _SystemGraphicsPanel extends StatelessWidget {
           ),
         if (showGpuDriver)
           _GpuDriverPreferenceRow(
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
+      ],
+    ),
+  );
+}
+
+final class _SystemKittyMediaPanel extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final FtermOverlayPalette palette;
+  final FtermCapabilityContext capabilities;
+  final SettingsPanelFilter filter;
+  final bool showTempFile;
+  final bool showSharedMemory;
+
+  const _SystemKittyMediaPanel({
+    required this.workspace,
+    required this.palette,
+    required this.capabilities,
+    required this.filter,
+    required this.showTempFile,
+    required this.showSharedMemory,
+  });
+
+  @override
+  Widget build(BuildContext context) => BlenderSettingsPanel(
+    id: 'system-kitty-media',
+    title: 'Kitty Graphics Media',
+    categoryBreadcrumb: filter.categoryBreadcrumb,
+    expanded: filter.panelExpanded('system-kitty-media'),
+    onToggleExpanded: filter.toggleFor('system-kitty-media'),
+    palette: palette,
+    child: SettingsSpacedColumn(
+      spacing: 8,
+      children: [
+        if (showTempFile)
+          _renderSettingRow(
+            'system-kitty-temp-file',
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
+        if (showSharedMemory)
+          _renderSettingRow(
+            'system-kitty-shared-memory',
             workspace: workspace,
             palette: palette,
             capabilities: capabilities,

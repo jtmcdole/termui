@@ -310,6 +310,14 @@ final class FtermPreferences {
   /// ahead of `fterm` shortcuts and terminal input.
   final List<KeyChord> passthroughShortcuts;
 
+  /// Whether local desktop shells allow Kitty Graphics Protocol temp-file
+  /// transfers (`APC t=t`).
+  final bool kittyTempFileMedium;
+
+  /// Whether local POSIX desktop shells allow Kitty Graphics Protocol
+  /// shared-memory transfers (`APC t=s`).
+  final bool kittySharedMemoryMedium;
+
   /// Creates immutable [FtermPreferences].
   const FtermPreferences({
     this.audioMuted = false,
@@ -342,6 +350,8 @@ final class FtermPreferences {
     this.trustedCliShaderHashes = const <String>{},
     this.metaKeyMode = .auto,
     this.passthroughShortcuts = const [],
+    this.kittyTempFileMedium = true,
+    this.kittySharedMemoryMedium = true,
   });
 
   /// Returns [fontSize] (or [fallback] when unset), clamped to
@@ -391,6 +401,8 @@ final class FtermPreferences {
     Set<String>? trustedCliShaderHashes,
     FtermMetaKeyMode? metaKeyMode,
     List<KeyChord>? passthroughShortcuts,
+    bool? kittyTempFileMedium,
+    bool? kittySharedMemoryMedium,
   }) => FtermPreferences(
     audioMuted: audioMuted ?? this.audioMuted,
     audioVolume: (audioVolume ?? this.audioVolume).clamp(0.0, 1.0).toDouble(),
@@ -472,6 +484,9 @@ final class FtermPreferences {
     passthroughShortcuts: _normalizePassthroughShortcuts(
       passthroughShortcuts ?? this.passthroughShortcuts,
     ),
+    kittyTempFileMedium: kittyTempFileMedium ?? this.kittyTempFileMedium,
+    kittySharedMemoryMedium:
+        kittySharedMemoryMedium ?? this.kittySharedMemoryMedium,
   );
 
   static T? _resolveOptionalField<T>({
@@ -555,6 +570,14 @@ final class FtermPreferences {
     metaKeyMode: FtermMetaKeyMode.fromWireName(decoded['metaKeyMode']),
     passthroughShortcuts: _parsePassthroughShortcuts(
       decoded['passthroughShortcuts'],
+    ),
+    kittyTempFileMedium: _parseBool(
+      decoded['kittyTempFileMedium'],
+      fallback: true,
+    ),
+    kittySharedMemoryMedium: _parseBool(
+      decoded['kittySharedMemoryMedium'],
+      fallback: true,
     ),
   );
 
@@ -718,6 +741,8 @@ final class FtermPreferences {
     'passthroughShortcuts': [
       for (final chord in passthroughShortcuts) chord.toCanonicalString(),
     ],
+    'kittyTempFileMedium': kittyTempFileMedium,
+    'kittySharedMemoryMedium': kittySharedMemoryMedium,
   });
 
   @override
@@ -753,7 +778,9 @@ final class FtermPreferences {
           other.cliFullPaneShaderMode == cliFullPaneShaderMode &&
           setEquals(other.trustedCliShaderHashes, trustedCliShaderHashes) &&
           other.metaKeyMode == metaKeyMode &&
-          listEquals(other.passthroughShortcuts, passthroughShortcuts);
+          listEquals(other.passthroughShortcuts, passthroughShortcuts) &&
+          other.kittyTempFileMedium == kittyTempFileMedium &&
+          other.kittySharedMemoryMedium == kittySharedMemoryMedium;
 
   @override
   int get hashCode => Object.hashAll(<Object?>[
@@ -787,6 +814,8 @@ final class FtermPreferences {
     Object.hashAllUnordered(trustedCliShaderHashes),
     metaKeyMode,
     Object.hashAll(passthroughShortcuts),
+    kittyTempFileMedium,
+    kittySharedMemoryMedium,
   ]);
 }
 

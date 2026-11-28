@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -6,6 +7,36 @@ import 'package:termui/termui.dart';
 import 'package:termui_pty/src/kitty_shm_macos.dart';
 import 'package:termui_pty/termui_pty.dart';
 import 'package:test/test.dart';
+
+final class _FakeRoutedBackend implements RoutedPtyBackend {
+  final StreamController<Uint8List> _output =
+      StreamController<Uint8List>.broadcast();
+  final Completer<int> _exit = Completer<int>();
+  final List<String> written = [];
+
+  @override
+  Stream<Uint8List> get output => _output.stream;
+
+  @override
+  Future<int> get exitCode => _exit.future;
+
+  @override
+  void write(Uint8List bytes) => written.add(utf8.decode(bytes));
+
+  @override
+  void resize(int cols, int rows, {int pixelWidth = 0, int pixelHeight = 0}) {}
+
+  @override
+  void kill() {
+    if (!_exit.isCompleted) _exit.complete(0);
+  }
+
+  @override
+  Future<void> dispose() async {
+    kill();
+    await _output.close();
+  }
+}
 
 Uint8List _minimalPngBytes(int width, int height) {
   final header = BytesBuilder()
@@ -1159,6 +1190,65 @@ void main() {
           expect(icatShm.existsSync(), isFalse);
           expect(vt.imageRegistry.lookupImage(217)?.rgbaPixels, equals(rgba));
         }
+      },
+    );
+
+    test(
+      'Supports live runtime updates to allowLocalKittyMedia and allowLocalKittyShm on VirtualTerminal and PtyRouter',
+      () async {
+        final tempFile = File(
+          '${Directory.systemTemp.path}/tty-graphics-protocol-live-toggle-$pid.rgba',
+        )..writeAsBytesSync(const [1, 2, 3, 4]);
+        addTearDown(() {
+          if (tempFile.existsSync()) tempFile.deleteSync();
+        });
+        final tmpB64 = base64Encode(utf8.encode(tempFile.path));
+
+        final replies = <String>[];
+        final vt = VirtualTerminal(
+          width: 40,
+          height: 10,
+          allowLocalKittyMedia: true,
+          allowLocalKittyShm: false,
+          onReply: replies.add,
+        );
+        expect(vt.allowLocalKittyMedia, isTrue);
+        expect(vt.allowLocalKittyShm, isFalse);
+
+        // Enabled -> a=q,t=t succeeds.
+        vt.writeString('\x1b_Ga=q,f=32,s=1,v=1,i=301,t=t;$tmpB64\x1b\\');
+        expect(replies, equals(['\x1b_Gi=301;OK\x1b\\']));
+
+        // Live toggle off -> subsequent a=q,t=t is immediately rejected.
+        replies.clear();
+        vt.allowLocalKittyMedia = false;
+        expect(vt.allowLocalKittyMedia, isFalse);
+        vt.writeString('\x1b_Ga=q,f=32,s=1,v=1,i=302,t=t;$tmpB64\x1b\\');
+        expect(
+          replies,
+          equals(['\x1b_Gi=302;EINVAL:unsupported transmission medium\x1b\\']),
+        );
+
+        // Live toggle back on -> succeeds again.
+        replies.clear();
+        vt.allowLocalKittyMedia = true;
+        vt.allowLocalKittyShm = true;
+        expect(vt.allowLocalKittyShm, isTrue);
+        vt.writeString('\x1b_Ga=q,f=32,s=1,v=1,i=303,t=t;$tmpB64\x1b\\');
+        expect(replies, equals(['\x1b_Gi=303;OK\x1b\\']));
+
+        // PtyRouter forwards independent allowLocalKittyMedia and allowLocalKittyShm.
+        final router = PtyRouter();
+        addTearDown(router.dispose);
+        final backend = _FakeRoutedBackend();
+        addTearDown(backend.dispose);
+        final session = router.createSession(
+          backend: backend,
+          allowLocalKittyMedia: true,
+          allowLocalKittyShm: false,
+        );
+        expect(session.terminal.allowLocalKittyMedia, isTrue);
+        expect(session.terminal.allowLocalKittyShm, isFalse);
       },
     );
   });

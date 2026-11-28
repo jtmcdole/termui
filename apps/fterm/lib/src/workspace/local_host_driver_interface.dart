@@ -42,6 +42,14 @@ final class LocalShellConfig {
   /// Maximum primary scrollback lines retained in the local [PtyRouter].
   final int maxScrollbackLines;
 
+  /// Whether Kitty Graphics Protocol local temp-file transfers (`APC t=t`) are
+  /// permitted on the spawned local shell.
+  final bool allowLocalKittyMedia;
+
+  /// Whether Kitty Graphics Protocol POSIX shared-memory transfers (`APC t=s`)
+  /// are permitted on the spawned local shell.
+  final bool allowLocalKittyShm;
+
   /// Creates a local shell spawn configuration.
   const LocalShellConfig({
     this.executable,
@@ -54,6 +62,8 @@ final class LocalShellConfig {
     this.cellPixelHeight = 16,
     this.colorScheme = .dark,
     this.maxScrollbackLines = 5000,
+    this.allowLocalKittyMedia = true,
+    this.allowLocalKittyShm = true,
   });
 }
 
@@ -159,6 +169,19 @@ abstract interface class LocalPaneHost {
 abstract interface class PromptIndexedPaneHost implements LocalPaneHost {
   /// Monotonic line indices of OSC 133;A shell prompts in primary scrollback.
   List<int> get promptLines;
+}
+
+/// Opt-in [LocalPaneHost] capability allowing live runtime updates to Kitty
+/// Graphics Protocol local transmission media (`t=t` temp files and `t=s`
+/// POSIX shared memory).
+abstract interface class KittyMediaConfigurablePaneHost
+    implements LocalPaneHost {
+  /// Updates whether local temp-file (`t=t`) and POSIX shared-memory (`t=s`)
+  /// Kitty Graphics transfers are permitted on this local shell pane.
+  void setKittyLocalMediaPolicy({
+    required bool allowTempFiles,
+    required bool allowSharedMemory,
+  });
 }
 
 /// Platform seam spawning local interactive shells and optional relay shares.
