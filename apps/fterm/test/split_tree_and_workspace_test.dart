@@ -4134,20 +4134,91 @@ void _defineWave2HardeningTests() {
       expect(copied, isEmpty);
       workspace.setWindowFocused(true);
 
-      // 3. Policy = deny blocks focused pane p2.
-      workspace.setOsc52Policy(Osc52ClipboardPolicy.deny);
+      // 3. Disabling local clipboard writes blocks focused local pane p2,
+      //    while remote osc52Policy does not block local panes.
+      workspace.updatePreferences(
+        workspace.preferences.copyWith(localClipboardWrite: false),
+      );
       p2.emitClipboard('c', 'denied-text');
       expect(copied, isEmpty);
+      workspace.updatePreferences(
+        workspace.preferences.copyWith(localClipboardWrite: true),
+      );
+      workspace.setOsc52Policy(Osc52ClipboardPolicy.deny);
+      p2.emitClipboard('c', 'local-unaffected-by-remote-policy');
+      expect(copied, equals(['local-unaffected-by-remote-policy']));
+      copied.clear();
       workspace.setOsc52Policy(Osc52ClipboardPolicy.allowFocused);
 
       // 4. Oversized > 1 MiB payload is dropped.
       p2.emitClipboard('c', 'x' * (1024 * 1024 + 1));
       expect(copied, isEmpty);
 
-      // 5. Focused pane + active window + allowFocused policy + <= 1 MiB succeeds.
+      // 5. Focused pane + active window + allow local writes + <= 1 MiB succeeds.
       p2.emitClipboard('c', 'allowed-osc52');
       expect(copied, equals(['allowed-osc52']));
     });
+
+    test(
+      'remote OSC 52 clipboard writes respect workspace osc52Policy',
+      () async {
+        final copied = <String>[];
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+              if (call.method == 'Clipboard.setData') {
+                final args = call.arguments as Map<Object?, Object?>;
+                copied.add(args['text'] as String);
+              }
+              return null;
+            });
+        addTearDown(() {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(SystemChannels.platform, null);
+        });
+
+        final harness = AppThreeWayWsHarness();
+        addTearDown(harness.dispose);
+        final pty = await harness.startCaster(id: 'clip-remote', title: 'clip');
+
+        final workspace = FtermWorkspaceController(
+          launchConfig: CastLaunchConfig(token: harness.token),
+          repository: CastClientRepository(
+            transport: WsClientTransport(
+              serverUri: CastLaunchConfig.defaultServerUri,
+              token: harness.token,
+              channelFactory: harness.openClientChannel,
+            ),
+            enableReconnect: false,
+          ),
+          localHostDriver: _StubOnlyLocalHostDriver(),
+          audioController: FtermAudioController(
+            engineFactory: _FakeAudioEngine.new,
+          ),
+          storage: _InMemorySettingsStorage(),
+          resizeDebounce: Duration.zero,
+        );
+        addTearDown(workspace.dispose);
+
+        await workspace.start();
+        await _pumpUntil(() => workspace.tabs.isNotEmpty);
+        expect(
+          workspace.focusedPane?.remoteSessionId,
+          equals(const SessionId('clip-remote')),
+        );
+
+        final encodedDenied = base64Encode(utf8.encode('remote-denied'));
+        workspace.setOsc52Policy(Osc52ClipboardPolicy.deny);
+        pty.emitRawAnsi('\x1b]52;c;$encodedDenied\x1b\\');
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(copied, isEmpty);
+
+        final encodedAllowed = base64Encode(utf8.encode('remote-allowed'));
+        workspace.setOsc52Policy(Osc52ClipboardPolicy.allowFocused);
+        pty.emitRawAnsi('\x1b]52;c;$encodedAllowed\x1b\\');
+        await _pumpUntil(() => copied.isNotEmpty);
+        expect(copied, equals(['remote-allowed']));
+      },
+    );
 
     test('unfocused or background remote waveform queries return 256 zero samples while focused pane returns engine samples', () async {
       final harness = AppThreeWayWsHarness();

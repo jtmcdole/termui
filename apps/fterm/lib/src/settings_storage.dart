@@ -314,9 +314,21 @@ final class FtermPreferences {
   /// transfers (`APC t=t`).
   final bool kittyTempFileMedium;
 
+  /// Whether local desktop shells allow Kitty Graphics Protocol regular-file
+  /// transfers (`APC t=f`, non-unlinking).
+  final bool kittyFileMedium;
+
   /// Whether local POSIX desktop shells allow Kitty Graphics Protocol
   /// shared-memory transfers (`APC t=s`).
   final bool kittySharedMemoryMedium;
+
+  /// Whether focused local desktop shells may write to the system clipboard
+  /// via `OSC 52` or `OSC 5522`.
+  final bool localClipboardWrite;
+
+  /// Whether focused local desktop shells may read plain text from the system
+  /// clipboard via `OSC 52 ; ?` or `OSC 5522 ; type=read`.
+  final bool localClipboardRead;
 
   /// Creates immutable [FtermPreferences].
   const FtermPreferences({
@@ -351,7 +363,10 @@ final class FtermPreferences {
     this.metaKeyMode = .auto,
     this.passthroughShortcuts = const [],
     this.kittyTempFileMedium = true,
+    this.kittyFileMedium = true,
     this.kittySharedMemoryMedium = true,
+    this.localClipboardWrite = true,
+    this.localClipboardRead = false,
   });
 
   /// Returns [fontSize] (or [fallback] when unset), clamped to
@@ -402,7 +417,10 @@ final class FtermPreferences {
     FtermMetaKeyMode? metaKeyMode,
     List<KeyChord>? passthroughShortcuts,
     bool? kittyTempFileMedium,
+    bool? kittyFileMedium,
     bool? kittySharedMemoryMedium,
+    bool? localClipboardWrite,
+    bool? localClipboardRead,
   }) => FtermPreferences(
     audioMuted: audioMuted ?? this.audioMuted,
     audioVolume: (audioVolume ?? this.audioVolume).clamp(0.0, 1.0).toDouble(),
@@ -485,8 +503,11 @@ final class FtermPreferences {
       passthroughShortcuts ?? this.passthroughShortcuts,
     ),
     kittyTempFileMedium: kittyTempFileMedium ?? this.kittyTempFileMedium,
+    kittyFileMedium: kittyFileMedium ?? this.kittyFileMedium,
     kittySharedMemoryMedium:
         kittySharedMemoryMedium ?? this.kittySharedMemoryMedium,
+    localClipboardWrite: localClipboardWrite ?? this.localClipboardWrite,
+    localClipboardRead: localClipboardRead ?? this.localClipboardRead,
   );
 
   static T? _resolveOptionalField<T>({
@@ -575,9 +596,18 @@ final class FtermPreferences {
       decoded['kittyTempFileMedium'],
       fallback: true,
     ),
+    kittyFileMedium: _parseBool(decoded['kittyFileMedium'], fallback: true),
     kittySharedMemoryMedium: _parseBool(
       decoded['kittySharedMemoryMedium'],
       fallback: true,
+    ),
+    localClipboardWrite: _parseBool(
+      decoded['localClipboardWrite'],
+      fallback: true,
+    ),
+    localClipboardRead: _parseBool(
+      decoded['localClipboardRead'],
+      fallback: false,
     ),
   );
 
@@ -742,7 +772,10 @@ final class FtermPreferences {
       for (final chord in passthroughShortcuts) chord.toCanonicalString(),
     ],
     'kittyTempFileMedium': kittyTempFileMedium,
+    'kittyFileMedium': kittyFileMedium,
     'kittySharedMemoryMedium': kittySharedMemoryMedium,
+    'localClipboardWrite': localClipboardWrite,
+    'localClipboardRead': localClipboardRead,
   });
 
   @override
@@ -780,7 +813,10 @@ final class FtermPreferences {
           other.metaKeyMode == metaKeyMode &&
           listEquals(other.passthroughShortcuts, passthroughShortcuts) &&
           other.kittyTempFileMedium == kittyTempFileMedium &&
-          other.kittySharedMemoryMedium == kittySharedMemoryMedium;
+          other.kittyFileMedium == kittyFileMedium &&
+          other.kittySharedMemoryMedium == kittySharedMemoryMedium &&
+          other.localClipboardWrite == localClipboardWrite &&
+          other.localClipboardRead == localClipboardRead;
 
   @override
   int get hashCode => Object.hashAll(<Object?>[
@@ -815,7 +851,10 @@ final class FtermPreferences {
     metaKeyMode,
     Object.hashAll(passthroughShortcuts),
     kittyTempFileMedium,
+    kittyFileMedium,
     kittySharedMemoryMedium,
+    localClipboardWrite,
+    localClipboardRead,
   ]);
 }
 

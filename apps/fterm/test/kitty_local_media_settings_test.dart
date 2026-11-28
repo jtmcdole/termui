@@ -69,6 +69,7 @@ final class _FakeRoutedBackend implements RoutedPtyBackend {
 FtermWorkspaceController _createWorkspace({
   required _MemStorage storage,
   required IoLocalHostDriver driver,
+  Future<String?> Function()? clipboardReader,
 }) {
   final transport = WsClientTransport(
     serverUri: CastLaunchConfig.defaultServerUri,
@@ -87,6 +88,7 @@ FtermWorkspaceController _createWorkspace({
     shaderController: TerminalShaderController(
       backendFactory: (_) => const DisabledShaderBackend(),
     ),
+    clipboardReader: clipboardReader,
   );
 }
 
@@ -97,16 +99,25 @@ void main() {
       () {
         const defaults = FtermPreferences();
         expect(defaults.kittyTempFileMedium, isTrue);
+        expect(defaults.kittyFileMedium, isTrue);
         expect(defaults.kittySharedMemoryMedium, isTrue);
+        expect(defaults.localClipboardWrite, isTrue);
+        expect(defaults.localClipboardRead, isFalse);
 
-        // Missing keys in legacy JSON preserve defaults (`true`).
+        // Missing keys in legacy JSON preserve defaults.
         final legacy = FtermPreferences.fromJsonString('{"audioMuted":false}');
         expect(legacy.kittyTempFileMedium, isTrue);
+        expect(legacy.kittyFileMedium, isTrue);
         expect(legacy.kittySharedMemoryMedium, isTrue);
+        expect(legacy.localClipboardWrite, isTrue);
+        expect(legacy.localClipboardRead, isFalse);
 
         final disabled = defaults.copyWith(
           kittyTempFileMedium: false,
+          kittyFileMedium: false,
           kittySharedMemoryMedium: false,
+          localClipboardWrite: false,
+          localClipboardRead: true,
         );
         expect(disabled, isNot(equals(defaults)));
         final decoded = FtermPreferences.fromJsonString(
@@ -114,7 +125,10 @@ void main() {
         );
         expect(decoded, equals(disabled));
         expect(decoded.kittyTempFileMedium, isFalse);
+        expect(decoded.kittyFileMedium, isFalse);
         expect(decoded.kittySharedMemoryMedium, isFalse);
+        expect(decoded.localClipboardWrite, isFalse);
+        expect(decoded.localClipboardRead, isTrue);
       },
     );
 
@@ -195,6 +209,7 @@ void main() {
             searchIds(posix),
             containsAll(<String>[
               'system-kitty-temp-file',
+              'system-kitty-file-medium',
               'system-kitty-shared-memory',
             ]),
           );
@@ -202,31 +217,59 @@ void main() {
             paletteIds(posix),
             containsAll(<String>[
               'settings.toggle.kitty_temp_file',
+              'settings.toggle.kitty_file_medium',
               'settings.toggle.kitty_shared_memory',
+              'settings.toggle.local_clipboard_write',
+              'settings.toggle.local_clipboard_read',
             ]),
           );
         }
 
-        // Windows shows t=t temp files and hides POSIX t=s shared memory.
-        expect(searchIds(windowsDesktop), contains('system-kitty-temp-file'));
+        // Windows shows t=t and t=f and hides POSIX t=s shared memory.
+        expect(
+          searchIds(windowsDesktop),
+          containsAll(<String>[
+            'system-kitty-temp-file',
+            'system-kitty-file-medium',
+          ]),
+        );
         expect(
           searchIds(windowsDesktop),
           isNot(contains('system-kitty-shared-memory')),
         );
         expect(
           paletteIds(windowsDesktop),
-          contains('settings.toggle.kitty_temp_file'),
+          containsAll(<String>[
+            'settings.toggle.kitty_temp_file',
+            'settings.toggle.kitty_file_medium',
+          ]),
+        );
+        expect(
+          paletteIds(windowsDesktop),
+          isNot(contains('system-kitty-shared-memory')),
         );
         expect(
           paletteIds(windowsDesktop),
           isNot(contains('settings.toggle.kitty_shared_memory')),
         );
 
-        // Web hides both local media toggles.
+        // Web hides all local media and local clipboard toggles.
         expect(searchIds(webLinux), isNot(contains('system-kitty-temp-file')));
         expect(
           searchIds(webLinux),
+          isNot(contains('system-kitty-file-medium')),
+        );
+        expect(
+          searchIds(webLinux),
           isNot(contains('system-kitty-shared-memory')),
+        );
+        expect(
+          paletteIds(webLinux),
+          isNot(contains('settings.toggle.local_clipboard_write')),
+        );
+        expect(
+          paletteIds(webLinux),
+          isNot(contains('settings.toggle.local_clipboard_read')),
         );
       },
     );
@@ -388,6 +431,136 @@ void main() {
         expect(
           find.byKey(const ValueKey('settings-panel-system-kitty-media')),
           findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'SettingsInterfaceSection toggles local clipboard writes and reads live on active local shells',
+      (tester) async {
+        final backends = <_FakeRoutedBackend>[];
+        final router = PtyRouter();
+        final driver = IoLocalHostDriver(
+          router: router,
+          backendFactory:
+              ({
+                required executable,
+                required arguments,
+                required initialCols,
+                required initialRows,
+                required pixelWidth,
+                required pixelHeight,
+                workingDirectory,
+                environment,
+              }) {
+                final b = _FakeRoutedBackend();
+                backends.add(b);
+                return b;
+              },
+          ensureConPtyReady: ({
+            bool download = false,
+            void Function(String)? onWarning,
+          }) async => null,
+        );
+        final storage = _MemStorage();
+        final ws =
+            _createWorkspace(
+                storage: storage,
+                driver: driver,
+                clipboardReader: () async => 'secret-clip',
+              )
+              ..setWorkspaceVisible(true)
+              ..setWindowFocused(true);
+        addTearDown(() async {
+          await ws.dispose();
+          await driver.dispose();
+        });
+
+        await ws.openLocalShellTab();
+        final backend = backends.first;
+        const plainMimeB64 = 'dGV4dC9wbGFpbg==';
+
+        // Defaults: write allowed (DONE), read blocked (EPERM).
+        backend.emitOutput(
+          '\x1b]5522;type=write:mime=$plainMimeB64:id=w1;aGk=\x1b\\'
+          '\x1b]5522;type=read:id=r1;$plainMimeB64\x1b\\',
+        );
+        await tester.pump();
+        expect(
+          backend.replies,
+          equals(<String>[
+            '\x1b]5522;type=write:status=DONE:id=w1\x1b\\',
+            '\x1b]5522;type=read:status=EPERM:id=r1\x1b\\',
+          ]),
+        );
+
+        final palette = FtermOverlayPalette.fromTerminalTheme(
+          ws.activeTerminalTheme,
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ThemeData(platform: .linux),
+            home: Scaffold(
+              body: SingleChildScrollView(
+                child: ListenableBuilder(
+                  listenable: ws,
+                  builder: (_, _) => SettingsInterfaceSection(
+                    workspace: ws,
+                    palette: palette,
+                    isWeb: false,
+                    platformOverride: .linux,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        expect(
+          find.byKey(const ValueKey('settings-local-clipboard-write')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('settings-local-clipboard-read')),
+          findsOneWidget,
+        );
+
+        // Toggle Local Clipboard Writes OFF and Local Clipboard Reads ON.
+        await tester.tap(
+          find.byKey(const ValueKey('settings-local-clipboard-write')),
+        );
+        await tester.tap(
+          find.byKey(const ValueKey('settings-local-clipboard-read')),
+        );
+        await tester.pump();
+        expect(ws.preferences.localClipboardWrite, isFalse);
+        expect(ws.preferences.localClipboardRead, isTrue);
+
+        backend.replies.clear();
+        backend.emitOutput(
+          '\x1b]5522;type=write:mime=$plainMimeB64:id=w2;aGk=\x1b\\'
+          '\x1b]5522;type=read:id=r2;$plainMimeB64\x1b\\',
+        );
+        await tester.pump();
+        expect(
+          backend.replies,
+          equals(<String>[
+            '\x1b]5522;type=write:status=EPERM:id=w2\x1b\\',
+            '\x1b]5522;type=read:status=OK:id=r2\x1b\\',
+            '\x1b]5522;type=read:status=DATA:mime=$plainMimeB64:id=r2;'
+                '${base64Encode(utf8.encode('secret-clip'))}\x1b\\',
+            '\x1b]5522;type=read:status=DONE:id=r2\x1b\\',
+          ]),
+        );
+
+        // Unfocused window blocks reads even when Local Clipboard Reads is ON.
+        ws.setWindowFocused(false);
+        backend.replies.clear();
+        backend.emitOutput('\x1b]5522;type=read:id=r3;$plainMimeB64\x1b\\');
+        await tester.pump();
+        expect(
+          backend.replies,
+          equals(<String>['\x1b]5522;type=read:status=EPERM:id=r3\x1b\\']),
         );
       },
     );
