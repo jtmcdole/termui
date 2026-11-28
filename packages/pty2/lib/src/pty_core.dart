@@ -22,10 +22,17 @@ abstract interface class PtyCore {
   void onReaderClosed();
 
   PtyCoreWorker get worker;
+
+  PtyCoreWriter get writer;
 }
 
 abstract interface class PtyCoreWorker {
   Uint8List? read();
   int exitCodeBlocking();
+  void free();
+}
+
+abstract interface class PtyCoreWriter {
+  bool write(Uint8List data);
   void free();
 }

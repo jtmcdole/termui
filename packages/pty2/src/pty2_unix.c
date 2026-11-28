@@ -405,6 +405,11 @@ PTY2_EXPORT int32_t pty2_spawn_unix(
     return -3;
   }
 
+  int ptm_flags = fcntl(ptm, F_GETFL, 0);
+  if (ptm_flags >= 0) {
+    (void)fcntl(ptm, F_SETFL, ptm_flags | O_NONBLOCK);
+  }
+
   *out_ptm = (int32_t)ptm;
   *out_status_fd = (int32_t)status_pipe[0];
   *out_shim_pid = (int32_t)shim_pid;

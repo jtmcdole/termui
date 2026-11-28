@@ -231,6 +231,45 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     });
   }
 
+  static const _pipeBufferSize = 65536;
+
+  static void _markWriteStopped(
+    Pointer<IntPtr> pLock,
+    Pointer<IntPtr> pWriteStopped,
+  ) {
+    if (pWriteStopped.address == 0) return;
+    _withLock(pLock, () {
+      pWriteStopped.value = 1;
+    });
+  }
+
+  static void _cancelPendingInputWrites(
+    Pointer<IntPtr> pLock,
+    Pointer<IntPtr> pInputWriteSide,
+  ) {
+    if (pInputWriteSide.address == 0) return;
+    _withLock(pLock, () {
+      final handle = pInputWriteSide.value;
+      if (handle != 0) {
+        _cancelIoEx(Pointer.fromAddress(handle), nullptr);
+      }
+    });
+  }
+
+  static void _closeInputWriteOnce(
+    Pointer<IntPtr> pLock,
+    Pointer<IntPtr> pInputWriteSide,
+  ) {
+    if (pInputWriteSide.address == 0) return;
+    _withLock(pLock, () {
+      final handle = pInputWriteSide.value;
+      if (handle != 0) {
+        pInputWriteSide.value = 0;
+        win32.CloseHandle(win32.HANDLE(Pointer.fromAddress(handle)));
+      }
+    });
+  }
+
   static void _closeRawHandle(int address) {
     if (address != 0) {
       win32.CloseHandle(win32.HANDLE(Pointer.fromAddress(address)));
@@ -325,7 +364,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       hInputReadPipe.cast<win32.HANDLE>(),
       hInputWritePipe.cast<win32.HANDLE>(),
       nullptr,
-      0,
+      _pipeBufferSize,
     );
 
     final hOutReadPipe = arena<IntPtr>();
@@ -334,7 +373,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       hOutReadPipe.cast<win32.HANDLE>(),
       hOutWritePipe.cast<win32.HANDLE>(),
       nullptr,
-      0,
+      _pipeBufferSize,
     );
 
     void closeConPtyPipes() {
@@ -431,7 +470,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       hInputReadPipe.cast<win32.HANDLE>(),
       hInputWritePipe.cast<win32.HANDLE>(),
       saLegacy,
-      0,
+      _pipeBufferSize,
     );
 
     final hOutReadPipe = arena<IntPtr>();
@@ -440,7 +479,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       hOutReadPipe.cast<win32.HANDLE>(),
       hOutWritePipe.cast<win32.HANDLE>(),
       saLegacy,
-      0,
+      _pipeBufferSize,
     );
 
     const handleFlagInherit = 1;
@@ -537,7 +576,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
   }
 
   PtyCoreWindows._(
-    this._inputWriteSide,
+    win32.HANDLE inputWriteSide,
     win32.HANDLE outputReadSide,
     this._inputReadSide,
     this._outputWriteSide,
@@ -546,19 +585,20 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     _PseudoConsoleBindings? conPtyBindings,
   }) : _conPtyBindings = conPtyBindings,
        _failed = false {
-    _writeBuffer = calloc<Uint8>(_bufferSize + 1);
-    _pWritten = calloc<Uint32>();
-
     final readBuffer = calloc<Uint8>(_bufferSize + 1);
     final pReadlen = calloc<Uint32>();
 
     final pLock = calloc<IntPtr>();
     final pHPty = calloc<IntPtr>()..value = hPty ?? 0;
     final pOutputReadSide = calloc<IntPtr>()..value = outputReadSide.address;
+    final pInputWriteSide = calloc<IntPtr>()..value = inputWriteSide.address;
+    final pWriteStopped = calloc<IntPtr>();
     final pHProcess = calloc<IntPtr>()..value = hProcess.address;
     _pLock = pLock;
     _pHPty = pHPty;
     _pOutputReadSide = pOutputReadSide;
+    _pInputWriteSide = pInputWriteSide;
+    _pWriteStopped = pWriteStopped;
     _pHProcess = pHProcess;
 
     _worker = PtyCoreWindowsWorker(
@@ -573,14 +613,21 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       failed: false,
     );
 
-    _finalizer.attach(this, _writeBuffer.cast(), detach: _writeDetachToken);
-    _finalizer.attach(this, _pWritten.cast(), detach: _writeDetachToken);
+    _writer = PtyCoreWindowsWriter(
+      pLock: pLock,
+      pInputWriteSide: pInputWriteSide,
+      pWriteStopped: pWriteStopped,
+      bufferSize: _writeChunkSize,
+      failed: false,
+    );
+
     _finalizer.attach(this, _pLock.cast(), detach: this);
     _finalizer.attach(this, _pHPty.cast(), detach: this);
     _finalizer.attach(this, _pOutputReadSide.cast(), detach: this);
+    _finalizer.attach(this, _pInputWriteSide.cast(), detach: this);
+    _finalizer.attach(this, _pWriteStopped.cast(), detach: this);
     _finalizer.attach(this, _pHProcess.cast(), detach: this);
 
-    _attachHandleFinalizer(_inputWriteSide);
     _attachHandleFinalizer(_inputReadSide);
     _attachHandleFinalizer(_outputWriteSide);
   }
@@ -596,16 +643,15 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
   }
 
   PtyCoreWindows._failed()
-    : _inputWriteSide = win32.HANDLE(nullptr),
-      _inputReadSide = win32.HANDLE(nullptr),
+    : _inputReadSide = win32.HANDLE(nullptr),
       _outputWriteSide = win32.HANDLE(nullptr),
       _conPtyBindings = null,
       _failed = true {
-    _writeBuffer = nullptr;
-    _pWritten = nullptr;
     _pLock = nullptr;
     _pHPty = nullptr;
     _pOutputReadSide = nullptr;
+    _pInputWriteSide = nullptr;
+    _pWriteStopped = nullptr;
     _pHProcess = nullptr;
     _worker = PtyCoreWindowsWorker(
       pLock: nullptr,
@@ -618,28 +664,38 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       bufferSize: 0,
       failed: true,
     );
+    _writer = PtyCoreWindowsWriter(
+      pLock: nullptr,
+      pInputWriteSide: null,
+      pWriteStopped: null,
+      bufferSize: 0,
+      failed: true,
+    );
   }
 
-  win32.HANDLE _inputWriteSide;
   win32.HANDLE _inputReadSide;
   win32.HANDLE _outputWriteSide;
   final _PseudoConsoleBindings? _conPtyBindings;
   final bool _failed;
-  final Object _writeDetachToken = Object();
 
   late final Pointer<IntPtr> _pLock;
   late final Pointer<IntPtr> _pHPty;
   late final Pointer<IntPtr> _pOutputReadSide;
+  late final Pointer<IntPtr> _pInputWriteSide;
+  late final Pointer<IntPtr> _pWriteStopped;
   late final Pointer<IntPtr> _pHProcess;
 
   static const _bufferSize = 4096;
-  late Pointer<Uint8> _writeBuffer;
-  late Pointer<Uint32> _pWritten;
+  static const _writeChunkSize = 16384;
 
   late final PtyCoreWindowsWorker _worker;
+  late final PtyCoreWindowsWriter _writer;
 
   @override
   PtyCoreWindowsWorker get worker => _worker;
+
+  @override
+  PtyCoreWindowsWriter get writer => _writer;
 
   static final _finalizer = NativeFinalizer(calloc.nativeFree);
 
@@ -656,6 +712,12 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
         Void Function(Pointer<IntPtr>),
         void Function(Pointer<IntPtr>)
       >('ReleaseSRWLockExclusive');
+
+  static final _cancelIoEx = _kernel32
+      .lookupFunction<
+        Int32 Function(Pointer<Void>, Pointer<Void>),
+        int Function(Pointer<Void>, Pointer<Void>)
+      >('CancelIoEx');
 
   static final _closeHandleFinalizer = NativeFinalizer(
     _kernel32.lookup<NativeFunction<Void Function(Pointer<Void>)>>(
@@ -704,16 +766,8 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     if (_failed || _killed) return true;
     _killed = true;
 
-    if (_writeBuffer != nullptr) {
-      calloc.free(_writeBuffer);
-      _writeBuffer = nullptr;
-    }
-    if (_pWritten != nullptr) {
-      calloc.free(_pWritten);
-      _pWritten = nullptr;
-    }
-    _finalizer.detach(_writeDetachToken);
     _closeHandleFinalizer.detach(this);
+    _markWriteStopped(_pLock, _pWriteStopped);
 
     final ret = _withLock(_pLock, () {
       final hProcAddress = _pHProcess.address != 0 ? _pHProcess.value : 0;
@@ -724,13 +778,12 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
           ).value;
     });
     _closePseudoConsoleOnce(_pLock, _pHPty, _conPtyBindings?.closePtr);
+    _cancelPendingInputWrites(_pLock, _pInputWriteSide);
 
     _closeRawHandle(_inputReadSide.address);
     _inputReadSide = win32.HANDLE(nullptr);
     _closeRawHandle(_outputWriteSide.address);
     _outputWriteSide = win32.HANDLE(nullptr);
-    _closeRawHandle(_inputWriteSide.address);
-    _inputWriteSide = win32.HANDLE(nullptr);
     _closeReadSideOnce(_pLock, _pOutputReadSide);
     return ret;
   }
@@ -766,20 +819,86 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
 
   @override
   void write(List<int> data) {
-    if (_failed || _killed || _writeBuffer == nullptr) return;
+    if (_failed || _killed || data.isEmpty) return;
+    final bytes = data is Uint8List ? data : Uint8List.fromList(data);
+    _writer.write(bytes);
+  }
+}
+
+final class PtyCoreWindowsWriter implements PtyCoreWriter {
+  final Pointer<IntPtr> pLock;
+  final Pointer<IntPtr>? pInputWriteSide;
+  final Pointer<IntPtr>? pWriteStopped;
+  final int bufferSize;
+  final bool failed;
+
+  Pointer<Uint8>? _writeBuffer;
+  Pointer<Uint32>? _pWritten;
+
+  PtyCoreWindowsWriter({
+    required this.pLock,
+    required this.pInputWriteSide,
+    required this.pWriteStopped,
+    required this.bufferSize,
+    required this.failed,
+  });
+
+  int _resolveActiveHandle() {
+    final pInput = pInputWriteSide;
+    final pStopped = pWriteStopped;
+    if (failed || pInput == null || pInput.address == 0) return 0;
+    return PtyCoreWindows._withLock(pLock, () {
+      if (pStopped != null && pStopped.address != 0 && pStopped.value != 0) {
+        return 0;
+      }
+      return pInput.value;
+    });
+  }
+
+  @override
+  bool write(Uint8List data) {
+    if (failed || bufferSize <= 0) return false;
+    if (data.isEmpty) return true;
+
+    final buf = _writeBuffer ??= calloc<Uint8>(bufferSize);
+    final pWritten = _pWritten ??= calloc<Uint32>();
+
     var offset = 0;
     while (offset < data.length) {
+      final handleAddress = _resolveActiveHandle();
+      if (handleAddress == 0) return false;
+
       final remaining = data.length - offset;
-      final chunkLen = remaining > _bufferSize ? _bufferSize : remaining;
-      _writeBuffer.asTypedList(chunkLen).setRange(0, chunkLen, data, offset);
-      win32.WriteFile(
-        _inputWriteSide,
-        _writeBuffer,
+      final chunkLen = remaining > bufferSize ? bufferSize : remaining;
+      buf.asTypedList(chunkLen).setRange(0, chunkLen, data, offset);
+
+      final ret = win32.WriteFile(
+        win32.HANDLE(Pointer.fromAddress(handleAddress)),
+        buf,
         chunkLen,
-        _pWritten,
+        pWritten,
         nullptr,
       );
-      offset += chunkLen;
+      final written = pWritten.value;
+      if (!ret.value || written == 0) return false;
+      offset += written;
+    }
+    return true;
+  }
+
+  @override
+  void free() {
+    if (_writeBuffer != null && _writeBuffer != nullptr) {
+      calloc.free(_writeBuffer!);
+      _writeBuffer = null;
+    }
+    if (_pWritten != null && _pWritten != nullptr) {
+      calloc.free(_pWritten!);
+      _pWritten = null;
+    }
+    final pInput = pInputWriteSide;
+    if (pInput != null) {
+      PtyCoreWindows._closeInputWriteOnce(pLock, pInput);
     }
   }
 }

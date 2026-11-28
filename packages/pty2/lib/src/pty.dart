@@ -56,13 +56,61 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
   BlockingPseudoTerminal(super._core, this._syncProcessed);
 
   late SendPort _sendPort;
+  SendPort? _writerSendPort;
+  final List<Uint8List> _pendingWrites = <Uint8List>[];
   final bool _syncProcessed;
   late final StreamController<String> _outStreamController;
   bool _hasSendPort = false;
   bool _pendingAck = false;
   bool _outCancelled = false;
+  bool _writerClosed = false;
 
   late final Future<int> _exitCodeFuture;
+
+  void _onWriterReady(SendPort sendPort) {
+    if (_writerClosed) {
+      _pendingWrites.clear();
+      sendPort.send(null);
+      return;
+    }
+    _writerSendPort = sendPort;
+    for (final chunk in _pendingWrites) {
+      sendPort.send(TransferableTypedData.fromList([chunk]));
+    }
+    _pendingWrites.clear();
+  }
+
+  void _closeWriter() {
+    if (_writerClosed) return;
+    _writerClosed = true;
+    _pendingWrites.clear();
+    final port = _writerSendPort;
+    _writerSendPort = null;
+    port?.send(null);
+  }
+
+  @override
+  void write(String input) {
+    if (_writerClosed || input.isEmpty) return;
+    final data = utf8.encode(input);
+    final port = _writerSendPort;
+    if (port != null) {
+      port.send(TransferableTypedData.fromList([data]));
+    } else {
+      _pendingWrites.add(data);
+    }
+  }
+
+  @override
+  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
+    _writerClosed = true;
+    _pendingWrites.clear();
+    final delivered = super.kill(signal);
+    final port = _writerSendPort;
+    _writerSendPort = null;
+    port?.send(null);
+    return delivered;
+  }
 
   @override
   void init() {
@@ -74,13 +122,38 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
     );
     out = _outStreamController.stream;
 
+    final writerReadyPort = ReceivePort();
+    final writerExitPort = ReceivePort();
+    unawaited(
+      writerReadyPort.first.then((msg) {
+        writerReadyPort.close();
+        _onWriterReady(msg as SendPort);
+      }),
+    );
+    unawaited(
+      writerExitPort.first.then((_) {
+        writerExitPort.close();
+        _keepAlive(_core);
+      }),
+    );
+    unawaited(
+      Isolate.spawn(
+        _writeUntilClosed,
+        _WriterIsolateArgs(writerReadyPort.sendPort, _core.writer),
+        onExit: writerExitPort.sendPort,
+      ),
+    );
+
     final exitPort = ReceivePort();
-    Isolate.spawn(
-      _waitForExitCode,
-      _IsolateArgs(exitPort.sendPort, _core.worker, _syncProcessed),
+    unawaited(
+      Isolate.spawn(
+        _waitForExitCode,
+        _IsolateArgs(exitPort.sendPort, _core.worker, _syncProcessed),
+      ),
     );
     _exitCodeFuture = exitPort.first.then((value) {
       exitPort.close();
+      _closeWriter();
       _keepAlive(_core);
       return value as int;
     });
@@ -90,6 +163,7 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
     receivePort.listen((msg) {
       if (msg == null) {
         receivePort.close();
+        _closeWriter();
         _core.onReaderClosed();
         _outStreamController.close();
         _keepAlive(_core);
@@ -125,9 +199,11 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
         // print('wtf happened here? ${(type: msg.runtimeType, msg: msg)}');
       }
     });
-    Isolate.spawn(
-      _readUntilExit,
-      _IsolateArgs(receivePort.sendPort, _core.worker, _syncProcessed),
+    unawaited(
+      Isolate.spawn(
+        _readUntilExit,
+        _IsolateArgs(receivePort.sendPort, _core.worker, _syncProcessed),
+      ),
     );
   }
 
@@ -158,6 +234,45 @@ class _IsolateArgs<T> {
   final SendPort sendPort;
   final T arg;
   final bool syncProcessed;
+}
+
+class _WriterIsolateArgs {
+  _WriterIsolateArgs(this.sendPort, this.writer);
+
+  final SendPort sendPort;
+  final PtyCoreWriter writer;
+}
+
+void _writeUntilClosed(_WriterIsolateArgs ctx) {
+  final rp = ReceivePort();
+  ctx.sendPort.send(rp.sendPort);
+
+  var closed = false;
+  void shutdown() {
+    if (closed) return;
+    closed = true;
+    rp.close();
+    ctx.writer.free();
+  }
+
+  rp.listen((message) {
+    if (closed) return;
+    if (message == null) {
+      shutdown();
+      return;
+    }
+    final Uint8List bytes;
+    if (message is TransferableTypedData) {
+      bytes = message.materialize().asUint8List();
+    } else if (message is Uint8List) {
+      bytes = message;
+    } else {
+      return;
+    }
+    if (!ctx.writer.write(bytes)) {
+      shutdown();
+    }
+  });
 }
 
 void _waitForExitCode(_IsolateArgs<PtyCoreWorker> ctx) async {
