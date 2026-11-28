@@ -948,6 +948,60 @@ final FtermEnumSettingDescriptor<GpuDriverPreference> _systemGpuDriver =
       write: (ws, pref) => ws.setGpuDriverPreference(pref),
     );
 
+bool _isPosixDesktop(FtermCapabilityContext ctx) =>
+    ctx.isLinuxDesktop || ctx.isMacOsDesktop;
+
+final FtermToggleSettingDescriptor _systemKittyTempFile =
+    FtermToggleSettingDescriptor(
+      id: 'system-kitty-temp-file',
+      paletteId: 'settings.toggle.kitty_temp_file',
+      section: .system,
+      panelId: 'system-kitty-media',
+      panelTitle: 'Kitty Graphics Media',
+      controlKey: const ValueKey('settings-kitty-temp-file'),
+      settingsLabel: 'Temp File Medium (t=t)',
+      settingsCaption:
+          'Allow local CLI apps to transfer Kitty images via temp files',
+      searchTitle: 'Kitty Temp File Medium (APC t=t)',
+      paletteCategory: 'System',
+      paletteTitle: 'Toggle Kitty Temp File Medium (t=t)',
+      keywords:
+          'kitty graphics image local media temp file t=t apc icat filesystem',
+      icon: Icons.image_outlined,
+      visibility: .localDesktopShell,
+      read: (ws) => ws.preferences.kittyTempFileMedium,
+      write: (ws, value) => ws.updatePreferences(
+        ws.preferences.copyWith(kittyTempFileMedium: value),
+      ),
+    );
+
+final FtermToggleSettingDescriptor _systemKittySharedMemory =
+    FtermToggleSettingDescriptor(
+      id: 'system-kitty-shared-memory',
+      paletteId: 'settings.toggle.kitty_shared_memory',
+      section: .system,
+      panelId: 'system-kitty-media',
+      panelTitle: 'Kitty Graphics Media',
+      controlKey: const ValueKey('settings-kitty-shared-memory'),
+      settingsLabel: 'Shared Memory Medium (t=s)',
+      settingsCaption:
+          'Allow local CLI apps to transfer Kitty images via POSIX shared '
+          'memory',
+      searchTitle: 'Kitty Shared Memory Medium (APC t=s)',
+      paletteCategory: 'System',
+      paletteTitle: 'Toggle Kitty Shared Memory Medium (t=s)',
+      keywords:
+          'kitty graphics image local media shared memory shm t=s apc icat '
+          'posix',
+      icon: Icons.memory_outlined,
+      visibility: .localDesktopShell,
+      isAvailable: _isPosixDesktop,
+      read: (ws) => ws.preferences.kittySharedMemoryMedium,
+      write: (ws, value) => ws.updatePreferences(
+        ws.preferences.copyWith(kittySharedMemoryMedium: value),
+      ),
+    );
+
 final FtermToggleSettingDescriptor _systemAudioMute =
     FtermToggleSettingDescriptor(
       id: 'system-audio-mute',
@@ -1165,6 +1219,8 @@ final List<FtermDescriptor> allSettingDescriptors =
       // System
       _systemPerfHud,
       _systemGpuDriver,
+      _systemKittyTempFile,
+      _systemKittySharedMemory,
       _systemAudioMute,
       _systemAudioVolume,
       // Automation
@@ -1216,6 +1272,8 @@ final List<FtermDescriptor> paletteSettingsToggleDescriptors =
       _systemAudioMute,
       _systemAudioVolume,
       _systemPerfHud,
+      _systemKittyTempFile,
+      _systemKittySharedMemory,
       _keyboardMacosOption,
       _keyboardF12Shortcuts,
       _shellLogin,

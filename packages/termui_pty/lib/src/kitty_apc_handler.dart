@@ -157,11 +157,11 @@ final class KittyApcHandler {
 
   /// Whether local filesystem (`t=t`) transmission media is enabled.
   /// Defaults to `false`.
-  final bool allowLocalMedia;
+  bool allowLocalMedia;
 
   /// Whether POSIX shared-memory (`t=s`) transmission media is enabled.
   /// Defaults to [allowLocalMedia].
-  final bool allowLocalShm;
+  bool allowLocalShm;
 
   final Map<int, _PendingUpload> _pendingUploads = {};
   final Set<(int imageId, int placementId, bool isVirtual)> _placements = {};

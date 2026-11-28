@@ -844,6 +844,8 @@ final class AutomationRouter {
       loginShell: preserveDefaultShell ? prefs.loginShell : false,
       workingDirectory: req.cwd,
       colorScheme: _workspace.activeTerminalTheme.brightness,
+      allowLocalKittyMedia: prefs.kittyTempFileMedium,
+      allowLocalKittyShm: prefs.kittySharedMemoryMedium,
     );
   }
 

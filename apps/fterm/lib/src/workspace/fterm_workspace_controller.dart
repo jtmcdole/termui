@@ -3755,6 +3755,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     audioController
       ..setMuted(next.audioMuted)
       ..setVolume(next.audioVolume);
+    _syncKittyLocalMediaPolicies();
     _settingsSaver.savePreferences(next);
     updateViewModel.onPreferencesChanged();
     _notifyChromeChanged();
@@ -3833,6 +3834,8 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         loginShell: _preferences.loginShell,
         workingDirectory: workingDirectory,
         colorScheme: _platformBrightness,
+        allowLocalKittyMedia: _preferences.kittyTempFileMedium,
+        allowLocalKittyShm: _preferences.kittySharedMemoryMedium,
       );
 
   /// Reloads stored settings and preferences synchronously from disk/localStorage.
@@ -3896,6 +3899,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     );
     unawaited(_syncActiveShaders());
     _syncClipboardPolicies();
+    _syncKittyLocalMediaPolicies();
     _syncPaneCliShaderPolicies();
     updateViewModel.onPreferencesChanged();
     _notifyChromeChanged();
@@ -3933,6 +3937,19 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   void _syncClipboardPolicies() {
     for (final pane in _panes.values) {
       pane.remotePort?.clipboardPolicy = _workspaceSettings.osc52Policy;
+    }
+  }
+
+  void _syncKittyLocalMediaPolicies() {
+    final allowTempFiles = _preferences.kittyTempFileMedium;
+    final allowSharedMemory = _preferences.kittySharedMemoryMedium;
+    for (final pane in _panes.values) {
+      if (pane.localHost case final KittyMediaConfigurablePaneHost host) {
+        host.setKittyLocalMediaPolicy(
+          allowTempFiles: allowTempFiles,
+          allowSharedMemory: allowSharedMemory,
+        );
+      }
     }
   }
 

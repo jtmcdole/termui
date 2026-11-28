@@ -202,7 +202,8 @@ final class IoLocalHostDriver implements LocalHostDriver {
       cellPixelWidth: config.cellPixelWidth,
       cellPixelHeight: config.cellPixelHeight,
       colorScheme: config.colorScheme,
-      allowLocalKittyMedia: true,
+      allowLocalKittyMedia: config.allowLocalKittyMedia,
+      allowLocalKittyShm: config.allowLocalKittyShm,
     );
     final port = session.openPort(
       initialCols: config.initialCols,
@@ -393,7 +394,8 @@ final class IoLocalHostDriver implements LocalHostDriver {
   }
 }
 
-final class _IoLocalPaneHost implements PromptIndexedPaneHost {
+final class _IoLocalPaneHost
+    implements PromptIndexedPaneHost, KittyMediaConfigurablePaneHost {
   @override
   final String id;
   final String _executableName;
@@ -573,6 +575,17 @@ final class _IoLocalPaneHost implements PromptIndexedPaneHost {
   @override
   void setColorScheme(tui.TerminalBrightness brightness) {
     _session.terminal.setColorScheme(brightness);
+  }
+
+  @override
+  void setKittyLocalMediaPolicy({
+    required bool allowTempFiles,
+    required bool allowSharedMemory,
+  }) {
+    if (_disposed) return;
+    _session.terminal
+      ..allowLocalKittyMedia = allowTempFiles
+      ..allowLocalKittyShm = allowSharedMemory;
   }
 
   @override

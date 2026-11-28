@@ -813,29 +813,46 @@ final class VirtualTerminal implements TerminalHandler {
 
   final Map<String, _PendingOsc99> _pendingOsc99 = {};
 
+  bool _allowLocalKittyMedia;
+  bool _allowLocalKittyShm;
+  KittyApcHandler? _kittyApcHandlerInstance;
+
   /// Whether local Kitty Graphics Protocol transmission media (`t=t` temp files
   /// and, unless [allowLocalKittyShm] overrides it, `t=s` POSIX shared memory)
   /// are permitted on this terminal.
   ///
   /// Defaults to `false` so untrusted or remote PTY streams cannot read or
   /// unlink local temp/shared-memory files unless explicitly opted in.
-  final bool allowLocalKittyMedia;
+  bool get allowLocalKittyMedia => _allowLocalKittyMedia;
+
+  /// Updates whether local temp-file (`t=t`) transmission is permitted at runtime.
+  set allowLocalKittyMedia(bool value) {
+    _allowLocalKittyMedia = value;
+    _kittyApcHandlerInstance?.allowLocalMedia = value;
+  }
 
   /// Whether POSIX shared-memory (`t=s`) transmission is permitted.
   ///
   /// Defaults to [allowLocalKittyMedia]. Pass `allowLocalKittyMedia: true` with
   /// `allowLocalKittyShm: false` to allow only `t=t` temp files.
-  final bool allowLocalKittyShm;
+  bool get allowLocalKittyShm => _allowLocalKittyShm;
 
-  late final KittyApcHandler _kittyApcHandler = KittyApcHandler(
-    registry: imageRegistry,
-    onReply: (reply) => onReply?.call(reply),
-    onPlaceVirtual: _placeVirtualImage,
-    onClearPlacements: _clearKittyPlacements,
-    cellPixelSize: () => (_cellPixelWidth, _cellPixelHeight),
-    allowLocalMedia: allowLocalKittyMedia,
-    allowLocalShm: allowLocalKittyShm,
-  );
+  /// Updates whether POSIX shared-memory (`t=s`) transmission is permitted at runtime.
+  set allowLocalKittyShm(bool value) {
+    _allowLocalKittyShm = value;
+    _kittyApcHandlerInstance?.allowLocalShm = value;
+  }
+
+  KittyApcHandler get _kittyApcHandler =>
+      _kittyApcHandlerInstance ??= KittyApcHandler(
+        registry: imageRegistry,
+        onReply: (reply) => onReply?.call(reply),
+        onPlaceVirtual: _placeVirtualImage,
+        onClearPlacements: _clearKittyPlacements,
+        cellPixelSize: () => (_cellPixelWidth, _cellPixelHeight),
+        allowLocalMedia: _allowLocalKittyMedia,
+        allowLocalShm: _allowLocalKittyShm,
+      );
 
   late final AudioApcHandler _audioApcHandler = AudioApcHandler(
     onAudioEvent: (event) => onAudioEvent?.call(event),
@@ -865,9 +882,10 @@ final class VirtualTerminal implements TerminalHandler {
     this.onAudioEvent,
     this.onShaderEvent,
     this.shaderCapabilitiesProvider,
-    this.allowLocalKittyMedia = false,
+    bool allowLocalKittyMedia = false,
     bool? allowLocalKittyShm,
-  }) : allowLocalKittyShm = allowLocalKittyShm ?? allowLocalKittyMedia,
+  }) : _allowLocalKittyMedia = allowLocalKittyMedia,
+       _allowLocalKittyShm = allowLocalKittyShm ?? allowLocalKittyMedia,
        width = math.max(1, width),
        _colorScheme =
            colorScheme ?? theme?.brightness ?? TerminalBrightness.dark,
