@@ -81,7 +81,7 @@ final class TuiAtlasStagingCache {
   }
 
   /// Computes a row fingerprint for [row] of [buffer], mixing packed
-  /// `glyphCodes`, `attributes`, `underlineColors`, optional
+  /// `glyphCodes`, `attributes`, `underlineColors`, `textSizing`, optional
   /// [cellOverrideMask], [selectionHash], [hoveredLinkHash], [configHash],
   /// and optional [prevRowBgMaskHash].
   int computeRowFingerprint({
@@ -116,6 +116,9 @@ final class TuiAtlasStagingCache {
     }
     if (buffer.hasUnderlineColors) {
       h = _hashRowUnderlineColors(h, buffer, rowStart, rowEnd);
+    }
+    if (buffer.hasTextSizing) {
+      h = _hashRowTextSizing(h, buffer, rowStart, rowEnd);
     }
     if (cellOverrideMask != null && cellOverrideMask.isNotEmpty) {
       h = _hashRowOverrideMask(h, cellOverrideMask, rowStart, rowEnd);
@@ -173,6 +176,22 @@ final class TuiAtlasStagingCache {
     for (var i = rowStart; i < rowEnd; i++) {
       final ul = buffer.getUnderlineColorAt(i);
       if (ul != 0) h = mixPair(h, i - rowStart + 1, ul);
+    }
+    return h;
+  }
+
+  static int _hashRowTextSizing(
+    int hash,
+    Buffer buffer,
+    int rowStart,
+    int rowEnd,
+  ) {
+    var h = hash;
+    for (var i = rowStart; i < rowEnd; i++) {
+      final ts = buffer.getTextSizingAt(i);
+      if (ts != KittyTextSizing.none) {
+        h = mixPair(h, i - rowStart + 0x30000, ts);
+      }
     }
     return h;
   }
