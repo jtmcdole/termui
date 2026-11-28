@@ -1194,6 +1194,21 @@ void main() {
           wire,
           contains('P=$kttyProbeRelParentId,Q=$kttyProbeRelParentPlacementId'),
         );
+
+        final report = KttyProbeReport()..resetForNewProbe();
+        report.recordOsc5522Reply(
+          type: 'read',
+          status: 'ENOSYS',
+          id: kttyProbeOsc5522ReadId,
+        );
+        expect(
+          report['osc_5522_read']!.status,
+          equals(KttyCapabilityStatus.optionalDisabled),
+        );
+        expect(
+          report['osc_5522_read']!.detail,
+          equals('type=read:status=ENOSYS'),
+        );
       },
     );
   });

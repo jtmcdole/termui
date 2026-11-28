@@ -1094,5 +1094,77 @@ void main() {
         );
       },
     );
+
+    test(
+      'OSC 5522 & OSC 52 clipboard reads handle sync reader, errors, bad loc, and UTF-8 truncation',
+      () async {
+        const plainB64 = 'dGV4dC9wbGFpbg==';
+        final replies = <String>[];
+        final vt = VirtualTerminal(
+          width: 40,
+          height: 10,
+          allowClipboardRead: true,
+          onClipboardRead: (_) => 'sync-clip',
+        )..onReply = replies.add;
+
+        // 1. Sync reader works for both OSC 5522 and OSC 52.
+        vt.writeString('\x1b]5522;type=read:id=s1;$plainB64\x1b\\');
+        vt.writeString('\x1b]52;c;?\x1b\\');
+        expect(
+          replies,
+          equals(<String>[
+            '\x1b]5522;type=read:status=OK:id=s1\x1b\\',
+            '\x1b]5522;type=read:status=DATA:mime=$plainB64:id=s1;'
+                '${base64Encode(utf8.encode('sync-clip'))}\x1b\\',
+            '\x1b]5522;type=read:status=DONE:id=s1\x1b\\',
+            '\x1b]52;c;${base64Encode(utf8.encode('sync-clip'))}\x1b\\',
+          ]),
+        );
+
+        // 2. Unsupported loc replies ENOSYS.
+        replies.clear();
+        vt.writeString('\x1b]5522;type=read:loc=bogus:id=s2;$plainB64\x1b\\');
+        expect(
+          replies,
+          equals(<String>['\x1b]5522;type=read:status=ENOSYS:id=s2\x1b\\']),
+        );
+
+        // 3. Sync throw replies EIO on OSC 5522 and is ignored on OSC 52.
+        replies.clear();
+        vt.onClipboardRead = (_) => throw StateError('sync boom');
+        vt.writeString('\x1b]5522;type=read:id=s3;$plainB64\x1b\\');
+        vt.writeString('\x1b]52;c;?\x1b\\');
+        expect(
+          replies,
+          equals(<String>['\x1b]5522;type=read:status=EIO:id=s3\x1b\\']),
+        );
+
+        // 4. Async error replies EIO on OSC 5522 and is ignored on OSC 52.
+        replies.clear();
+        vt.onClipboardRead = (_) => Future<String?>.error(StateError('async'));
+        vt.writeString('\x1b]5522;type=read:id=s4;$plainB64\x1b\\');
+        vt.writeString('\x1b]52;c;?\x1b\\');
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          replies,
+          equals(<String>['\x1b]5522;type=read:status=EIO:id=s4\x1b\\']),
+        );
+
+        // 5. > 1 MiB multi-byte UTF-8 text truncates cleanly at a UTF-8 boundary.
+        replies.clear();
+        // 'é' is 2 bytes in UTF-8; 1024*1024 + 1 bytes starts with 'a' + 524288 * 'é'
+        // so byte 1048576 lands on a UTF-8 continuation byte.
+        final hugeUtf8 = 'a${'é' * (512 * 1024)}';
+        vt.onClipboardRead = (_) => hugeUtf8;
+        vt.writeString('\x1b]52;c;?\x1b\\');
+        expect(replies, hasLength(1));
+        final b64Part = replies.single
+            .replaceFirst('\x1b]52;c;', '')
+            .replaceFirst('\x1b\\', '');
+        final decodedBytes = base64Decode(b64Part);
+        expect(decodedBytes.length, lessThanOrEqualTo(1024 * 1024));
+        expect(utf8.decode(decodedBytes), startsWith('aé'));
+      },
+    );
   });
 }
