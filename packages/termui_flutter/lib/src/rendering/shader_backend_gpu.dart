@@ -988,7 +988,7 @@ final class FlutterGpuShaderBackend
         wallpaperTexture == null) {
       return null;
     }
-    final kittyTextures = _wrapKittyQuadTextures(batch.kittyQuads);
+    final kittyTextures = _wrapAllKittyQuadTextures(batch);
     if (kittyTextures == null) return null;
 
     final paneKey = batch.paneKey;
@@ -1113,6 +1113,40 @@ final class FlutterGpuShaderBackend
     }
   }
 
+  _WrappedKittyTextures? _wrapAllKittyQuadTextures(GpuAtlasQuadBatch batch) {
+    final underBg = batch.underBgKittyQuads;
+    final bg = batch.bgKittyQuads;
+    final fg = batch.kittyQuads;
+    if (!batch.hasAnyKittyQuads) {
+      return _WrappedKittyTextures.empty;
+    }
+    if (underBg.isEmpty && bg.isEmpty) {
+      final tex = _wrapKittyQuadTextures(fg);
+      return tex == null ? null : _WrappedKittyTextures(fg: tex);
+    }
+    final combined = <GpuKittyQuad>[...underBg, ...bg, ...fg];
+    final all = _wrapKittyQuadTextures(combined);
+    if (all == null) return null;
+    final uLen = underBg.length;
+    final bLen = bg.length;
+    return _WrappedKittyTextures(
+      underBg: _sliceTextureRange(all, 0, uLen),
+      bg: _sliceTextureRange(all, uLen, bLen),
+      fg: _sliceTextureRange(all, uLen + bLen, fg.length),
+    );
+  }
+
+  static List<gpu.Texture> _sliceTextureRange(
+    List<gpu.Texture> all,
+    int start,
+    int length,
+  ) => length <= 0
+      ? const <gpu.Texture>[]
+      : List<gpu.Texture>.of(
+          all.getRange(start, start + length),
+          growable: false,
+        );
+
   List<gpu.Texture>? _wrapKittyQuadTextures(List<GpuKittyQuad> quads) {
     if (quads.isEmpty) return const <gpu.Texture>[];
     if (_usePixelUploadForImages) {
@@ -1211,7 +1245,7 @@ final class FlutterGpuShaderBackend
     required ui.Image? wallpaperImage,
     required gpu.Texture? wallpaperTexture,
     required GpuAtlasQuadBatch batch,
-    required List<gpu.Texture> kittyTextures,
+    required _WrappedKittyTextures kittyTextures,
     required GpuFrameWatchdog? watchdog,
   }) {
     final tracing = ShaderPerfTrace.isEnabled;
@@ -1285,7 +1319,7 @@ final class FlutterGpuShaderBackend
     required ui.Image? wallpaperImage,
     required gpu.Texture? wallpaperTexture,
     required GpuAtlasQuadBatch batch,
-    required List<gpu.Texture> kittyTextures,
+    required _WrappedKittyTextures kittyTextures,
     required GpuFrameWatchdog? watchdog,
   }) {
     var submissionStarted = false;
@@ -1351,7 +1385,7 @@ final class FlutterGpuShaderBackend
     required ui.Image? wallpaperImage,
     required gpu.Texture? wallpaperTexture,
     required GpuAtlasQuadBatch batch,
-    required List<gpu.Texture> kittyTextures,
+    required _WrappedKittyTextures kittyTextures,
     required GpuFrameWatchdog? watchdog,
   }) {
     var submissionStarted = false;
@@ -1426,7 +1460,7 @@ final class FlutterGpuShaderBackend
     required ui.Image? wallpaperImage,
     required gpu.Texture? wallpaperTexture,
     required GpuAtlasQuadBatch batch,
-    required List<gpu.Texture> kittyTextures,
+    required _WrappedKittyTextures kittyTextures,
     required List<GpuPingPongSlot<gpu.Texture>> pendingSwaps,
     required GpuFrameWatchdog? watchdog,
   }) {
@@ -1624,7 +1658,7 @@ final class FlutterGpuShaderBackend
     required ui.Image? wallpaperImage,
     required gpu.Texture? wallpaperTexture,
     required GpuAtlasQuadBatch batch,
-    required List<gpu.Texture> kittyTextures,
+    required _WrappedKittyTextures kittyTextures,
     required List<_RenderedGpuRegion> renderedRegions,
   }) {
     final tracing = ShaderPerfTrace.isEnabled;
@@ -1719,7 +1753,7 @@ final class FlutterGpuShaderBackend
     required ui.Image? wallpaperImage,
     required gpu.Texture? wallpaperTexture,
     required GpuAtlasQuadBatch batch,
-    required List<gpu.Texture> kittyTextures,
+    required _WrappedKittyTextures kittyTextures,
     required bool splitLayers,
   }) {
     final tracing = ShaderPerfTrace.isEnabled;
@@ -1777,7 +1811,7 @@ final class FlutterGpuShaderBackend
     required ui.Image? wallpaperImage,
     required gpu.Texture? wallpaperTexture,
     required GpuAtlasQuadBatch batch,
-    required List<gpu.Texture> kittyTextures,
+    required _WrappedKittyTextures kittyTextures,
     required bool splitLayers,
   }) {
     final reuseExistingSize =
@@ -1807,7 +1841,9 @@ final class FlutterGpuShaderBackend
         wallpaperImage: wallpaperImage,
         wallpaperTexture: wallpaperTexture,
         instanceBuffer: instanceBuffer,
+        batch: batch,
         bgEnd: bgEnd,
+        kittyTextures: kittyTextures,
       );
       _renderStaticFgLayer(
         pipeline: pipeline,
@@ -1818,7 +1854,7 @@ final class FlutterGpuShaderBackend
         instanceBuffer: instanceBuffer,
         batch: batch,
         bgEnd: bgEnd,
-        kittyTextures: kittyTextures,
+        kittyTextures: kittyTextures.fg,
       );
     } else {
       _renderStaticCombinedLayer(
@@ -1851,14 +1887,25 @@ final class FlutterGpuShaderBackend
       atlasTexture: atlasTexture,
       wallpaperImage: wallpaperImage,
       wallpaperTexture: wallpaperTexture,
+      underBgKittyQuads: batch.underBgKittyQuads,
+      bgKittyQuads: batch.bgKittyQuads,
       kittyQuads: batch.kittyQuads,
-      kittyTextures: List<gpu.Texture>.of(kittyTextures, growable: false),
+      kittyTextures: kittyTextures.copyUnmodifiable(),
     );
     _cachedStaticLayers[key] = entry;
     while (_cachedStaticLayers.length > _maxStaticSceneLayers) {
       _cachedStaticLayers.remove(_cachedStaticLayers.keys.first);
     }
     return entry;
+  }
+
+  static int _resolveNonDefaultBgStart(GpuAtlasQuadBatch batch, int bgEnd) {
+    if (batch.underBgKittyQuads.isEmpty || bgEnd <= 0) return 0;
+    if ((batch.defaultBackgroundArgb >>> 24) == 0) return 0;
+    if (batch.instanceData.length < GpuAtlasQuadBatch.floatsPerInstance) {
+      return 0;
+    }
+    return batch.instanceData[14] == GpuAtlasQuadBatch.modeSolid ? 1 : 0;
   }
 
   void _renderStaticCombinedLayer({
@@ -1872,16 +1919,18 @@ final class FlutterGpuShaderBackend
     required gpu.DeviceBuffer? instanceBuffer,
     required GpuAtlasQuadBatch batch,
     required int bgEnd,
-    required List<gpu.Texture> kittyTextures,
+    required _WrappedKittyTextures kittyTextures,
   }) {
     final unitQuadView = _ensureDirectUnitQuadView();
     final atlasUbo = _stageDirectViewportUniform(width, height);
     final hasWallpaper = wallpaperImage != null && wallpaperTexture != null;
-    final auxView = hasWallpaper || batch.kittyQuads.isNotEmpty
+    final auxView = hasWallpaper || batch.hasAnyKittyQuads
         ? _stageDirectAuxQuads(
             width: width,
             height: height,
             wallpaperImage: hasWallpaper ? wallpaperImage : null,
+            underBgKittyQuads: batch.underBgKittyQuads,
+            bgKittyQuads: batch.bgKittyQuads,
             kittyQuads: batch.kittyQuads,
           )
         : null;
@@ -1897,24 +1946,39 @@ final class FlutterGpuShaderBackend
       atlasUbo: atlasUbo,
     );
     final samplerSlot = _resolvedDirectAtlasSamplerSlot;
-    var kittyAuxBase = 0;
+    var underBgAuxBase = 0;
     if (auxView != null && hasWallpaper) {
       renderPass.setColorBlendEnable(false);
       _drawAuxSingleQuad(renderPass, auxView, 0, samplerSlot, wallpaperTexture);
-      kittyAuxBase = 1;
+      underBgAuxBase = 1;
     }
     renderPass.setColorBlendEnable(true);
     renderPass.setColorBlendEquation(_premultipliedSrcOver);
+    final bgStart = _resolveNonDefaultBgStart(batch, bgEnd);
     final italicStart = batch.italicStartInstanceIndex;
     final kittySplit = batch.kittyInsertInstanceIndex;
+    final bgAuxBase = underBgAuxBase + kittyTextures.underBg.length;
+    final fgAuxBase = bgAuxBase + kittyTextures.bg.length;
+    _drawBgAndLayeredKittySlices(
+      renderPass: renderPass,
+      instanceBuffer: instanceBuffer,
+      auxView: auxView,
+      samplerSlot: samplerSlot,
+      atlasTexture: atlasTexture,
+      bgStart: bgStart,
+      bgEnd: bgEnd,
+      underBgAuxBase: underBgAuxBase,
+      bgAuxBase: bgAuxBase,
+      kittyTextures: kittyTextures,
+    );
     _drawDirectSliceIfNonEmpty(
       renderPass,
       instanceBuffer,
       samplerSlot,
       atlasTexture,
       _nearestClampSampler,
-      0,
-      italicStart,
+      bgEnd,
+      italicStart - bgEnd,
     );
     _drawDirectSliceIfNonEmpty(
       renderPass,
@@ -1928,9 +1992,9 @@ final class FlutterGpuShaderBackend
     _drawKittyAuxQuads(
       renderPass,
       auxView,
-      kittyAuxBase,
+      fgAuxBase,
       samplerSlot,
-      kittyTextures,
+      kittyTextures.fg,
     );
     _drawDirectSliceIfNonEmpty(
       renderPass,
@@ -1944,6 +2008,52 @@ final class FlutterGpuShaderBackend
     cmd.submit();
   }
 
+  void _drawBgAndLayeredKittySlices({
+    required gpu.RenderPass renderPass,
+    required gpu.DeviceBuffer? instanceBuffer,
+    required gpu.BufferView? auxView,
+    required gpu.UniformSlot samplerSlot,
+    required gpu.Texture atlasTexture,
+    required int bgStart,
+    required int bgEnd,
+    required int underBgAuxBase,
+    required int bgAuxBase,
+    required _WrappedKittyTextures kittyTextures,
+  }) {
+    _drawDirectSliceIfNonEmpty(
+      renderPass,
+      instanceBuffer,
+      samplerSlot,
+      atlasTexture,
+      _nearestClampSampler,
+      0,
+      bgStart,
+    );
+    _drawKittyAuxQuads(
+      renderPass,
+      auxView,
+      underBgAuxBase,
+      samplerSlot,
+      kittyTextures.underBg,
+    );
+    _drawDirectSliceIfNonEmpty(
+      renderPass,
+      instanceBuffer,
+      samplerSlot,
+      atlasTexture,
+      _nearestClampSampler,
+      bgStart,
+      bgEnd - bgStart,
+    );
+    _drawKittyAuxQuads(
+      renderPass,
+      auxView,
+      bgAuxBase,
+      samplerSlot,
+      kittyTextures.bg,
+    );
+  }
+
   void _renderStaticBgLayer({
     required gpu.RenderPipeline pipeline,
     required gpu.Texture targetTexture,
@@ -1953,15 +2063,22 @@ final class FlutterGpuShaderBackend
     required ui.Image? wallpaperImage,
     required gpu.Texture? wallpaperTexture,
     required gpu.DeviceBuffer? instanceBuffer,
+    required GpuAtlasQuadBatch batch,
     required int bgEnd,
+    required _WrappedKittyTextures kittyTextures,
   }) {
     final unitQuadView = _ensureDirectUnitQuadView();
     final atlasUbo = _stageDirectViewportUniform(width, height);
-    final auxView = wallpaperImage != null && wallpaperTexture != null
+    final hasWallpaper = wallpaperImage != null && wallpaperTexture != null;
+    final hasBgKitty =
+        batch.underBgKittyQuads.isNotEmpty || batch.bgKittyQuads.isNotEmpty;
+    final auxView = hasWallpaper || hasBgKitty
         ? _stageDirectAuxQuads(
             width: width,
             height: height,
-            wallpaperImage: wallpaperImage,
+            wallpaperImage: hasWallpaper ? wallpaperImage : null,
+            underBgKittyQuads: batch.underBgKittyQuads,
+            bgKittyQuads: batch.bgKittyQuads,
             kittyQuads: const <GpuKittyQuad>[],
           )
         : null;
@@ -1977,20 +2094,26 @@ final class FlutterGpuShaderBackend
       atlasUbo: atlasUbo,
     );
     final samplerSlot = _resolvedDirectAtlasSamplerSlot;
-    if (auxView != null && wallpaperTexture != null) {
+    var underBgAuxBase = 0;
+    if (auxView != null && hasWallpaper) {
       renderPass.setColorBlendEnable(false);
       _drawAuxSingleQuad(renderPass, auxView, 0, samplerSlot, wallpaperTexture);
+      underBgAuxBase = 1;
     }
     renderPass.setColorBlendEnable(true);
     renderPass.setColorBlendEquation(_premultipliedSrcOver);
-    _drawDirectSliceIfNonEmpty(
-      renderPass,
-      instanceBuffer,
-      samplerSlot,
-      atlasTexture,
-      _nearestClampSampler,
-      0,
-      bgEnd,
+    final bgStart = _resolveNonDefaultBgStart(batch, bgEnd);
+    _drawBgAndLayeredKittySlices(
+      renderPass: renderPass,
+      instanceBuffer: instanceBuffer,
+      auxView: auxView,
+      samplerSlot: samplerSlot,
+      atlasTexture: atlasTexture,
+      bgStart: bgStart,
+      bgEnd: bgEnd,
+      underBgAuxBase: underBgAuxBase,
+      bgAuxBase: underBgAuxBase + kittyTextures.underBg.length,
+      kittyTextures: kittyTextures,
     );
     cmd.submit();
   }
@@ -2221,7 +2344,7 @@ final class FlutterGpuShaderBackend
     required ui.Image? wallpaperImage,
     required gpu.Texture? wallpaperTexture,
     required GpuAtlasQuadBatch batch,
-    required List<gpu.Texture> kittyTextures,
+    required _WrappedKittyTextures kittyTextures,
     required List<_RenderedGpuRegion> renderedRegions,
   }) {
     final unitQuadView = _ensureDirectUnitQuadView();
@@ -2232,6 +2355,8 @@ final class FlutterGpuShaderBackend
       width: width,
       height: height,
       wallpaperImage: wallpaperImage,
+      underBgKittyQuads: batch.underBgKittyQuads,
+      bgKittyQuads: batch.bgKittyQuads,
       kittyQuads: batch.kittyQuads,
       renderedRegions: renderedRegions,
     );
@@ -2288,29 +2413,36 @@ final class FlutterGpuShaderBackend
     required int auxQuadIndex,
     required gpu.UniformSlot samplerSlot,
     required gpu.Texture atlasTexture,
-    required List<gpu.Texture> kittyTextures,
+    required _WrappedKittyTextures kittyTextures,
     required List<_RenderedGpuRegion> renderedRegions,
   }) {
     final bgEnd = batch.bgEndInstanceIndex.clamp(
       0,
       batch.italicStartInstanceIndex,
     );
+    final bgStart = _resolveNonDefaultBgStart(batch, bgEnd);
     final italicStart = batch.italicStartInstanceIndex;
     final kittySplit = batch.kittyInsertInstanceIndex;
     final underXform = batch.transformedUnderGlyphCount.clamp(
       0,
       batch.transformedInstanceCount,
     );
-    final regionAuxBase = auxQuadIndex + kittyTextures.length;
+    final underBgAuxBase = auxQuadIndex;
+    final bgAuxBase = underBgAuxBase + kittyTextures.underBg.length;
+    final fgAuxBase = bgAuxBase + kittyTextures.bg.length;
+    final regionAuxBase = fgAuxBase + kittyTextures.fg.length;
 
-    _drawDirectSliceIfNonEmpty(
-      renderPass,
-      instanceBuffer,
-      samplerSlot,
-      atlasTexture,
-      _nearestClampSampler,
-      0,
-      bgEnd,
+    _drawBgAndLayeredKittySlices(
+      renderPass: renderPass,
+      instanceBuffer: instanceBuffer,
+      auxView: auxView,
+      samplerSlot: samplerSlot,
+      atlasTexture: atlasTexture,
+      bgStart: bgStart,
+      bgEnd: bgEnd,
+      underBgAuxBase: underBgAuxBase,
+      bgAuxBase: bgAuxBase,
+      kittyTextures: kittyTextures,
     );
     _drawRenderedRegionsForStage(
       renderPass: renderPass,
@@ -2350,9 +2482,9 @@ final class FlutterGpuShaderBackend
     _drawKittyAuxQuads(
       renderPass,
       auxView,
-      auxQuadIndex,
+      fgAuxBase,
       samplerSlot,
-      kittyTextures,
+      kittyTextures.fg,
     );
     _drawDirectSliceIfNonEmpty(
       renderPass,
@@ -2921,6 +3053,8 @@ final class FlutterGpuShaderBackend
     required int width,
     required int height,
     required ui.Image? wallpaperImage,
+    List<GpuKittyQuad> underBgKittyQuads = const <GpuKittyQuad>[],
+    List<GpuKittyQuad> bgKittyQuads = const <GpuKittyQuad>[],
     required List<GpuKittyQuad> kittyQuads,
     List<_RenderedGpuRegion> renderedRegions = const <_RenderedGpuRegion>[],
     int fullscreenLayerQuadCount = 0,
@@ -2928,6 +3062,8 @@ final class FlutterGpuShaderBackend
     final quadCount =
         fullscreenLayerQuadCount +
         (wallpaperImage != null ? 1 : 0) +
+        underBgKittyQuads.length +
+        bgKittyQuads.length +
         kittyQuads.length +
         renderedRegions.length;
     if (quadCount <= 0) return null;
@@ -2981,24 +3117,17 @@ final class FlutterGpuShaderBackend
       );
       offsetFloats += GpuAtlasQuadBatch.floatsPerInstance;
     }
-    for (final quad in kittyQuads) {
-      GpuAtlasShaders.writeTexturedQuadInstance(
-        Float32List.sublistView(
-          scratch,
-          offsetFloats,
-          offsetFloats + GpuAtlasQuadBatch.floatsPerInstance,
-        ),
-        dstX: quad.dstX,
-        dstY: quad.dstY,
-        dstWidth: quad.dstWidth,
-        dstHeight: quad.dstHeight,
-        u0: quad.u0,
-        v0: quad.v0,
-        u1: quad.u1,
-        v1: quad.v1,
-      );
-      offsetFloats += GpuAtlasQuadBatch.floatsPerInstance;
-    }
+    offsetFloats = _writeKittyQuadsToScratch(
+      scratch,
+      offsetFloats,
+      underBgKittyQuads,
+    );
+    offsetFloats = _writeKittyQuadsToScratch(
+      scratch,
+      offsetFloats,
+      bgKittyQuads,
+    );
+    offsetFloats = _writeKittyQuadsToScratch(scratch, offsetFloats, kittyQuads);
     for (final region in renderedRegions) {
       final dst = region.pass.outputRectPhysical;
       GpuAtlasShaders.writeTexturedQuadInstance(
@@ -3037,6 +3166,33 @@ final class FlutterGpuShaderBackend
       offsetInBytes: slice.offsetInBytes,
       lengthInBytes: byteLength,
     );
+  }
+
+  static int _writeKittyQuadsToScratch(
+    Float32List scratch,
+    int offsetFloats,
+    List<GpuKittyQuad> quads,
+  ) {
+    var cursor = offsetFloats;
+    for (final quad in quads) {
+      GpuAtlasShaders.writeTexturedQuadInstance(
+        Float32List.sublistView(
+          scratch,
+          cursor,
+          cursor + GpuAtlasQuadBatch.floatsPerInstance,
+        ),
+        dstX: quad.dstX,
+        dstY: quad.dstY,
+        dstWidth: quad.dstWidth,
+        dstHeight: quad.dstHeight,
+        u0: quad.u0,
+        v0: quad.v0,
+        u1: quad.u1,
+        v1: quad.v1,
+      );
+      cursor += GpuAtlasQuadBatch.floatsPerInstance;
+    }
+    return cursor;
   }
 
   ui.Image? _renderPasses({
@@ -3900,6 +4056,45 @@ final class FlutterGpuShaderBackend
   }
 }
 
+final class _WrappedKittyTextures {
+  static const _WrappedKittyTextures empty = _WrappedKittyTextures();
+
+  final List<gpu.Texture> underBg;
+  final List<gpu.Texture> bg;
+  final List<gpu.Texture> fg;
+
+  const _WrappedKittyTextures({
+    this.underBg = const <gpu.Texture>[],
+    this.bg = const <gpu.Texture>[],
+    this.fg = const <gpu.Texture>[],
+  });
+
+  _WrappedKittyTextures copyUnmodifiable() => _WrappedKittyTextures(
+    underBg: underBg.isEmpty
+        ? const <gpu.Texture>[]
+        : List<gpu.Texture>.of(underBg, growable: false),
+    bg: bg.isEmpty
+        ? const <gpu.Texture>[]
+        : List<gpu.Texture>.of(bg, growable: false),
+    fg: fg.isEmpty
+        ? const <gpu.Texture>[]
+        : List<gpu.Texture>.of(fg, growable: false),
+  );
+
+  bool matches(_WrappedKittyTextures other) =>
+      _sameTextureList(underBg, other.underBg) &&
+      _sameTextureList(bg, other.bg) &&
+      _sameTextureList(fg, other.fg);
+
+  static bool _sameTextureList(List<gpu.Texture> a, List<gpu.Texture> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!identical(a[i], b[i])) return false;
+    }
+    return true;
+  }
+}
+
 final class _CachedStaticSceneLayers {
   final gpu.Texture bgTexture;
   final gpu.Texture? fgTexture;
@@ -3915,8 +4110,10 @@ final class _CachedStaticSceneLayers {
   final gpu.Texture atlasTexture;
   final ui.Image? wallpaperImage;
   final gpu.Texture? wallpaperTexture;
+  final List<GpuKittyQuad> underBgKittyQuads;
+  final List<GpuKittyQuad> bgKittyQuads;
   final List<GpuKittyQuad> kittyQuads;
-  final List<gpu.Texture> kittyTextures;
+  final _WrappedKittyTextures kittyTextures;
 
   const _CachedStaticSceneLayers({
     required this.bgTexture,
@@ -3933,6 +4130,8 @@ final class _CachedStaticSceneLayers {
     required this.atlasTexture,
     required this.wallpaperImage,
     required this.wallpaperTexture,
+    required this.underBgKittyQuads,
+    required this.bgKittyQuads,
     required this.kittyQuads,
     required this.kittyTextures,
   });
@@ -3944,7 +4143,7 @@ final class _CachedStaticSceneLayers {
     required gpu.Texture atlasTexture,
     required ui.Image? wallpaperImage,
     required gpu.Texture? wallpaperTexture,
-    required List<gpu.Texture> kittyTextures,
+    required _WrappedKittyTextures kittyTextures,
     required bool splitLayers,
   }) {
     if (this.splitLayers != splitLayers ||
@@ -3959,15 +4158,21 @@ final class _CachedStaticSceneLayers {
         kittySplit != batch.kittyInsertInstanceIndex ||
         !identical(this.atlasTexture, atlasTexture) ||
         !identical(this.wallpaperImage, wallpaperImage) ||
-        !identical(this.wallpaperTexture, wallpaperTexture) ||
-        this.kittyTextures.length != kittyTextures.length) {
+        !identical(this.wallpaperTexture, wallpaperTexture)) {
       return false;
     }
-    if (kittyTextures.isNotEmpty && !identical(kittyQuads, batch.kittyQuads)) {
+    if (!this.kittyTextures.matches(kittyTextures)) return false;
+    if (kittyTextures.underBg.isNotEmpty &&
+        !identical(underBgKittyQuads, batch.underBgKittyQuads)) {
       return false;
     }
-    for (var i = 0; i < kittyTextures.length; i++) {
-      if (!identical(this.kittyTextures[i], kittyTextures[i])) return false;
+    if (kittyTextures.bg.isNotEmpty &&
+        !identical(bgKittyQuads, batch.bgKittyQuads)) {
+      return false;
+    }
+    if (kittyTextures.fg.isNotEmpty &&
+        !identical(kittyQuads, batch.kittyQuads)) {
+      return false;
     }
     return true;
   }

@@ -1781,7 +1781,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     final hasUnprimedInput =
         !identical(atlasImage, _lastPrimedAtlas) ||
         !identical(_effectiveWallpaper, _lastPrimedWallpaper) ||
-        batch.kittyQuads.any((q) => !_lastPrimedKittyImages.contains(q.image));
+        _hasUnprimedKittyImages(batch);
     if (_directPrimingSucceededWithoutFrame && !hasUnprimedInput) {
       _directPrimingSucceededWithoutFrame = false;
       _enterDirectFallbackPostFrame(_DirectFallbackReason.runtimeError);
@@ -1839,6 +1839,15 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     }
   }
 
+  bool _hasUnprimedKittyImages(GpuAtlasQuadBatch batch) =>
+      batch.underBgKittyQuads.any(
+        (q) => !_lastPrimedKittyImages.contains(q.image),
+      ) ||
+      batch.bgKittyQuads.any(
+        (q) => !_lastPrimedKittyImages.contains(q.image),
+      ) ||
+      batch.kittyQuads.any((q) => !_lastPrimedKittyImages.contains(q.image));
+
   void _prepareDirectResourcesAsync(
     DirectTerminalShaderBackend backend,
     ui.Image atlasImage,
@@ -1850,6 +1859,8 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     final generation = ++_directPrepareGeneration;
     final wallpaper = _effectiveWallpaper;
     final kittyImages = <ui.Image>[
+      for (final quad in batch.underBgKittyQuads) quad.image,
+      for (final quad in batch.bgKittyQuads) quad.image,
       for (final quad in batch.kittyQuads) quad.image,
     ];
     WidgetsBinding.instance.addPostFrameCallback((_) {
