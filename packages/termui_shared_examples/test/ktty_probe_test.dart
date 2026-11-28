@@ -613,6 +613,7 @@ void main() {
         final report = await runKttyBatchProbe(
           wireInput: replies.stream,
           onWriteWire: vt.writeString,
+          options: const KttyProbeOptions(probeClipboardWrite: true),
         );
 
         expect(report.isComplete, isTrue);
@@ -663,7 +664,13 @@ void main() {
         expect(initialScreen, contains('Scheme:dark'));
         expect(initialScreen, contains('Ptr:default'));
         expect(initialScreen, contains('KTTY PROBE'));
-        expect(initialScreen, contains('33/33 PASS'));
+        expect(initialScreen, contains('32/33 PASS'));
+        expect(
+          hostBackend.output.toString(),
+          isNot(contains('\x1b]52;c;a3R0eQ==')),
+          reason:
+              'Interactive virtual probe must not overwrite host clipboard on startup',
+        );
 
         // Verify U+10EEEE Kitty placeholder cells, SGR 58 underline colors, and OSC 8 URIs
         // all made it across the VirtualTerminal -> TerminalView wire!
@@ -715,7 +722,11 @@ void main() {
         final finalReport = await probeFuture.timeout(
           const Duration(seconds: 3),
         );
-        expect(finalReport.coreSupportedCount, equals(33));
+        expect(finalReport.coreSupportedCount, equals(32));
+        expect(
+          finalReport['osc_5522_clip']?.status,
+          equals(KttyCapabilityStatus.optionalDisabled),
+        );
         expect(finalReport.hasOsc99Ack, isTrue);
         expect(
           finalReport.lastOsc99Ack,
@@ -852,8 +863,8 @@ void main() {
           timeout: const Duration(milliseconds: 25),
         );
         expect(timedOut.isComplete, isTrue);
-        expect(timedOut.coreUnsupportedCount, equals(33));
-        expect(timedOut.optionalDisabledCount, equals(5));
+        expect(timedOut.coreUnsupportedCount, equals(32));
+        expect(timedOut.optionalDisabledCount, equals(6));
         expect(timedOut['da1']?.detail, equals('Timed out waiting for DA1'));
 
         final stopHandle = KttyProbeStopHandle();
@@ -1080,5 +1091,41 @@ void main() {
       expect(result.exitCode, equals(2));
       expect(result.stderr, contains('--self-test'));
     });
+
+    test(
+      'PR #504 M1: apc_animation stays pending until all 3 replies (a=f, a=a, a=c) arrive and fails on partial replies',
+      () {
+        final report = KttyProbeReport()..resetForNewProbe();
+        // Only frame reply (a=f) arrives; a=a and a=c replies never arrive before DA1.
+        report.recordApcReply(kttyProbeAnimId, 'OK', frameNumber: 2);
+        expect(
+          report['apc_animation']!.status,
+          equals(KttyCapabilityStatus.pending),
+        );
+
+        report.finalizePending('No reply before DA1');
+        expect(
+          report['apc_animation']!.status,
+          equals(KttyCapabilityStatus.unsupported),
+        );
+      },
+    );
+
+    test(
+      'PR #504 M2: default buildWireProbeSequence is non-destructive and does not overwrite clipboard via OSC 5522',
+      () {
+        final defaultWire = KttyProbeReport.buildWireProbeSequence();
+        expect(
+          defaultWire,
+          isNot(contains('\x1b]5522;type=write')),
+          reason:
+              'Default wire probe must not overwrite the user clipboard unless opted in',
+        );
+        final optInWire = KttyProbeReport.buildWireProbeSequence(
+          options: const KttyProbeOptions(probeClipboardWrite: true),
+        );
+        expect(optInWire, contains('\x1b]5522;type=write:id=ktty-probe;'));
+      },
+    );
   });
 }
