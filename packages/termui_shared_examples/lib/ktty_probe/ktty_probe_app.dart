@@ -90,12 +90,86 @@ bool _bufferContainsKittyImageId(Buffer buffer, int imageId) {
   return false;
 }
 
+final class _ExtendedPlacementEmitter {
+  final KttyWireTerminalBackend backend;
+  final bool wrapTmux;
+  String _shorthandSig = '';
+  String _animatedSig = '';
+
+  _ExtendedPlacementEmitter(this.backend, {required this.wrapTmux});
+
+  void emitIfUploaded(Buffer frame) {
+    _emitShorthandIfUploaded(frame);
+    _emitAnimatedIfUploaded(frame);
+  }
+
+  void _emitShorthandIfUploaded(Buffer frame) {
+    if (!_bufferContainsKittyImageId(frame, kttyVisualShorthandImageId)) return;
+    final data = KittyImageRegistry.global.lookupImage(
+      kttyVisualShorthandImageId,
+    );
+    if (data == null) return;
+    final sig = '${data.version}:${data.gridCols}x${data.gridRows}';
+    if (sig == _shorthandSig) return;
+    _shorthandSig = sig;
+    _writeApcSequence(
+      backend,
+      buildShorthandPlacementApcCommands(
+        cols: data.gridCols,
+        rows: data.gridRows,
+      ),
+      wrapTmux: wrapTmux,
+    );
+  }
+
+  void _emitAnimatedIfUploaded(Buffer frame) {
+    if (!_bufferContainsKittyImageId(frame, kttyVisualAnimatedImageId)) return;
+    final anim = KittyImageRegistry.global.lookupAnimation(
+      kttyVisualAnimatedImageId,
+    );
+    if (anim == null || anim.frames.length < 2) return;
+    final f2 = anim.frames[1].imageData;
+    final sig = '${f2.version}:${f2.gridCols}x${f2.gridRows}';
+    if (sig == _animatedSig) return;
+    _animatedSig = sig;
+    _writeApcSequence(
+      backend,
+      buildAnimatedTileApcCommands(f2, frameGapMs: anim.frames[1].gapMs),
+      wrapTmux: wrapTmux,
+    );
+  }
+}
+
+String _formatHeaderSliceRestoreAnsi(Buffer frame) {
+  final sb = StringBuffer('\x1b[1;1H');
+  for (var x = 0; x < 2; x++) {
+    final attrIdx = x * 3;
+    final fg = frame.attributes[attrIdx];
+    final bg = frame.attributes[attrIdx + 1];
+    final mods = frame.attributes[attrIdx + 2];
+    sb.write('\x1b[0');
+    if ((mods & Modifier.bold) != 0) sb.write(';1');
+    if (fg != 0) {
+      sb.write(';38;2;${(fg >>> 16) & 0xFF};${(fg >>> 8) & 0xFF};${fg & 0xFF}');
+    }
+    if (bg != 0) {
+      sb.write(';48;2;${(bg >>> 16) & 0xFF};${(bg >>> 8) & 0xFF};${bg & 0xFF}');
+    }
+    sb
+      ..write('m')
+      ..write(frame.getCharacter(x, 0));
+  }
+  sb.write('\x1b[0m');
+  return sb.toString();
+}
+
 /// Runs the interactive KTTY Probe & Check TUI over a [KttyWireTerminalBackend].
 Future<KttyProbeReport> runKttyProbeOnWire(
   KttyWireTerminalBackend backend, {
   Duration probeTimeout = const Duration(milliseconds: 600),
   KttyProbeStopHandle? stopHandle,
   KttyProbeOptions options = const KttyProbeOptions(),
+  FutureOr<String?> Function(String reportJson)? onExportReport,
 }) async {
   final terminal = term.Terminal(backend);
   final sceneManager = SceneManager(terminal, renderingMode: .alternateScreen)
@@ -114,27 +188,19 @@ Future<KttyProbeReport> runKttyProbeOnWire(
     ..enableMouseTracking()
     ..enableBracketedPaste();
   backend.interceptor.sgrPixelsRequested = true;
-  backend.write('\x1b[?1004h\x1b[>11u\x1b[?1016h');
+  backend.write('\x1b[?1004h\x1b[>11u\x1b[?1016h\x1b[?2031h');
 
-  var emittedShorthandSignature = '';
-  void emitShorthandPlacementsIfUploaded(Buffer frame) {
-    if (exitCompleter.isCompleted) return;
-    if (!_bufferContainsKittyImageId(frame, kttyVisualShorthandImageId)) return;
-    final data = KittyImageRegistry.global.lookupImage(
-      kttyVisualShorthandImageId,
-    );
-    if (data == null) return;
-    final sig = '${data.version}:${data.gridCols}x${data.gridRows}';
-    if (sig == emittedShorthandSignature) return;
-    emittedShorthandSignature = sig;
-    _writeApcSequence(
-      backend,
-      buildShorthandPlacementApcCommands(
-        cols: data.gridCols,
-        rows: data.gridRows,
-      ),
-      wrapTmux: options.wrapTmuxPassthrough,
-    );
+  final placementEmitter = _ExtendedPlacementEmitter(
+    backend,
+    wrapTmux: options.wrapTmuxPassthrough,
+  );
+  Buffer? lastPaintedFrame;
+
+  void restoreHeaderProbeCells() {
+    final frame = lastPaintedFrame;
+    if (frame == null || frame.width < 2 || frame.height < 1) return;
+    backend.write(_formatHeaderSliceRestoreAnsi(frame));
+    sceneManager.scheduleRender();
   }
 
   late final PromptRunner<void> runner;
@@ -146,12 +212,17 @@ Future<KttyProbeReport> runKttyProbeOnWire(
       probeTimeout: probeTimeout,
       onQuit: requestQuit,
       options: options,
+      onExportReport: onExportReport,
+      onAfterReprobe: restoreHeaderProbeCells,
     ),
     alternateScreen: false,
     mode: .managed,
     onFramePainted: (frame) {
+      lastPaintedFrame = frame;
       sceneManager.scheduleRender();
-      scheduleMicrotask(() => emitShorthandPlacementsIfUploaded(frame));
+      scheduleMicrotask(() {
+        if (!exitCompleter.isCompleted) placementEmitter.emitIfUploaded(frame);
+      });
     },
   );
 
@@ -179,8 +250,13 @@ Future<KttyProbeReport> runKttyProbeOnWire(
   } finally {
     runner.abort();
     sceneManager.dispose();
+    _writeApcSequence(
+      backend,
+      '\x1b_Ga=d,d=I,i=$kttyVisualAnimatedImageId,q=2\x1b\\',
+      wrapTmux: options.wrapTmuxPassthrough,
+    );
     backend.write(
-      '\x1b[<u\x1b[?1016l\x1b[?1004l\x1b[?2004l'
+      '\x1b[<u\x1b[?2031l\x1b[?1016l\x1b[?1004l\x1b[?2004l'
       '\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[?25h\x1b[0m',
     );
     terminal.dispose();
@@ -228,6 +304,12 @@ final class KttyProbeStatefulRoot extends StatefulWidget {
   /// Optional wire-level probe options (e.g. tmux passthrough or local media).
   final KttyProbeOptions options;
 
+  /// Optional Web-safe callback exporting the serialized JSON report.
+  final FutureOr<String?> Function(String reportJson)? onExportReport;
+
+  /// Optional hook invoked after an interactive re-probe to restore probed header cells.
+  final void Function()? onAfterReprobe;
+
   /// Creates a [KttyProbeStatefulRoot].
   const KttyProbeStatefulRoot({
     super.key,
@@ -236,6 +318,8 @@ final class KttyProbeStatefulRoot extends StatefulWidget {
     required this.probeTimeout,
     required this.onQuit,
     this.options = const KttyProbeOptions(),
+    this.onExportReport,
+    this.onAfterReprobe,
   });
 
   @override
@@ -256,12 +340,13 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
   bool _showOcclusion = true;
   bool _deleteFreeDataNext = false;
   String? _deleteModeLabel;
+  String? _hoveredCursorShape;
   int _notifySeq = 0;
   int _clipboardSeq = 0;
   int _titleSeq = 0;
   int _promptSeq = 0;
   String _lastActionMessage =
-      'Ready — press [D] DelMode, [N] OSC99, [C] OSC52, [T] Title';
+      'Ready — press [D] DelMode, [N] OSC99, [C] OSC52, [E] Export, [P] Copy';
   Timer? _probeFallbackTimer;
 
   int get _requestedKbFlags => _kbFlagCycle[_kbCycleIndex];
@@ -275,6 +360,10 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
 
   @override
   void dispose() {
+    if (_hoveredCursorShape != null) {
+      widget.backend.write('\x1b]22;<\x1b\\');
+      _hoveredCursorShape = null;
+    }
     _probeFallbackTimer?.cancel();
     widget.backend.report.removeListener(_onReportUpdated);
     _focusNode.dispose();
@@ -296,9 +385,11 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
   void _triggerProbe() {
     _probeFallbackTimer?.cancel();
     widget.backend.report.resetForNewProbe(options: widget.options);
+    widget.backend.write('\x1b[1;1H');
     widget.backend.write(
       KttyProbeReport.buildWireProbeSequence(options: widget.options),
     );
+    widget.onAfterReprobe?.call();
     _probeFallbackTimer = Timer(widget.probeTimeout, () {
       if (!widget.backend.report.isComplete) {
         widget.backend.report.finalizePending('Timed out waiting for DA1');
@@ -306,7 +397,29 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
     });
   }
 
+  void _handleHoverCursorShape(String? shape) {
+    if (shape == _hoveredCursorShape) return;
+    if (_hoveredCursorShape != null) {
+      widget.backend.write('\x1b]22;<\x1b\\');
+    }
+    _hoveredCursorShape = shape;
+    if (shape != null) {
+      widget.backend.write('\x1b]22;>$shape\x1b\\');
+    }
+    if (mounted) {
+      setState(() {
+        _lastActionMessage = shape == null
+            ? 'Popped OSC 22 hover cursor (OSC 22;<)'
+            : 'Pushed OSC 22 hover cursor "$shape" (OSC 22;>$shape)';
+      });
+    }
+  }
+
   void _selectTab(KttyProbeTab tab) {
+    if (_hoveredCursorShape != null) {
+      widget.backend.write('\x1b]22;<\x1b\\');
+      _hoveredCursorShape = null;
+    }
     setState(() {
       _activeTab = tab;
     });
@@ -399,6 +512,59 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
     });
   }
 
+  String _serializeReportJson() => const JsonEncoder.withIndent(
+    '  ',
+  ).convert(widget.backend.report.toJsonMap());
+
+  void _copyReportToClipboard() {
+    final jsonText = _serializeReportJson();
+    final utf8Bytes = utf8.encode(jsonText);
+    final encoded = base64Encode(utf8Bytes);
+    widget.backend.write('\x1b]52;c;$encoded\x1b\\');
+    setState(() {
+      _lastActionMessage =
+          'Copied JSON report via OSC 52 (${utf8Bytes.length} bytes)';
+    });
+  }
+
+  void _setExportSuccess(String? dest) {
+    if (!mounted) return;
+    setState(() {
+      _lastActionMessage = dest == null
+          ? 'Exported JSON report'
+          : 'Exported JSON report -> $dest';
+    });
+  }
+
+  void _setExportError(Object error) {
+    if (!mounted) return;
+    setState(() {
+      _lastActionMessage = 'Export failed: $error';
+    });
+  }
+
+  void _exportReport() {
+    final callback = widget.onExportReport;
+    if (callback == null) {
+      setState(() {
+        _lastActionMessage =
+            'Export sink unavailable on this host (use [P:Copy])';
+      });
+      return;
+    }
+    final jsonText = _serializeReportJson();
+    try {
+      final result = callback(jsonText);
+      if (result is Future<String?>) {
+        unawaited(result.then(_setExportSuccess, onError: _setExportError));
+      } else {
+        _setExportSuccess(result);
+      }
+    } on Object catch (error) {
+      _setExportError(error);
+    }
+  }
+
   bool _handleKeyEvent(term.KeyEvent event) {
     _recordKeyTelemetry(event);
     if (event.eventType == term.KeyEventType.release) {
@@ -464,8 +630,12 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
         _sendClipboard();
       case 't' || 'T':
         _cycleWindowTitle();
-      case 'p' || 'P':
+      case 's' || 'S':
         _emitPromptMarker();
+      case 'e' || 'E':
+        _exportReport();
+      case 'p' || 'P':
+        _copyReportToClipboard();
       case 'q' || 'Q':
         widget.onQuit();
       default:
@@ -485,6 +655,7 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
       keyLog: _keyLog,
       lastActionMessage: _lastActionMessage,
       deleteModeLabel: _deleteModeLabel,
+      hoveredCursorShape: _hoveredCursorShape,
     );
     final actions = KttyProbeActions(
       onSelectTab: _selectTab,
@@ -497,6 +668,9 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
       onSendClipboard: _sendClipboard,
       onCycleWindowTitle: _cycleWindowTitle,
       onEmitPromptMarker: _emitPromptMarker,
+      onExportReport: _exportReport,
+      onCopyReport: _copyReportToClipboard,
+      onHoverCursorShape: _handleHoverCursorShape,
       onQuit: widget.onQuit,
     );
     return Focus(
