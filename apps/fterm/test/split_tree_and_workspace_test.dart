@@ -4207,9 +4207,12 @@ void _defineWave2HardeningTests() {
         );
 
         final encodedDenied = base64Encode(utf8.encode('remote-denied'));
+        final titlesBefore = workspace.titleEventsCount;
         workspace.setOsc52Policy(Osc52ClipboardPolicy.deny);
-        pty.emitRawAnsi('\x1b]52;c;$encodedDenied\x1b\\');
-        await Future<void>.delayed(const Duration(milliseconds: 20));
+        pty.emitRawAnsi(
+          '\x1b]52;c;$encodedDenied\x1b\\\x1b]2;denied-sentinel\x1b\\',
+        );
+        await _pumpUntil(() => workspace.titleEventsCount > titlesBefore);
         expect(copied, isEmpty);
 
         final encodedAllowed = base64Encode(utf8.encode('remote-allowed'));

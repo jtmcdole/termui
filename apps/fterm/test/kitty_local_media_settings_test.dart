@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fterm/src/audio/fterm_audio_controller.dart';
 import 'package:fterm/src/commands/fterm_capability_context.dart';
@@ -564,5 +564,86 @@ void main() {
         );
       },
     );
+
+    test('default clipboardReader reads host Clipboard via platform channel and tolerates channel errors', () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      var throwError = false;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.getData') {
+              if (throwError) throw PlatformException(code: 'unavailable');
+              return <String, Object?>{'text': 'host-platform-clip'};
+            }
+            return null;
+          });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      final backends = <_FakeRoutedBackend>[];
+      final router = PtyRouter();
+      final driver = IoLocalHostDriver(
+        router: router,
+        backendFactory:
+            ({
+              required executable,
+              required arguments,
+              required initialCols,
+              required initialRows,
+              required pixelWidth,
+              required pixelHeight,
+              workingDirectory,
+              environment,
+            }) {
+              final b = _FakeRoutedBackend();
+              backends.add(b);
+              return b;
+            },
+        ensureConPtyReady: ({
+          bool download = false,
+          void Function(String)? onWarning,
+        }) async => null,
+      );
+      final ws = _createWorkspace(storage: _MemStorage(), driver: driver)
+        ..setWorkspaceVisible(true)
+        ..setWindowFocused(true);
+      ws.updatePreferences(ws.preferences.copyWith(localClipboardRead: true));
+      addTearDown(() async {
+        await ws.dispose();
+        await driver.dispose();
+      });
+
+      await ws.openLocalShellTab();
+      final backend = backends.first;
+      const plainMimeB64 = 'dGV4dC9wbGFpbg==';
+
+      backend.emitOutput('\x1b]5522;type=read:id=p1;$plainMimeB64\x1b\\');
+      await Future<void>.microtask(() {});
+      await Future<void>.microtask(() {});
+      expect(
+        backend.replies,
+        equals(<String>[
+          '\x1b]5522;type=read:status=OK:id=p1\x1b\\',
+          '\x1b]5522;type=read:status=DATA:mime=$plainMimeB64:id=p1;'
+              '${base64Encode(utf8.encode('host-platform-clip'))}\x1b\\',
+          '\x1b]5522;type=read:status=DONE:id=p1\x1b\\',
+        ]),
+      );
+
+      // Platform error falls back to empty DONE without throwing.
+      throwError = true;
+      backend.replies.clear();
+      backend.emitOutput('\x1b]5522;type=read:id=p2;$plainMimeB64\x1b\\');
+      await Future<void>.microtask(() {});
+      await Future<void>.microtask(() {});
+      expect(
+        backend.replies,
+        equals(<String>[
+          '\x1b]5522;type=read:status=OK:id=p2\x1b\\',
+          '\x1b]5522;type=read:status=DONE:id=p2\x1b\\',
+        ]),
+      );
+    });
   });
 }
