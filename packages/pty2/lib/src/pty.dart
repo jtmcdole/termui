@@ -48,10 +48,12 @@ abstract base class BasePseudoTerminal implements PseudoTerminal {
 @pragma('vm:never-inline')
 void _keepAlive(Object? o) {}
 
-/// An isolate based PseudoTerminal implementation. Performs better than
-/// PollingPseudoTerminal and requires less resource. However this prevents
-/// flutter hot reload from working. Ideal for release builds. The underlying
-/// PtyCore must be blocking.
+/// An isolate-based [PseudoTerminal] implementation backed by a blocking
+/// [PtyCore].
+///
+/// Spawns separate background isolates for reading output, writing input, and
+/// waiting on process exit so blocking OS I/O never stalls the caller's
+/// isolate.
 final class BlockingPseudoTerminal extends BasePseudoTerminal {
   BlockingPseudoTerminal(super._core, this._syncProcessed);
 
@@ -60,6 +62,7 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
   final List<Uint8List> _pendingWrites = <Uint8List>[];
   final bool _syncProcessed;
   late final StreamController<String> _outStreamController;
+  bool _initialized = false;
   bool _hasSendPort = false;
   bool _pendingAck = false;
   bool _outCancelled = false;
@@ -103,25 +106,12 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
 
   @override
   bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
-    _writerClosed = true;
-    _pendingWrites.clear();
-    final delivered = super.kill(signal);
-    final port = _writerSendPort;
-    _writerSendPort = null;
-    port?.send(null);
-    return delivered;
+    _closeWriter();
+    return super.kill(signal);
   }
 
-  @override
-  void init() {
-    _outStreamController = StreamController<String>(
-      onCancel: () {
-        _outCancelled = true;
-        ackProcessed();
-      },
-    );
-    out = _outStreamController.stream;
-
+  void _spawnWriterIsolate() {
+    final writer = _core.takeWriter();
     final writerReadyPort = ReceivePort();
     final writerExitPort = ReceivePort();
     unawaited(
@@ -133,17 +123,28 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
     unawaited(
       writerExitPort.first.then((_) {
         writerExitPort.close();
+        _closeWriter();
         _keepAlive(_core);
       }),
     );
     unawaited(
       Isolate.spawn(
         _writeUntilClosed,
-        _WriterIsolateArgs(writerReadyPort.sendPort, _core.writer),
+        _WriterIsolateArgs(writerReadyPort.sendPort, writer),
         onExit: writerExitPort.sendPort,
+      ).then<void>(
+        (_) {},
+        onError: (Object _) {
+          writerReadyPort.close();
+          writerExitPort.close();
+          writer.free();
+          _closeWriter();
+        },
       ),
     );
+  }
 
+  void _spawnExitIsolate() {
     final exitPort = ReceivePort();
     unawaited(
       Isolate.spawn(
@@ -157,7 +158,9 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
       _keepAlive(_core);
       return value as int;
     });
+  }
 
+  void _spawnReaderIsolate() {
     final receivePort = ReceivePort();
     var first = true;
     receivePort.listen((msg) {
@@ -179,24 +182,19 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
         }
         return;
       }
-
       if (_outCancelled) {
         // Subscription was cancelled; keep draining the reader isolate to EOF
         // so its ReceivePort closes cleanly instead of idling forever.
         ackProcessed();
         return;
       }
-
       switch (msg) {
         case String _:
           _outStreamController.sink.add(msg);
-
-          break;
         case Uint8List _:
           _outStreamController.sink.add(utf8.decode(msg, allowMalformed: true));
-          break;
         default:
-        // print('wtf happened here? ${(type: msg.runtimeType, msg: msg)}');
+          break;
       }
     });
     unawaited(
@@ -208,10 +206,27 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
   }
 
   @override
+  void init() {
+    if (_initialized) {
+      throw StateError('BlockingPseudoTerminal has already been initialized.');
+    }
+    _initialized = true;
+    _outStreamController = StreamController<String>(
+      onCancel: () {
+        _outCancelled = true;
+        ackProcessed();
+      },
+    );
+    _spawnWriterIsolate();
+    _spawnExitIsolate();
+    _spawnReaderIsolate();
+  }
+
+  @override
   Future<int> get exitCode => _exitCodeFuture;
 
   @override
-  late Stream<String> out;
+  Stream<String> get out => _outStreamController.stream;
 
   @override
   void ackProcessed() {
@@ -263,7 +278,7 @@ void _writeUntilClosed(_WriterIsolateArgs ctx) {
     }
     if (message is! TransferableTypedData) return;
     final bytes = message.materialize().asUint8List();
-    if (!ctx.writer.write(bytes)) {
+    if (ctx.writer.write(bytes) == PtyWriteStatus.closed) {
       shutdown();
     }
   });

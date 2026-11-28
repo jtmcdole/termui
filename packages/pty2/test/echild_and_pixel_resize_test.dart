@@ -218,7 +218,6 @@ Future<void> _testKillAfterNaturalExit() async {
   expect(core.kill(ProcessSignal.sigterm), isFalse);
   core.onReaderClosed();
   core.worker.free();
-  core.writer.free();
 }
 
 Future<void> _testKillWhileBlockingExit() async {

@@ -64,10 +64,10 @@ abstract interface class PseudoTerminal {
     return path;
   }
 
-  /// Internal testing flag to allow non-blocking PTY on Windows.
-  /// If [blocking] is [true], the PseudoTerminal starts in blocking mode
-  /// (better suited for flutter release mode), otherwise in polling mode
-  /// (better suited for flutter debug mode).
+  /// Starts a new process attached to a pseudo-terminal.
+  ///
+  /// Uses a dedicated reader isolate, exit-waiter isolate, and writer isolate
+  /// so blocking OS reads and writes never stall the caller's isolate.
   ///
   /// The [raw] flag puts the terminal into raw mode on Unix. By default, Unix
   /// pseudo-terminals operate in canonical mode with ECHO enabled. This means
@@ -113,10 +113,12 @@ abstract interface class PseudoTerminal {
   /// by [start].
   void init();
 
-  /// Kills the underlying process.
+  /// Terminates the underlying process and closes the PTY input writer.
   ///
-  /// Sends the provided [signal] (defaults to [ProcessSignal.sigterm]) to the
-  /// running process. Returns true if the signal was successfully delivered.
+  /// Sends [signal] (defaults to [ProcessSignal.sigterm] on Unix; Windows
+  /// terminates the child process) and immediately discards any queued,
+  /// unflushed [write] payloads. Subsequent [write] calls are ignored.
+  /// Returns `true` if the signal was delivered.
   bool kill([ProcessSignal signal = ProcessSignal.sigterm]);
 
   /// A future that completes with the exit code of the process when it terminates.
@@ -126,9 +128,14 @@ abstract interface class PseudoTerminal {
   //   return _core.pid;
   // }
 
-  /// Writes data to the standard input of the pseudo-terminal.
+  /// Asynchronously queues [input] (UTF-8 encoded) to be written in FIFO order
+  /// to the pseudo-terminal's standard input on a background writer isolate.
   ///
-  /// The [input] string is encoded and sent to the process.
+  /// Returns immediately without waiting for the OS pipe/PTY write to complete
+  /// so callers can safely emit replies inside [out] listeners (including when
+  /// `ackProcessed: true`). Empty strings and writes issued after [kill] or
+  /// writer shutdown are ignored. Note that queued writes are buffered in
+  /// memory until drained by the child process.
   void write(String input);
 
   /// A stream of output from the standard output and standard error of the pseudo-terminal.
