@@ -28,6 +28,9 @@ abstract interface class TerminalHandler {
   /// Execute an APC (Application Program Command).
   void apc(String payload);
 
+  /// Execute a DCS (Device Control String) command.
+  void dcs(String payload);
+
   /// Execute a standard Escape sequence.
   void esc(String command);
 }
@@ -54,6 +57,8 @@ enum _TmuxInner { ignored, payload, pendingSt, terminated }
 final class AnsiParser {
   static const int _maxOscLength = 8192;
   static const int _maxOsc52Length = 1_400_000;
+  static const int _maxOsc5522Length = 98_304;
+  static const int _maxDcsLength = 8192;
   static const int _maxApcLength = 1_400_000;
   static const int _maxCsiParams = 64;
   static const int _maxCsiSubparams = 16;
@@ -83,6 +88,10 @@ final class AnsiParser {
   bool _oscOverflowed = false;
   final List<int> _apcBuffer = [];
   bool _apcOverflowed = false;
+  final List<int> _dcsBuffer = [];
+  bool _dcsOverflowed = false;
+  bool _dcsCaptureEnabled = false;
+  bool _dcsIsTmux = false;
   int _dcsPrefixLen = -1;
   _TmuxInner _tmuxInner = .ignored;
   bool _tmuxIsApc = false;
@@ -205,7 +214,7 @@ final class AnsiParser {
       return;
     }
     if (_isControlStringIntroducer(c)) {
-      _enterDcs(allowTmuxPassthrough: c == 0x50);
+      _enterDcs(captureDcs: c == 0x50);
       return;
     }
     _state = _ParserState.ground;
@@ -347,7 +356,7 @@ final class AnsiParser {
 
   void _appendOscChar(int c) {
     if (_oscOverflowed) return;
-    final limit = _isOsc52Prefix() ? _maxOsc52Length : _maxOscLength;
+    final limit = _oscLimit();
     if (_oscBuffer.length < limit) {
       _oscBuffer.add(c);
     } else {
@@ -356,11 +365,25 @@ final class AnsiParser {
     }
   }
 
+  int _oscLimit() {
+    if (_isOsc52Prefix()) return _maxOsc52Length;
+    if (_isOsc5522Prefix()) return _maxOsc5522Length;
+    return _maxOscLength;
+  }
+
   bool _isOsc52Prefix() =>
       _oscBuffer.length >= 3 &&
       _oscBuffer[0] == 0x35 &&
       _oscBuffer[1] == 0x32 &&
       _oscBuffer[2] == 0x3B;
+
+  bool _isOsc5522Prefix() =>
+      _oscBuffer.length >= 5 &&
+      _oscBuffer[0] == 0x35 &&
+      _oscBuffer[1] == 0x35 &&
+      _oscBuffer[2] == 0x32 &&
+      _oscBuffer[3] == 0x32 &&
+      _oscBuffer[4] == 0x3B;
 
   void _finishOsc() {
     if (!_oscOverflowed) {
@@ -374,10 +397,14 @@ final class AnsiParser {
     _oscOverflowed = false;
   }
 
-  void _enterDcs({required bool allowTmuxPassthrough}) {
+  void _enterDcs({required bool captureDcs}) {
     _resetOsc();
-    _dcsPrefixLen = allowTmuxPassthrough ? 0 : -1;
-    _tmuxInner = allowTmuxPassthrough ? .payload : .ignored;
+    _dcsBuffer.clear();
+    _dcsOverflowed = false;
+    _dcsCaptureEnabled = captureDcs;
+    _dcsIsTmux = false;
+    _dcsPrefixLen = captureDcs ? 0 : -1;
+    _tmuxInner = captureDcs ? .payload : .ignored;
     _state = .dcsString;
   }
 
@@ -461,9 +488,45 @@ final class AnsiParser {
   }
 
   void _appendDcsChar(int c) {
-    if (_dcsPrefixLen < 0 || _tmuxInner == .ignored) return;
+    if (!_dcsCaptureEnabled) return;
+    if (_dcsIsTmux) {
+      _appendTmuxDcsChar(c);
+      return;
+    }
+    _appendRawDcsChar(c);
+    if (_dcsPrefixLen >= 0 && _dcsPrefixLen < _tmuxHeaderLength) {
+      _advanceTmuxHeader(c);
+    }
+  }
+
+  void _appendRawDcsChar(int c) {
+    if (_dcsOverflowed) return;
+    if (_dcsBuffer.length < _maxDcsLength) {
+      _dcsBuffer.add(c);
+    } else {
+      _dcsBuffer.clear();
+      _dcsOverflowed = true;
+    }
+  }
+
+  void _advanceTmuxHeader(int c) {
+    if (c == _tmuxOscPrefix[_dcsPrefixLen]) {
+      _dcsPrefixLen++;
+      if (_dcsPrefixLen == _tmuxHeaderLength) {
+        _dcsIsTmux = true;
+        _dcsBuffer.clear();
+        _dcsOverflowed = false;
+      }
+      return;
+    }
+    _dcsPrefixLen = -1;
+    _tmuxInner = .ignored;
+  }
+
+  void _appendTmuxDcsChar(int c) {
+    if (_tmuxInner == .ignored) return;
     if (_dcsPrefixLen < _tmuxOscPrefix.length) {
-      _advanceTmuxPrefix(c);
+      _advanceTmuxInnerIntroducer(c);
       return;
     }
     _tmuxInner = switch (_tmuxInner) {
@@ -481,22 +544,12 @@ final class AnsiParser {
     }
   }
 
-  void _advanceTmuxPrefix(int c) {
-    if (_dcsPrefixLen < _tmuxHeaderLength) {
-      if (c == _tmuxOscPrefix[_dcsPrefixLen]) {
-        _dcsPrefixLen++;
-        return;
-      }
-      _dcsPrefixLen = -1;
-      _tmuxInner = .ignored;
+  void _advanceTmuxInnerIntroducer(int c) {
+    if (_dcsPrefixLen == 5 && c == 0x1B) {
+      _dcsPrefixLen++;
       return;
     }
-    if (_dcsPrefixLen == 5) {
-      if (c == 0x1B) {
-        _dcsPrefixLen++;
-        return;
-      }
-    } else if (_dcsPrefixLen == 6) {
+    if (_dcsPrefixLen == 6) {
       if (c == 0x5D) {
         _dcsPrefixLen++;
         _tmuxIsApc = false;
@@ -513,12 +566,16 @@ final class AnsiParser {
   }
 
   void _finishDcs() {
-    if (_tmuxInner == .terminated) {
-      if (_tmuxIsApc) {
-        _finishApc();
-      } else {
-        _finishOsc();
+    if (_dcsIsTmux) {
+      if (_tmuxInner == .terminated) {
+        if (_tmuxIsApc) {
+          _finishApc();
+        } else {
+          _finishOsc();
+        }
       }
+    } else if (_dcsCaptureEnabled && !_dcsOverflowed && _dcsBuffer.isNotEmpty) {
+      handler.dcs(String.fromCharCodes(_dcsBuffer));
     }
     _resetDcs();
   }
@@ -526,6 +583,10 @@ final class AnsiParser {
   void _resetDcs() {
     _resetOsc();
     _resetApc();
+    _dcsBuffer.clear();
+    _dcsOverflowed = false;
+    _dcsCaptureEnabled = false;
+    _dcsIsTmux = false;
     _tmuxIsApc = false;
     _dcsPrefixLen = -1;
     _tmuxInner = .ignored;

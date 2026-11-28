@@ -13,6 +13,7 @@ class _TestTerminalHandler implements TerminalHandler {
   String? lastOscPayload;
   int apcCallCount = 0;
   String? lastApcPayload;
+  final List<String> dcsPayloads = [];
   final List<String> escCommands = [];
   final StringBuffer printedText = StringBuffer();
 
@@ -20,6 +21,11 @@ class _TestTerminalHandler implements TerminalHandler {
   void apc(String payload) {
     apcCallCount++;
     lastApcPayload = payload;
+  }
+
+  @override
+  void dcs(String payload) {
+    dcsPayloads.add(payload);
   }
 
   @override
@@ -444,6 +450,57 @@ void main() {
         parser.parse('\x1b_Gi=100;ZZZZ\x07');
         expect(handler.apcCallCount, equals(5));
         expect(handler.lastApcPayload, equals('Gi=100;ZZZZ'));
+      },
+    );
+
+    test(
+      'Dispatches non-tmux DCS (+q, \$q), rejects >8192-byte DCS, preserves tmux unwrapping, and buffers 64 KiB OSC 5522',
+      () {
+        final handler = _TestTerminalHandler();
+        final parser = AnsiParser(handler);
+
+        // XTGETTCAP (+q) and DECRQSS ($q) DCS sequences dispatch via handler.dcs.
+        parser.parse('\x1bP+q544e;524742\x1b\\\x1bP\$qm\x1b\\\x1bP\$q q\x9c');
+        expect(handler.dcsPayloads, equals(['+q544e;524742', r'$qm', r'$q q']));
+        expect('${handler.printedText}', isEmpty);
+
+        // Non-tmux DCS starting with partial 't' prefix still dispatches cleanly.
+        parser.parse('\x1bPtm\x1b\\\x1bPtx123\x1b\\');
+        expect(handler.dcsPayloads.sublist(3), equals(['tm', 'tx123']));
+
+        // Exact 8192-byte DCS dispatches; 8193-byte DCS overflows without leaking.
+        final maxDcs = 'A' * 8192;
+        parser.parse('\x1bP$maxDcs\x1b\\');
+        expect(handler.dcsPayloads.last, equals(maxDcs));
+        final countBeforeOverflow = handler.dcsPayloads.length;
+
+        parser.parse('\x1bP${'B' * 8193}\x1b\\After');
+        expect(handler.dcsPayloads.length, equals(countBeforeOverflow));
+        expect('${handler.printedText}', equals('After'));
+
+        // SOS and PM remain ignored (never dispatched to handler.dcs).
+        parser.parse('\x1bXsos-ignored\x1b\\\x1b^pm-ignored\x9c');
+        expect(handler.dcsPayloads.length, equals(countBeforeOverflow));
+
+        // tmux; DCS passthrough still unwraps OSC/APC without invoking handler.dcs.
+        parser.parse('\x1bPtmux;\x1b\x1b]52;c;aGk=\x07\x1b\\');
+        expect(handler.dcsPayloads.length, equals(countBeforeOverflow));
+        expect(handler.oscCallCount, equals(1));
+        expect(handler.lastOscCommand, equals(52));
+        expect(handler.lastOscPayload, equals('c;aGk='));
+
+        // 64 KiB OSC 5522 payload is buffered cleanly instead of overflowing at 8192.
+        final big5522Payload = 'type=wdata;${'A' * 65536}';
+        parser.parse('\x1b]5522;$big5522Payload\x1b\\');
+        expect(handler.oscCallCount, equals(2));
+        expect(handler.lastOscCommand, equals(5522));
+        expect(handler.lastOscPayload, equals(big5522Payload));
+
+        // Oversized OSC 5522 beyond parser bound overflows cleanly without leaking.
+        handler.printedText.clear();
+        parser.parse('\x1b]5522;type=wdata;${'C' * 100000}\x1b\\Ok');
+        expect(handler.oscCallCount, equals(2));
+        expect('${handler.printedText}', equals('Ok'));
       },
     );
   });

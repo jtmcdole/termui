@@ -858,6 +858,11 @@ final class VirtualTerminal implements TerminalHandler {
         onPlaceVirtual: _placeVirtualImage,
         onClearPlacements: _clearKittyPlacements,
         cellPixelSize: () => (_cellPixelWidth, _cellPixelHeight),
+        cursorPosition: () => (cursorX, cursorY),
+        viewportSize: () => (width, height),
+        isAltScreen: () => _usingAltScreen,
+        onAdvanceCursor: _advanceCursorForKittyPlacement,
+        onClearPlacementsAt: _clearKittyPlacementsAt,
         allowLocalMedia: _allowLocalKittyMedia,
         allowLocalShm: _allowLocalKittyShm,
       );
@@ -1010,6 +1015,10 @@ final class VirtualTerminal implements TerminalHandler {
     return cellUnderline == (_kittyDirectPlacementTag | masked) ||
         (placementId > 0 && cellUnderline == (0xFF00_0000 | masked));
   }
+
+  void _advanceCursorForKittyPlacement(int cols, int rows) {}
+
+  void _clearKittyPlacementsAt({int? col, int? row, int? zIndex}) {}
 
   void _clearKittyPlacements(
     int? imageId, {
@@ -3050,6 +3059,9 @@ final class VirtualTerminal implements TerminalHandler {
     _markDirty();
     _kittyApcHandler.handleApc(payload);
   }
+
+  @override
+  void dcs(String payload) {}
 
   void _handleShaderEvent(TerminalShaderApcEvent event) {
     switch (event) {

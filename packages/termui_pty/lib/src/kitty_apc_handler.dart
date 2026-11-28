@@ -155,6 +155,23 @@ final class KittyApcHandler {
   /// Callback returning the live terminal cell dimensions in pixels `(width, height)`.
   final (int width, int height) Function() cellPixelSize;
 
+  /// Optional callback returning the live terminal cursor coordinates `(col, row)`.
+  final (int col, int row) Function()? cursorPosition;
+
+  /// Optional callback returning the live terminal viewport size `(cols, rows)`.
+  final (int cols, int rows) Function()? viewportSize;
+
+  /// Optional callback returning whether the alternate screen buffer is active.
+  final bool Function()? isAltScreen;
+
+  /// Optional callback invoked when a layered (`z != 0`) or relative (`P > 0`)
+  /// direct placement advances the cursor (`C=0`).
+  final void Function(int cols, int rows)? onAdvanceCursor;
+
+  /// Optional callback invoked when `a=d` deletes placeholder cells matching
+  /// cursor/column/row/z-index filters.
+  final void Function({int? col, int? row, int? zIndex})? onClearPlacementsAt;
+
   /// Whether local filesystem (`t=t`) transmission media is enabled.
   /// Defaults to `false`.
   bool allowLocalMedia;
@@ -162,6 +179,10 @@ final class KittyApcHandler {
   /// Whether POSIX shared-memory (`t=s`) transmission media is enabled.
   /// Defaults to [allowLocalMedia].
   bool allowLocalShm;
+
+  /// Whether local regular-file (`t=f`, non-unlinking) transmission media is enabled.
+  /// Defaults to `false`.
+  final bool allowLocalFiles;
 
   final Map<int, _PendingUpload> _pendingUploads = {};
   final Set<(int imageId, int placementId, bool isVirtual)> _placements = {};
@@ -177,8 +198,14 @@ final class KittyApcHandler {
     required this.onPlaceVirtual,
     required this.cellPixelSize,
     this.onClearPlacements,
+    this.cursorPosition,
+    this.viewportSize,
+    this.isAltScreen,
+    this.onAdvanceCursor,
+    this.onClearPlacementsAt,
     this.allowLocalMedia = false,
     bool? allowLocalShm,
+    this.allowLocalFiles = false,
   }) : allowLocalShm = allowLocalShm ?? allowLocalMedia;
 
   /// Clears all pending chunked uploads, placements, and wipes [registry].
