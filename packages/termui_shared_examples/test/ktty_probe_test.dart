@@ -10,6 +10,8 @@ import 'package:termui_pty/termui_pty.dart';
 import 'package:termui_shared_examples/ktty_probe/ktty_probe.dart';
 import 'package:test/test.dart';
 
+import '../bin/ktty_probe.dart' as ktty_cli;
+
 final class _TestHostBackend implements BufferedTerminalBackend {
   final StreamController<List<int>> input =
       StreamController<List<int>>.broadcast();
@@ -612,20 +614,27 @@ void main() {
   });
 
   group('bin/ktty_probe.dart CLI flags', () {
-    Future<ProcessResult> runCli(List<String> args) {
-      return Process.run(Platform.resolvedExecutable, [
-        'bin/ktty_probe.dart',
-        ...args,
-      ]);
+    Future<({int exitCode, String stdout, String stderr})> runCli(
+      List<String> args,
+    ) async {
+      final out = StringBuffer();
+      final err = StringBuffer();
+      final code = await ktty_cli.runKttyProbeCli(
+        args,
+        stdoutSink: out,
+        stderrSink: err,
+        stdinHasTerminal: false,
+        stdoutSupportsAnsi: false,
+      );
+      return (exitCode: code, stdout: out.toString(), stderr: err.toString());
     }
 
     test('--help prints usage including new Wave 4 flags', () async {
       final result = await runCli(const ['--help']);
       expect(result.exitCode, equals(0));
-      final out = result.stdout as String;
-      expect(out, contains('--strict'));
-      expect(out, contains('--tmux-passthrough'));
-      expect(out, contains('--local-media'));
+      expect(result.stdout, contains('--strict'));
+      expect(result.stdout, contains('--tmux-passthrough'));
+      expect(result.stdout, contains('--local-media'));
     });
 
     test(
@@ -648,9 +657,8 @@ void main() {
 
     test('--self-test --json --strict emits 26/26 core pass JSON', () async {
       final result = await runCli(const ['--self-test', '--json', '--strict']);
-      expect(result.exitCode, equals(0), reason: '${result.stderr}');
-      final decoded =
-          jsonDecode(result.stdout as String) as Map<String, Object?>;
+      expect(result.exitCode, equals(0), reason: result.stderr);
+      final decoded = jsonDecode(result.stdout) as Map<String, Object?>;
       expect(decoded['coreSupported'], equals(26));
       expect(decoded['coreUnsupported'], equals(0));
     });
@@ -664,13 +672,9 @@ void main() {
           '--json',
           '--strict',
         ]);
-        expect(result.exitCode, equals(0), reason: '${result.stderr}');
-        expect(
-          result.stderr as String,
-          isNot(contains('unexpectedly unlinked')),
-        );
-        final decoded =
-            jsonDecode(result.stdout as String) as Map<String, Object?>;
+        expect(result.exitCode, equals(0), reason: result.stderr);
+        expect(result.stderr, isNot(contains('unexpectedly unlinked')));
+        final decoded = jsonDecode(result.stdout) as Map<String, Object?>;
         final caps = (decoded['capabilities'] as List<Object?>)
             .cast<Map<String, Object?>>();
         final tempCap = caps.firstWhere((c) => c['id'] == 'apc_temp_file');
@@ -684,13 +688,13 @@ void main() {
         '--tmux-passthrough',
         '--strict',
       ]);
-      expect(result.exitCode, equals(0), reason: '${result.stderr}');
+      expect(result.exitCode, equals(0), reason: result.stderr);
     });
 
     test('--report without a TTY on stdin exits 2', () async {
       final result = await runCli(const ['--report']);
       expect(result.exitCode, equals(2));
-      expect(result.stderr as String, contains('--self-test'));
+      expect(result.stderr, contains('--self-test'));
     });
   });
 }
