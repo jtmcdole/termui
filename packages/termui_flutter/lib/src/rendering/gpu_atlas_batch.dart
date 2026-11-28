@@ -305,6 +305,8 @@ final class GpuAtlasBatchBuilder {
     required int stagingGeneration,
     required Map<KittyImageData, ui.Image> kittyImages,
     required Map<(KittyImageRegistry, int), ui.Image> kittyImagesById,
+    Map<KittyImageData, Uint8List> kittyDecodedRgba =
+        const <KittyImageData, Uint8List>{},
     int? activePtyCols,
     int? activePtyRows,
     int? outOfBoundsDimArgb,
@@ -413,6 +415,7 @@ final class GpuAtlasBatchBuilder {
       dpr: devicePixelRatio,
       kittyImages: kittyImages,
       kittyImagesById: kittyImagesById,
+      kittyDecodedRgba: kittyDecodedRgba,
     );
 
     _appendSpriteList(
@@ -663,6 +666,7 @@ final class GpuAtlasBatchBuilder {
     required double dpr,
     required Map<KittyImageData, ui.Image> kittyImages,
     required Map<(KittyImageRegistry, int), ui.Image> kittyImagesById,
+    required Map<KittyImageData, Uint8List> kittyDecodedRgba,
   }) {
     final count = staged.fallbackCount;
     if (count <= 0) {
@@ -688,6 +692,7 @@ final class GpuAtlasBatchBuilder {
         dpr: dpr,
         kittyImages: kittyImages,
         kittyImagesById: kittyImagesById,
+        kittyDecodedRgba: kittyDecodedRgba,
       );
       if (step.quad != null) {
         (quads ??= <GpuKittyQuad>[]).add(step.quad!);
@@ -712,6 +717,7 @@ final class GpuAtlasBatchBuilder {
     required double dpr,
     required Map<KittyImageData, ui.Image> kittyImages,
     required Map<(KittyImageRegistry, int), ui.Image> kittyImagesById,
+    required Map<KittyImageData, Uint8List> kittyDecodedRgba,
   }) {
     final char = staged.fallbackChars[index];
     final coords = parseKittyPlaceholderCell(char);
@@ -773,7 +779,11 @@ final class GpuAtlasBatchBuilder {
       nextIndex: endIdx,
       quad: GpuKittyQuad(
         image: gpuImage,
-        rawRgbaPixels: _resolveRawRgbaPixels(exactImage, data),
+        rawRgbaPixels: _resolveRawRgbaPixels(
+          exactImage,
+          data,
+          kittyDecodedRgba,
+        ),
         cacheSlot: exactImage != null ? (registry, imageId) : null,
         dstX: x * dpr,
         dstY: y * dpr,
@@ -791,19 +801,24 @@ final class GpuAtlasBatchBuilder {
   static Uint8List? _resolveRawRgbaPixels(
     ui.Image? exactImage,
     KittyImageData data,
+    Map<KittyImageData, Uint8List> kittyDecodedRgba,
   ) {
-    if (exactImage == null || data.format != KittyImageData.formatRgba32) {
-      return null;
-    }
+    if (exactImage == null) return null;
     if (exactImage.width != data.pixelWidth ||
         exactImage.height != data.pixelHeight) {
       return null;
     }
+    final raw = switch (data.format) {
+      KittyImageData.formatRgba32 => data.rgbaPixels,
+      KittyImageData.formatPng => kittyDecodedRgba[data],
+      _ => null,
+    };
+    if (raw == null) return null;
     final expectedBytes = data.pixelWidth * data.pixelHeight * 4;
-    if (expectedBytes <= 0 || data.rgbaPixels.length < expectedBytes) {
+    if (expectedBytes <= 0 || raw.length < expectedBytes) {
       return null;
     }
-    return data.rgbaPixels;
+    return raw;
   }
 
   void _appendOutOfBoundsDimming({

@@ -28,6 +28,7 @@ import 'rendering/gpu_atlas_batch.dart';
 import 'rendering/gpu_frame_watchdog.dart';
 import 'rendering/painter.dart';
 import 'rendering/perf_trace.dart';
+import 'rendering/png_rgba_decoder.dart';
 import 'rendering/search_highlight.dart';
 import 'rendering/shader_backend.dart';
 import 'rendering/shader_controller.dart';
@@ -2947,6 +2948,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     hoveredLinkStyler: widget.hoveredLinkStyler,
     kittyImages: _kittyCache.images,
     kittyImagesById: _kittyCache.imagesById,
+    kittyDecodedRgba: _kittyCache.decodedRgbaPixels,
     defaultForegroundArgb: widget.foregroundColor.toARGB32(),
     defaultBackgroundArgb: effectiveBgColor.toARGB32(),
     faintOpacity: widget.faintOpacity,
@@ -3557,6 +3559,7 @@ final class _KittyGpuImageCache {
 
   final VoidCallback onDecoded;
   final Map<KittyImageData, ui.Image> images = {};
+  final Map<KittyImageData, Uint8List> decodedRgbaPixels = {};
   final Map<(KittyImageRegistry, int), ui.Image> imagesById = {};
   final Map<(KittyImageRegistry, int), KittyImageData> _dataBySlot = {};
   final Set<KittyImageData> _decoding = Set.identity();
@@ -3678,6 +3681,28 @@ final class _KittyGpuImageCache {
       _decoding.remove(data);
       return;
     }
+    final cpuDecoded = await decodeKittyPngToRgbaAsync(data.rgbaPixels);
+    if (_disposed) {
+      _decoding.remove(data);
+      return;
+    }
+    if (cpuDecoded != null &&
+        cpuDecoded.width == data.pixelWidth &&
+        cpuDecoded.height == data.pixelHeight) {
+      ui.decodeImageFromPixels(
+        cpuDecoded.rgba,
+        cpuDecoded.width,
+        cpuDecoded.height,
+        ui.PixelFormat.rgba8888,
+        (decoded) => _onImageDecoded(
+          registry,
+          data,
+          decoded,
+          decodedRgba: cpuDecoded.rgba,
+        ),
+      );
+      return;
+    }
     ui.Codec? codec;
     try {
       codec = await ui.instantiateImageCodec(
@@ -3717,6 +3742,7 @@ final class _KittyGpuImageCache {
   void _evictOldest() {
     final oldestKey = images.keys.first;
     final evicted = images.remove(oldestKey);
+    decodedRgbaPixels.remove(oldestKey);
     if (evicted == null) return;
     imagesById.removeWhere((_, img) => identical(img, evicted));
     _dataBySlot.removeWhere((_, cached) => cached == oldestKey);
@@ -3738,8 +3764,9 @@ final class _KittyGpuImageCache {
   void _onImageDecoded(
     KittyImageRegistry registry,
     KittyImageData data,
-    ui.Image decoded,
-  ) {
+    ui.Image decoded, {
+    Uint8List? decodedRgba,
+  }) {
     _decoding.remove(data);
     if (_disposed) {
       decoded.dispose();
@@ -3753,6 +3780,7 @@ final class _KittyGpuImageCache {
     }
     if (previousData != null && previousData != data) {
       final superseded = images.remove(previousData);
+      decodedRgbaPixels.remove(previousData);
       if (superseded != null && !identical(superseded, decoded)) {
         _scheduleImageDisposal(superseded);
       }
@@ -3762,6 +3790,11 @@ final class _KittyGpuImageCache {
     }
     final old = images[data];
     images[data] = decoded;
+    if (decodedRgba != null) {
+      decodedRgbaPixels[data] = decodedRgba;
+    } else {
+      decodedRgbaPixels.remove(data);
+    }
     imagesById[slot] = decoded;
     _dataBySlot[slot] = data;
     if (old != null && !identical(old, decoded)) {
@@ -3773,6 +3806,7 @@ final class _KittyGpuImageCache {
   void dispose() {
     _disposed = true;
     imagesById.clear();
+    decodedRgbaPixels.clear();
     _dataBySlot.clear();
     for (final image in images.values) {
       image.dispose();

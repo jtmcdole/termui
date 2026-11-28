@@ -461,6 +461,9 @@ final class TuiAtlasPainter extends CustomPainter {
   /// Optional pre-decoded GPU textures keyed by `(KittyImageRegistry, imageId)` so resized or updated placements keep rendering on GPU within the same pane without leaking across panes.
   final Map<(KittyImageRegistry, int), ui.Image> kittyImagesById;
 
+  /// Optional CPU-decoded straight RGBA8888 pixel buffers for PNG [KittyImageData] entries so direct GPU backends can upload them without GPU-to-CPU readbacks.
+  final Map<KittyImageData, Uint8List> kittyDecodedRgba;
+
   /// Enables multi-cell ligatures. Defaults to false.
   final bool enableLigatures;
 
@@ -508,6 +511,7 @@ final class TuiAtlasPainter extends CustomPainter {
     this.hoveredLinkStyler,
     this.kittyImages = const {},
     this.kittyImagesById = const {},
+    this.kittyDecodedRgba = const {},
     this.defaultForegroundArgb = 0xFFFFFFFF,
     this.defaultBackgroundArgb = 0xFF000000,
     this.faintOpacity = 140 / 255,
@@ -643,6 +647,7 @@ final class TuiAtlasPainter extends CustomPainter {
         stagingGeneration: prepared.generation,
         kittyImages: kittyImages,
         kittyImagesById: kittyImagesById,
+        kittyDecodedRgba: kittyDecodedRgba,
         activePtyCols: activePtyCols,
         activePtyRows: activePtyRows,
         outOfBoundsDimArgb: outOfBoundsDimColor?.toARGB32(),
@@ -3067,6 +3072,7 @@ final class TuiAtlasPainter extends CustomPainter {
       (hoveredLink != null && hoveredLinkStyler != null) ||
       oldDelegate.kittyImages != kittyImages ||
       oldDelegate.kittyImagesById != kittyImagesById ||
+      oldDelegate.kittyDecodedRgba != kittyDecodedRgba ||
       oldDelegate.defaultForegroundArgb != defaultForegroundArgb ||
       oldDelegate.defaultBackgroundArgb != defaultBackgroundArgb ||
       oldDelegate.faintOpacity != faintOpacity ||
