@@ -475,6 +475,15 @@ final class KttyProbeReport {
           notify: false,
         );
       }
+      if (options.fileProbeFilePath == null ||
+          options.fileProbeFilePath!.isEmpty) {
+        _updateEntry(
+          'apc_file_medium',
+          .optionalDisabled,
+          'Unavailable on this platform',
+          notify: false,
+        );
+      }
     }
     _notify();
   }
