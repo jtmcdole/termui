@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -473,6 +474,25 @@ final class TuiAtlasPainter extends CustomPainter {
   /// Maximum entries retained in [ligaturePainters] before LRU eviction.
   static const int maxLigaturePainters = 128;
 
+  /// Maximum entries retained in [_osc66PainterCache] before LRU eviction.
+  static const int maxOsc66Painters = 256;
+
+  static final LinkedHashMap<_Osc66PainterKey, TextPainter> _osc66PainterCache =
+      LinkedHashMap<_Osc66PainterKey, TextPainter>();
+
+  /// Current number of cached `OSC 66` scaled [TextPainter] entries.
+  @visibleForTesting
+  static int get debugOsc66PainterCacheLength => _osc66PainterCache.length;
+
+  /// Disposes and clears all cached `OSC 66` scaled [TextPainter] entries.
+  @visibleForTesting
+  static void debugClearOsc66PainterCache() {
+    for (final tp in _osc66PainterCache.values) {
+      tp.dispose();
+    }
+    _osc66PainterCache.clear();
+  }
+
   static const int _selectionBgArgb = 0xFF264F78;
   static const int _decorationMask =
       Modifier.underline | Modifier.crossedOut | Modifier.overline;
@@ -689,18 +709,14 @@ final class TuiAtlasPainter extends CustomPainter {
     StagingBufferSet staged,
     int count,
   ) {
-    if (count > 0 && (defaultBackgroundArgb >>> 24) != 0) {
-      _defaultBgPaint.color = Color(defaultBackgroundArgb);
-      canvas.drawRect(
-        Rect.fromLTWH(
-          0.0,
-          0.0,
-          buffer.width * geo.cellWidth,
-          buffer.height * geo.cellHeight,
-        ),
-        _defaultBgPaint,
-      );
-    }
+    final layered = collectLayeredDirectKittyPlacements(
+      buffer,
+      cellWidth: geo.cellWidth,
+      cellHeight: geo.cellHeight,
+    );
+
+    _paintDefaultBackgroundRect(canvas, geo, count);
+    _paintLayeredDirectKittyPlacements(canvas, layered.underBgPlacements);
 
     if (staged.bgCount > 0) {
       _drawRawAtlasInChunks(
@@ -713,6 +729,8 @@ final class TuiAtlasPainter extends CustomPainter {
         _atlasSpritePaint,
       );
     }
+
+    _paintLayeredDirectKittyPlacements(canvas, layered.bgPlacements);
 
     if (staged.fgCount > 0) {
       _drawRawAtlasInChunks(
@@ -749,6 +767,8 @@ final class TuiAtlasPainter extends CustomPainter {
     if (staged.ligatureCount > 0) {
       _paintLigatureCells(canvas, staged);
     }
+
+    _paintLayeredDirectKittyPlacements(canvas, layered.fgPlacements);
 
     if (staged.decoCount > 0) {
       _drawRawAtlasInChunks(
@@ -1498,6 +1518,28 @@ final class TuiAtlasPainter extends CustomPainter {
               (_hoveredLinkStyles.modifiersAt(linkIdx) ?? Modifier.underline))
         : modifiers;
 
+    if (buffer.hasTextSizing) {
+      final tsBits = buffer.getTextSizingAt(idx);
+      if (tsBits != KittyTextSizing.none) {
+        _stageOsc66Cell(
+          dst,
+          code: code,
+          glyphCells: glyphCells,
+          gridCol: x,
+          gridRow: y,
+          modifiers: effectiveModifiers,
+          fgArgb: fgArgb,
+          bgArgb: bgArgb,
+          resolvedFg: resolvedFg,
+          screenX: screenX,
+          screenY: screenY,
+          sizing: KittyTextSizing(tsBits),
+          geo: geo,
+        );
+        return;
+      }
+    }
+
     if (code != GlyphCellList.wideContinuationCode &&
         code != GlyphCellList.spaceCode) {
       _stageForegroundCode(
@@ -1530,6 +1572,41 @@ final class TuiAtlasPainter extends CustomPainter {
         geo: geo,
       );
     }
+  }
+
+  void _stageOsc66Cell(
+    StagingBufferSet dst, {
+    required int code,
+    required GlyphCellList glyphCells,
+    required int gridCol,
+    required int gridRow,
+    required int modifiers,
+    required int fgArgb,
+    required int bgArgb,
+    required int resolvedFg,
+    required double screenX,
+    required double screenY,
+    required KittyTextSizing sizing,
+    required _AtlasGeometry geo,
+  }) {
+    if (sizing.isContinuation ||
+        code == GlyphCellList.wideContinuationCode ||
+        code == GlyphCellList.spaceCode) {
+      return;
+    }
+    dst.addFallbackCell(
+      char: glyphCells.decodeCode(code),
+      gridCol: gridCol,
+      gridRow: gridRow,
+      modifiers: modifiers,
+      fgArgb: fgArgb,
+      bgArgb: bgArgb,
+      resolvedFg: resolvedFg,
+      x: screenX,
+      y: screenY,
+      w: sizing.boxCols * geo.cellWidth,
+      h: sizing.boxRows * geo.cellHeight,
+    );
   }
 
   void _stageCodeDecorations(
@@ -1579,6 +1656,10 @@ final class TuiAtlasPainter extends CustomPainter {
   ) {
     if (startX + 1 >= cols) return null;
     final firstIdx = rowStart + startX;
+    if (buffer.hasTextSizing &&
+        buffer.getTextSizingAt(firstIdx) != KittyTextSizing.none) {
+      return null;
+    }
     if (!_isLigatureCode(codes[firstIdx])) return null;
     if (overrideMask != null &&
         firstIdx < maskLen &&
@@ -1688,6 +1769,10 @@ final class TuiAtlasPainter extends CustomPainter {
   }) {
     if (x >= linkStart && x <= linkEnd) return false;
     if (overrideMask != null && idx < maskLen && overrideMask[idx] != 0) {
+      return false;
+    }
+    if (buffer.hasTextSizing &&
+        buffer.getTextSizingAt(idx) != KittyTextSizing.none) {
       return false;
     }
     if (!_isLigatureCode(codes[idx])) return false;
@@ -2493,8 +2578,27 @@ final class TuiAtlasPainter extends CustomPainter {
 
   void _paintFallbackCells(Canvas canvas, StagingBufferSet staged) {
     final count = staged.fallbackCount;
+    final hasTextSizing = buffer.hasTextSizing;
     var i = 0;
     while (i < count) {
+      if (hasTextSizing) {
+        final gBase = i << 1;
+        final ts = KittyTextSizing(
+          buffer.getTextSizing(
+            staged.fallbackGridCoords[gBase],
+            staged.fallbackGridCoords[gBase + 1],
+          ),
+        );
+        if (ts.isContinuation) {
+          i++;
+          continue;
+        }
+        if (ts.isAnchor) {
+          _paintOsc66Cell(canvas, staged, i, ts);
+          i++;
+          continue;
+        }
+      }
       final char = staged.fallbackChars[i];
       final mods = staged.fallbackAttrs[i << 2];
       if (isKittyPlaceholderCell(char, mods)) {
@@ -2504,6 +2608,95 @@ final class TuiAtlasPainter extends CustomPainter {
       _paintSingleFallbackGlyph(canvas, staged, i);
       i++;
     }
+  }
+
+  void _paintOsc66Cell(
+    Canvas canvas,
+    StagingBufferSet staged,
+    int idx,
+    KittyTextSizing sizing,
+  ) {
+    final char = staged.fallbackChars[idx];
+    final aBase = idx << 2;
+    final modifiers = staged.fallbackAttrs[aBase];
+    final resolvedFg = staged.fallbackAttrs[aBase + 3];
+    final x = staged.fallbackRects[aBase];
+    final y = staged.fallbackRects[aBase + 1];
+    final boxW = sizing.boxCols * atlas.cellWidth;
+    final boxH = sizing.boxRows * atlas.cellHeight;
+    final scaledFontSize = atlas.fontSize * sizing.fontScale;
+    final tp = _getOsc66Painter(
+      text: char,
+      fontSize: scaledFontSize,
+      isBold: Modifier.has(modifiers, Modifier.bold),
+      isItalic: Modifier.has(modifiers, Modifier.italic),
+      colorArgb: resolvedFg,
+    );
+    final dx = switch (sizing.hAlign) {
+      1 => boxW - tp.width,
+      2 => (boxW - tp.width) * 0.5,
+      _ => 0.0,
+    };
+    final dy = switch (sizing.vAlign) {
+      1 => boxH - tp.height,
+      2 => (boxH - tp.height) * 0.5,
+      _ => 0.0,
+    };
+    canvas.save();
+    try {
+      canvas.clipRect(Rect.fromLTWH(x, y, boxW, boxH));
+      tp.paint(canvas, Offset(x + dx, y + dy));
+    } finally {
+      canvas.restore();
+    }
+  }
+
+  TextPainter _getOsc66Painter({
+    required String text,
+    required double fontSize,
+    required bool isBold,
+    required bool isItalic,
+    required int colorArgb,
+  }) {
+    final fallbackHash = fontFamilyFallback == null
+        ? 0
+        : Object.hashAll(fontFamilyFallback!);
+    final key = (
+      text: text,
+      fontFamily: fontFamily,
+      fontFallbackHash: fallbackHash,
+      fontSize: fontSize,
+      isBold: isBold,
+      isItalic: isItalic,
+      colorArgb: colorArgb,
+    );
+    final existing = _osc66PainterCache.remove(key);
+    if (existing != null) {
+      _osc66PainterCache[key] = existing;
+      return existing;
+    }
+    while (_osc66PainterCache.length >= maxOsc66Painters) {
+      final oldestKey = _osc66PainterCache.keys.first;
+      _osc66PainterCache.remove(oldestKey)?.dispose();
+    }
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontFamily: fontFamily,
+          fontFamilyFallback: fontFamilyFallback,
+          fontSize: fontSize,
+          color: Color(colorArgb),
+          fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+          fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
+          letterSpacing: 0.0,
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    _osc66PainterCache[key] = painter;
+    return painter;
   }
 
   void _paintLigatureCells(Canvas canvas, StagingBufferSet staged) {
@@ -2611,6 +2804,110 @@ final class TuiAtlasPainter extends CustomPainter {
     }
   }
 
+  void _paintDefaultBackgroundRect(
+    Canvas canvas,
+    _AtlasGeometry geo,
+    int count,
+  ) {
+    if (count <= 0 || (defaultBackgroundArgb >>> 24) == 0) return;
+    _defaultBgPaint.color = Color(defaultBackgroundArgb);
+    canvas.drawRect(
+      Rect.fromLTWH(
+        0.0,
+        0.0,
+        buffer.width * geo.cellWidth,
+        buffer.height * geo.cellHeight,
+      ),
+      _defaultBgPaint,
+    );
+  }
+
+  void _paintLayeredDirectKittyPlacements(
+    Canvas canvas,
+    List<ResolvedKittyDirectPlacement> placements,
+  ) {
+    if (placements.isEmpty) return;
+    for (final item in placements) {
+      final gpuImage =
+          kittyImages[item.imageData] ??
+          kittyImagesById[(item.registry, item.placement.imageId)];
+      if (gpuImage != null) {
+        final imgW = gpuImage.width.toDouble();
+        final imgH = gpuImage.height.toDouble();
+        _kittyPaint.color = const Color(0xFFFFFFFF);
+        canvas.drawImageRect(
+          gpuImage,
+          Rect.fromLTRB(
+            item.u0 * imgW,
+            item.v0 * imgH,
+            item.u1 * imgW,
+            item.v1 * imgH,
+          ),
+          Rect.fromLTWH(item.dstX, item.dstY, item.dstWidth, item.dstHeight),
+          _kittyPaint,
+        );
+      } else {
+        _paintDirectKittySubpixels(canvas, _kittyPaint, item);
+      }
+    }
+  }
+
+  void _paintDirectKittySubpixels(
+    Canvas canvas,
+    Paint paint,
+    ResolvedKittyDirectPlacement item,
+  ) {
+    final data = item.imageData;
+    if (data.format == KittyImageData.formatPng ||
+        data.pixelWidth <= 0 ||
+        data.pixelHeight <= 0) {
+      return;
+    }
+    final rgba = data.rgbaPixels;
+    final stepsX = math.min(
+      data.pixelWidth,
+      math.max(1, (item.dstWidth / 4.0).ceil()),
+    );
+    final stepsY = math.min(
+      data.pixelHeight,
+      math.max(1, (item.dstHeight / 4.0).ceil()),
+    );
+    final subW = item.dstWidth / stepsX;
+    final subH = item.dstHeight / stepsY;
+    for (var sy = 0; sy < stepsY; sy++) {
+      final normY = item.v0 + (item.v1 - item.v0) * ((sy + 0.5) / stepsY);
+      final py = (normY * data.pixelHeight).floor().clamp(
+        0,
+        data.pixelHeight - 1,
+      );
+      final rowBase = py * data.pixelWidth * 4;
+      for (var sx = 0; sx < stepsX; sx++) {
+        final normX = item.u0 + (item.u1 - item.u0) * ((sx + 0.5) / stepsX);
+        final px = (normX * data.pixelWidth).floor().clamp(
+          0,
+          data.pixelWidth - 1,
+        );
+        final pIdx = rowBase + px * 4;
+        if (pIdx + 3 >= rgba.length || rgba[pIdx + 3] == 0) continue;
+        paint.color = Color.fromARGB(
+          rgba[pIdx + 3],
+          rgba[pIdx],
+          rgba[pIdx + 1],
+          rgba[pIdx + 2],
+        );
+        canvas.drawRect(
+          Rect.fromLTWH(
+            item.dstX + sx * subW,
+            item.dstY + sy * subH,
+            subW + 0.25,
+            subH + 0.25,
+          ),
+          paint,
+        );
+      }
+    }
+  }
+
   int _paintKittyCellOrRun(
     Canvas canvas,
     Paint paint,
@@ -2633,12 +2930,22 @@ final class TuiAtlasPainter extends CustomPainter {
 
     final imageId = extractKittyCellImageId(char, fgArgb);
     final registry = buffer.lookupKittyRegistry(gridCol, gridRow);
-    final data = registry.lookupImage(imageId);
+    final data = registry.activeImageData(imageId);
+    final placementId = extractKittyCellPlacementId(
+      buffer.getUnderlineColor(gridCol, gridRow),
+    );
+    final placement = registry.lookupPlacement(imageId, placementId);
+    final gridCols = placement != null && placement.cols > 0
+        ? placement.cols
+        : (data?.gridCols ?? 0);
+    final gridRows = placement != null && placement.rows > 0
+        ? placement.rows
+        : (data?.gridRows ?? 0);
     if (data == null ||
-        data.gridCols <= 0 ||
-        data.gridRows <= 0 ||
-        coords.row >= data.gridRows ||
-        coords.col >= data.gridCols) {
+        gridCols <= 0 ||
+        gridRows <= 0 ||
+        coords.row >= gridRows ||
+        coords.col >= gridCols) {
       return index + 1;
     }
 
@@ -2652,42 +2959,60 @@ final class TuiAtlasPainter extends CustomPainter {
       startGridCol: gridCol,
       tileRow: coords.row,
       startTileCol: coords.col,
+      maxTileCols: gridCols,
     );
     final runCols = endIdx - index;
 
+    final offset = resolveKittyCellOffset(
+      placement: placement,
+      cellWidth: w,
+      cellHeight: h,
+    );
     final gpuImage = kittyImages[data] ?? kittyImagesById[(registry, imageId)];
     if (gpuImage == null) {
       for (var i = 0; i < runCols; i++) {
         final cellBase = (index + i) << 2;
+        final cellUv = resolveKittySourceUv(
+          imageWidth: data.pixelWidth,
+          imageHeight: data.pixelHeight,
+          placement: placement,
+          subU0: (coords.col + i) / gridCols,
+          subV0: coords.row / gridRows,
+          subU1: (coords.col + i + 1) / gridCols,
+          subV1: (coords.row + 1) / gridRows,
+        );
         _paintKittySubpixels(
           canvas,
           paint,
-          staged.fallbackRects[cellBase],
-          staged.fallbackRects[cellBase + 1],
+          staged.fallbackRects[cellBase] + offset.dx,
+          staged.fallbackRects[cellBase + 1] + offset.dy,
           staged.fallbackRects[cellBase + 2],
           staged.fallbackRects[cellBase + 3],
           data,
-          coords.row,
-          coords.col + i,
+          cellUv,
         );
       }
       return endIdx;
     }
 
-    final tileW = gpuImage.width / data.gridCols;
-    final tileH = gpuImage.height / data.gridRows;
+    final uv = resolveKittySourceUv(
+      imageWidth: data.pixelWidth,
+      imageHeight: data.pixelHeight,
+      placement: placement,
+      subU0: coords.col / gridCols,
+      subV0: coords.row / gridRows,
+      subU1: (coords.col + runCols) / gridCols,
+      subV1: (coords.row + 1) / gridRows,
+    );
+    final imgW = gpuImage.width.toDouble();
+    final imgH = gpuImage.height.toDouble();
     paint.color = const Color(0xFFFFFFFF);
     canvas.drawImageRect(
       gpuImage,
+      Rect.fromLTRB(uv.u0 * imgW, uv.v0 * imgH, uv.u1 * imgW, uv.v1 * imgH),
       Rect.fromLTWH(
-        coords.col * tileW,
-        coords.row * tileH,
-        runCols * tileW,
-        tileH,
-      ),
-      Rect.fromLTWH(
-        x,
-        y,
+        x + offset.dx,
+        y + offset.dy,
         runCols * w + kittyTileOverlapLogical,
         h + kittyTileOverlapLogical,
       ),
@@ -2704,23 +3029,23 @@ final class TuiAtlasPainter extends CustomPainter {
     double cellW,
     double cellH,
     KittyImageData data,
-    int tileRow,
-    int tileCol,
+    KittySourceUv uv,
   ) {
-    if (data.format == KittyImageData.formatPng) return;
-    final stepsX = math.min(
-      2,
-      math.max(1, data.pixelWidth ~/ math.max(1, data.gridCols)),
-    );
-    final stepsY = math.min(
-      4,
-      math.max(1, data.pixelHeight ~/ math.max(1, data.gridRows)),
-    );
+    if (data.format == KittyImageData.formatPng ||
+        data.pixelWidth <= 0 ||
+        data.pixelHeight <= 0) {
+      return;
+    }
+    final spanU = uv.u1 - uv.u0;
+    final spanV = uv.v1 - uv.v0;
+    if (spanU <= 0.0 || spanV <= 0.0) return;
+    final stepsX = math.min(2, math.max(1, (spanU * data.pixelWidth).round()));
+    final stepsY = math.min(4, math.max(1, (spanV * data.pixelHeight).round()));
     final subW = cellW / stepsX;
     final subH = cellH / stepsY;
 
     for (var sy = 0; sy < stepsY; sy++) {
-      final normY = (tileRow + (sy + 0.5) / stepsY) / data.gridRows;
+      final normY = uv.v0 + spanV * ((sy + 0.5) / stepsY);
       final py = (normY * data.pixelHeight).floor().clamp(
         0,
         data.pixelHeight - 1,
@@ -2730,7 +3055,8 @@ final class TuiAtlasPainter extends CustomPainter {
         paint,
         cellX,
         data,
-        tileCol,
+        uv.u0,
+        spanU,
         stepsX,
         subW,
         subH,
@@ -2745,7 +3071,8 @@ final class TuiAtlasPainter extends CustomPainter {
     Paint paint,
     double cellX,
     KittyImageData data,
-    int tileCol,
+    double u0,
+    double spanU,
     int stepsX,
     double subW,
     double subH,
@@ -2759,8 +3086,8 @@ final class TuiAtlasPainter extends CustomPainter {
         rgba,
         rowBase,
         data.pixelWidth,
-        data.gridCols,
-        tileCol,
+        u0,
+        spanU,
         sx,
         stepsX,
       );
@@ -2774,8 +3101,8 @@ final class TuiAtlasPainter extends CustomPainter {
                 rgba,
                 rowBase,
                 data.pixelWidth,
-                data.gridCols,
-                tileCol,
+                u0,
+                spanU,
                 runEnd,
                 stepsX,
               ) ==
@@ -2800,12 +3127,12 @@ final class TuiAtlasPainter extends CustomPainter {
     Uint8List rgba,
     int rowBase,
     int pixelWidth,
-    int gridCols,
-    int tileCol,
+    double u0,
+    double spanU,
     int sx,
     int stepsX,
   ) {
-    final normX = (tileCol + (sx + 0.5) / stepsX) / gridCols;
+    final normX = u0 + spanU * ((sx + 0.5) / stepsX);
     final px = (normX * pixelWidth).floor().clamp(0, pixelWidth - 1);
     final pIdx = rowBase + px * 4;
     if (pIdx + 3 >= rgba.length) return 0;
@@ -3088,6 +3415,16 @@ final class TuiAtlasPainter extends CustomPainter {
           (onMissingStyledGlyphs == null) ||
       (oldDelegate.onBeforePaint == null) != (onBeforePaint == null);
 }
+
+typedef _Osc66PainterKey = ({
+  String text,
+  String fontFamily,
+  int fontFallbackHash,
+  double fontSize,
+  bool isBold,
+  bool isItalic,
+  int colorArgb,
+});
 
 final class _AtlasGeometry {
   final double cellWidth;
