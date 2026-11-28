@@ -2,6 +2,7 @@
 
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
@@ -232,6 +233,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
   }
 
   static const _pipeBufferSize = 65536;
+  static final int _isolatePipeNonce = Random.secure().nextInt(0x7fffffff);
   static int _pipeSequence = 0;
 
   static void _signalWriteStop(Pointer<IntPtr> pStopEvent) {
@@ -266,7 +268,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     final seq = ++_pipeSequence;
     final name =
         r'\\.\pipe\pty2_in_'
-        '${pid}_${seq}_${DateTime.now().microsecondsSinceEpoch}';
+        '${pid}_${_isolatePipeNonce}_$seq';
     final lpName = name.toPcwstr(allocator: arena);
     final hWrite = win32.CreateNamedPipe(
       lpName,
