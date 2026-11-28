@@ -272,72 +272,48 @@ class LazyTableElement extends Element {
     final hasHeaders = table.headers.isNotEmpty;
     final headerRowsCount = hasHeaders ? 2 : 0;
     final usableHeight = h - headerRowsCount;
-
     if (usableHeight <= 0) return;
 
-    // Cache total column layout width (columns + single space separators)
-    final int columnsTotalWidth =
+    final columnsTotalWidth =
         resolvedColumnWidths.fold<int>(0, (prev, val) => prev + val) +
-        (table.headers.isNotEmpty ? table.headers.length - 1 : 0);
+        (hasHeaders ? table.headers.length - 1 : 0);
 
-    // 1. Render Headers
     if (hasHeaders) {
-      final headerSb = StringBuffer();
-      for (var i = 0; i < table.headers.length; i++) {
-        final width = resolvedColumnWidths[i];
-        final text = table.headers[i];
-        final padded = padOrTruncate(text, width);
-        headerSb.write(padded);
-        if (i < table.headers.length - 1) headerSb.write(' ');
-      }
-
-      String headerStr;
-      if (columnsTotalWidth <= w) {
-        if (columnsTotalWidth < w) {
-          headerSb.write(' ' * (w - columnsTotalWidth));
-        }
-        headerStr = headerSb.toString();
-      } else {
-        headerStr = padOrTruncate(headerSb.toString(), w);
-      }
+      final headerStr = _formatLine(table.headers, columnsTotalWidth, w);
       buffer.writeString(offset.dx, offset.dy, headerStr, table.headerStyle);
-
-      // Render Divider Line
-      final dividerChar = '─';
-      final divider = dividerChar * w;
-      buffer.writeString(offset.dx, offset.dy + 1, divider, table.borderStyle);
+      buffer.writeString(offset.dx, offset.dy + 1, '─' * w, table.borderStyle);
     }
 
-    // 2. Render Visible Rows
     for (var r = 0; r < usableHeight; r++) {
       final rowIdx = table.scrollOffset + r;
       if (rowIdx >= table.itemCount) break;
 
       final rowData = table.itemBuilder(rowIdx);
-      final isSelected = rowIdx == table.selectedRowIndex;
-      final currentStyle = isSelected ? table.selectedRowStyle : table.rowStyle;
-
-      final rowSb = StringBuffer();
-      for (var c = 0; c < table.headers.length; c++) {
-        final width = resolvedColumnWidths[c];
-        final cellText = c < rowData.length ? rowData[c] : '';
-        final padded = padOrTruncate(cellText, width);
-        rowSb.write(padded);
-        if (c < table.headers.length - 1) rowSb.write(' ');
-      }
-
-      String rowStr;
-      if (columnsTotalWidth <= w) {
-        if (columnsTotalWidth < w) {
-          rowSb.write(' ' * (w - columnsTotalWidth));
-        }
-        rowStr = rowSb.toString();
-      } else {
-        rowStr = padOrTruncate(rowSb.toString(), w);
-      }
-      final targetY = offset.dy + headerRowsCount + r;
-
-      buffer.writeString(offset.dx, targetY, rowStr, currentStyle);
+      final currentStyle = rowIdx == table.selectedRowIndex
+          ? table.selectedRowStyle
+          : table.rowStyle;
+      final rowStr = _formatLine(rowData, columnsTotalWidth, w);
+      buffer.writeString(
+        offset.dx,
+        offset.dy + headerRowsCount + r,
+        rowStr,
+        currentStyle,
+      );
     }
+  }
+
+  String _formatLine(List<String> cells, int columnsTotalWidth, int width) {
+    final colCount = resolvedColumnWidths.length;
+    final sb = StringBuffer();
+    for (var c = 0; c < colCount; c++) {
+      final cellText = c < cells.length ? cells[c] : '';
+      sb.write(padOrTruncate(cellText, resolvedColumnWidths[c]));
+      if (c < colCount - 1) sb.write(' ');
+    }
+    if (columnsTotalWidth <= width) {
+      sb.write(' ' * (width - columnsTotalWidth));
+      return sb.toString();
+    }
+    return padOrTruncate(sb.toString(), width);
   }
 }

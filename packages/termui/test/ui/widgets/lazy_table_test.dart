@@ -132,5 +132,28 @@ void main() {
       expect(buffer.getCharacter(10, 3), equals(' ')); // Separator space
       expect(buffer.getCharacter(11, 3), equals('v')); // Start of Col 2
     });
+
+    test('LazyTable truncates narrow viewports and pads short rows', () {
+      final table = LazyTable(
+        headers: const ['HeaderA', 'HeaderB'],
+        columnWidths: const [6, 6],
+        itemCount: 2,
+        itemBuilder: (i) => i == 0 ? ['Only1'] : ['Row2A', 'Row2B'],
+      );
+
+      final element = table.createElement();
+      element.mount(null);
+      element.layout(const BoxConstraints.tightFor(width: 8, height: 4));
+
+      final buffer = Buffer(8, 4);
+      element.paint(buffer, Offset.zero);
+
+      String rowText(int y) =>
+          List.generate(8, (x) => buffer.getCharacter(x, y)).join();
+
+      expect(rowText(0), equals('Header H'));
+      expect(rowText(2), equals('Only1   '));
+      expect(rowText(3), equals('Row2A  R'));
+    });
   });
 }

@@ -1120,5 +1120,42 @@ void main() {
         matchesAnsiGolden('test/goldens/tree_unfocused_styling.ansi'),
       );
     });
+
+    test('Enter and space keys invoke onSelect for active node', () {
+      final leafA = TreeNode<String>(label: 'A', value: 'a');
+      final leafB = TreeNode<String>(label: 'B', value: 'b');
+      final root = TreeNode<String>(
+        label: 'root',
+        value: 'rt',
+        children: [leafA, leafB],
+        isExpanded: true,
+      );
+
+      final selectedValues = <String>[];
+      final treeElement =
+          TreeWidget<String>(
+                root: root,
+                showRoot: true,
+                onSelect: (node) => selectedValues.add(node.value),
+              ).createElement()
+              as StatefulElement;
+      treeElement.mount(null);
+      addTearDown(treeElement.unmount);
+
+      final tree = treeElement.state as TreeWidgetState<String>;
+
+      expect(tree.handleKeyEvent(const KeyEvent('enter', KeyType.enter)), true);
+      expect(selectedValues, equals(['rt']));
+
+      expect(tree.handleKeyEvent(const KeyEvent('down', KeyType.down)), true);
+      expect(tree.handleKeyEvent(const KeyEvent(' ', KeyType.character)), true);
+      expect(selectedValues, equals(['rt', 'a']));
+
+      expect(
+        tree.handleKeyEvent(const KeyEvent('x', KeyType.character)),
+        false,
+      );
+      expect(selectedValues, equals(['rt', 'a']));
+    });
   });
 }

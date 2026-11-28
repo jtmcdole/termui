@@ -497,247 +497,25 @@ class DecoratedBoxElement extends SingleChildElement {
   void performPaint(Buffer buffer, Offset offset) {
     final db = widget as DecoratedBox;
     final area = Rect(offset.dx, offset.dy, size.width, size.height);
-
-    // Merge backgroundStyle and backgroundColor correctly
     var bgStyle = db.decoration.backgroundStyle;
-    if (db.decoration.backgroundColor != null) {
-      final fallbackBg = Style(background: db.decoration.backgroundColor);
+    if (db.decoration.backgroundColor case final bgColor?) {
+      final fallbackBg = Style(background: bgColor);
       bgStyle = bgStyle != null ? fallbackBg.merge(bgStyle) : fallbackBg;
     }
 
     if (bgStyle != null) {
-      final bgFg = bgStyle.foreground?.argb;
-      final bgBg = bgStyle.background?.argb;
-      final bgModifiers = bgStyle.modifiers;
-
-      final startY = max(0, -area.y);
-      final endY = min(area.height, buffer.height - area.y);
-      final startX = max(0, -area.x);
-      final endX = min(area.width, buffer.width - area.x);
-
-      if (startX < endX && startY < endY) {
-        for (var y = startY; y < endY; y++) {
-          final drawY = area.y + y;
-          for (var x = startX; x < endX; x++) {
-            buffer.setAttributes(
-              area.x + x,
-              drawY,
-              char: ' ',
-              fg: bgFg,
-              bg: bgBg,
-              modifiers: bgModifiers,
-            );
-          }
-        }
-      }
+      buffer.fillRect(
+        area,
+        char: ' ',
+        fg: bgStyle.foreground?.argb,
+        bg: bgStyle.background?.argb,
+        modifiers: bgStyle.modifiers,
+      );
     }
 
     final border = db.decoration.border;
     if (border != null) {
-      final style = bgStyle != null
-          ? bgStyle.merge(border.style)
-          : border.style;
-
-      // Extract colors for gradient check
-      final borderStart = db.decoration.borderStartColor;
-      final borderEnd = db.decoration.borderEndColor;
-      final hasGradient = borderStart != null && borderEnd != null;
-      final angle = db.decoration.borderGradientAngle;
-
-      double cosA = 0.0;
-      double sinA = 0.0;
-      double pMin = 0.0;
-      double pRange = 0.0;
-      int startR = 0, startG = 0, startB = 0;
-      int diffR = 0, diffG = 0, diffB = 0;
-
-      if (hasGradient) {
-        final start = borderStart;
-        final end = borderEnd;
-        startR = start.r;
-        startG = start.g;
-        startB = start.b;
-        diffR = end.r - startR;
-        diffG = end.g - startG;
-        diffB = end.b - startB;
-      }
-
-      if (hasGradient && angle != 0.0) {
-        cosA = cos(angle);
-        sinA = sin(angle);
-        final dx = size.width - 1.0;
-        final dy = size.height - 1.0;
-        final p00 = 0.0;
-        final pW0 = dx * cosA;
-        final p0H = dy * sinA;
-        final pWH = dx * cosA + dy * sinA;
-
-        pMin = p00;
-        if (pW0 < pMin) pMin = pW0;
-        if (p0H < pMin) pMin = p0H;
-        if (pWH < pMin) pMin = pWH;
-
-        var pMax = p00;
-        if (pW0 > pMax) pMax = pW0;
-        if (p0H > pMax) pMax = p0H;
-        if (pWH > pMax) pMax = pWH;
-
-        pRange = pMax - pMin;
-      }
-
-      Color? getGradientColor(int x, int y) {
-        if (!hasGradient) return null;
-        final w = size.width;
-
-        if (angle == 0.0) {
-          if (w <= 1) return borderStart;
-          final ratio = x / (w - 1);
-          final r = (startR + diffR * ratio).round().clamp(0, 255);
-          final g = (startG + diffG * ratio).round().clamp(0, 255);
-          final b = (startB + diffB * ratio).round().clamp(0, 255);
-          return Color(r, g, b);
-        }
-
-        if (pRange.abs() < 1e-5) return borderStart;
-        final proj = x * cosA + y * sinA;
-        final ratio = (proj - pMin) / pRange;
-        final r = (startR + diffR * ratio).round().clamp(0, 255);
-        final g = (startG + diffG * ratio).round().clamp(0, 255);
-        final b = (startB + diffB * ratio).round().clamp(0, 255);
-        return Color(r, g, b);
-      }
-
-      // Optimisation: Cache style objects for horizontal gradients (angle == 0.0)
-      List<Style>? horizontalStyleCache;
-      if (hasGradient && angle == 0.0) {
-        horizontalStyleCache = List.generate(size.width, (x) {
-          final gColor = getGradientColor(x, 0);
-          return Style(
-            foreground: gColor,
-            background: style.background,
-            modifiers: style.modifiers,
-          );
-        });
-      }
-
-      Style getCellStyle(int x, int y) {
-        if (!hasGradient) return style;
-        if (angle == 0.0 && horizontalStyleCache != null) {
-          return horizontalStyleCache[x];
-        }
-        final gColor = getGradientColor(x, y);
-        if (gColor != null) {
-          return Style(
-            foreground: gColor,
-            background: style.background,
-            modifiers: style.modifiers,
-          );
-        }
-        return style;
-      }
-
-      // Draw horizontal lines (excluding corners)
-      if (border.topChar.isNotEmpty && area.height > 0) {
-        final step = max(1, _topCharWidth);
-        for (
-          var x = _cachedLeftOffset;
-          x < area.width - _cachedRightOffset;
-          x += step
-        ) {
-          buffer.writeString(
-            area.x + x,
-            area.y,
-            border.topChar,
-            getCellStyle(x, 0),
-          );
-        }
-      }
-      if (border.bottomChar.isNotEmpty && area.height > 1) {
-        final step = max(1, _bottomCharWidth);
-        for (
-          var x = _cachedLeftOffset;
-          x < area.width - _cachedRightOffset;
-          x += step
-        ) {
-          buffer.writeString(
-            area.x + x,
-            area.y + area.height - 1,
-            border.bottomChar,
-            getCellStyle(x, area.height - 1),
-          );
-        }
-      }
-
-      // Draw vertical lines (excluding corners)
-      if (border.leftChar.isNotEmpty && area.width > 0) {
-        for (
-          var y = _cachedTopOffset;
-          y < area.height - _cachedBottomOffset;
-          y++
-        ) {
-          buffer.writeString(
-            area.x,
-            area.y + y,
-            border.leftChar,
-            getCellStyle(0, y),
-          );
-        }
-      }
-      if (border.rightChar.isNotEmpty &&
-          area.width > _cachedLeftOffset + _cachedRightOffset) {
-        for (
-          var y = _cachedTopOffset;
-          y < area.height - _cachedBottomOffset;
-          y++
-        ) {
-          buffer.writeString(
-            area.x + area.width - _cachedRightOffset,
-            area.y + y,
-            border.rightChar,
-            getCellStyle(area.width - _cachedRightOffset, y),
-          );
-        }
-      }
-
-      // Draw corners
-      if (border.topLeftChar.isNotEmpty && area.width > 0 && area.height > 0) {
-        buffer.writeString(
-          area.x,
-          area.y,
-          border.topLeftChar,
-          getCellStyle(0, 0),
-        );
-      }
-      if (border.topRightChar.isNotEmpty &&
-          area.width > _cachedLeftOffset + _cachedRightOffset &&
-          area.height > 0) {
-        buffer.writeString(
-          area.x + area.width - _topRightCharWidth,
-          area.y,
-          border.topRightChar,
-          getCellStyle(area.width - _topRightCharWidth, 0),
-        );
-      }
-      if (border.bottomLeftChar.isNotEmpty &&
-          area.width > 0 &&
-          area.height > _cachedTopOffset + _cachedBottomOffset) {
-        buffer.writeString(
-          area.x,
-          area.y + area.height - 1,
-          border.bottomLeftChar,
-          getCellStyle(0, area.height - 1),
-        );
-      }
-      if (border.bottomRightChar.isNotEmpty &&
-          area.width > _cachedLeftOffset + _cachedRightOffset &&
-          area.height > _cachedTopOffset + _cachedBottomOffset) {
-        buffer.writeString(
-          area.x + area.width - _bottomRightCharWidth,
-          area.y + area.height - 1,
-          border.bottomRightChar,
-          getCellStyle(area.width - _bottomRightCharWidth, area.height - 1),
-        );
-      }
+      _paintBorder(buffer, area, db.decoration, border, bgStyle);
     }
 
     if (childElement != null) {
@@ -745,8 +523,258 @@ class DecoratedBoxElement extends SingleChildElement {
     }
   }
 
+  void _paintBorder(
+    Buffer buffer,
+    Rect area,
+    BoxDecoration decoration,
+    Border border,
+    Style? bgStyle,
+  ) {
+    final baseStyle = bgStyle != null
+        ? bgStyle.merge(border.style)
+        : border.style;
+    final gradient = _BorderGradient.fromDecoration(
+      decoration,
+      size,
+      baseStyle,
+    );
+    Style cellStyle(int x, int y) =>
+        gradient?.styleAt(x, y, baseStyle) ?? baseStyle;
+
+    _paintHorizontalBorders(buffer, area, border, cellStyle);
+    _paintVerticalBorders(buffer, area, border, cellStyle);
+    _paintBorderCorners(buffer, area, border, cellStyle);
+  }
+
+  void _paintHorizontalBorders(
+    Buffer buffer,
+    Rect area,
+    Border border,
+    Style Function(int x, int y) cellStyle,
+  ) {
+    if (border.topChar.isNotEmpty && area.height > 0) {
+      final step = max(1, _topCharWidth);
+      for (
+        var x = _cachedLeftOffset;
+        x < area.width - _cachedRightOffset;
+        x += step
+      ) {
+        buffer.writeString(area.x + x, area.y, border.topChar, cellStyle(x, 0));
+      }
+    }
+    if (border.bottomChar.isNotEmpty && area.height > 1) {
+      final step = max(1, _bottomCharWidth);
+      for (
+        var x = _cachedLeftOffset;
+        x < area.width - _cachedRightOffset;
+        x += step
+      ) {
+        buffer.writeString(
+          area.x + x,
+          area.y + area.height - 1,
+          border.bottomChar,
+          cellStyle(x, area.height - 1),
+        );
+      }
+    }
+  }
+
+  void _paintVerticalBorders(
+    Buffer buffer,
+    Rect area,
+    Border border,
+    Style Function(int x, int y) cellStyle,
+  ) {
+    if (border.leftChar.isNotEmpty && area.width > 0) {
+      for (
+        var y = _cachedTopOffset;
+        y < area.height - _cachedBottomOffset;
+        y++
+      ) {
+        buffer.writeString(
+          area.x,
+          area.y + y,
+          border.leftChar,
+          cellStyle(0, y),
+        );
+      }
+    }
+    if (border.rightChar.isNotEmpty &&
+        area.width > _cachedLeftOffset + _cachedRightOffset) {
+      for (
+        var y = _cachedTopOffset;
+        y < area.height - _cachedBottomOffset;
+        y++
+      ) {
+        buffer.writeString(
+          area.x + area.width - _cachedRightOffset,
+          area.y + y,
+          border.rightChar,
+          cellStyle(area.width - _cachedRightOffset, y),
+        );
+      }
+    }
+  }
+
+  void _paintBorderCorners(
+    Buffer buffer,
+    Rect area,
+    Border border,
+    Style Function(int x, int y) cellStyle,
+  ) {
+    final hasRightRoom = area.width > _cachedLeftOffset + _cachedRightOffset;
+    final hasBottomRoom = area.height > _cachedTopOffset + _cachedBottomOffset;
+
+    if (border.topLeftChar.isNotEmpty && area.width > 0 && area.height > 0) {
+      buffer.writeString(area.x, area.y, border.topLeftChar, cellStyle(0, 0));
+    }
+    if (border.topRightChar.isNotEmpty && hasRightRoom && area.height > 0) {
+      buffer.writeString(
+        area.x + area.width - _topRightCharWidth,
+        area.y,
+        border.topRightChar,
+        cellStyle(area.width - _topRightCharWidth, 0),
+      );
+    }
+    if (border.bottomLeftChar.isNotEmpty && area.width > 0 && hasBottomRoom) {
+      buffer.writeString(
+        area.x,
+        area.y + area.height - 1,
+        border.bottomLeftChar,
+        cellStyle(0, area.height - 1),
+      );
+    }
+    if (border.bottomRightChar.isNotEmpty && hasRightRoom && hasBottomRoom) {
+      buffer.writeString(
+        area.x + area.width - _bottomRightCharWidth,
+        area.y + area.height - 1,
+        border.bottomRightChar,
+        cellStyle(area.width - _bottomRightCharWidth, area.height - 1),
+      );
+    }
+  }
+
   @override
   void visitChildren(void Function(Element child) visitor) {
     if (childElement != null) visitor(childElement!);
+  }
+}
+
+sealed class _BorderGradient {
+  const _BorderGradient();
+
+  static _BorderGradient? fromDecoration(
+    BoxDecoration decoration,
+    Size size,
+    Style baseStyle,
+  ) {
+    final start = decoration.borderStartColor;
+    final end = decoration.borderEndColor;
+    if (start == null || end == null) return null;
+
+    final angle = decoration.borderGradientAngle;
+    final diffR = end.r - start.r;
+    final diffG = end.g - start.g;
+    final diffB = end.b - start.b;
+
+    if (angle == 0.0) {
+      final cache = List<Style>.generate(size.width, (x) {
+        final ratio = size.width <= 1 ? 0.0 : x / (size.width - 1);
+        final color = size.width <= 1
+            ? start
+            : _interpolateRgb(start, diffR, diffG, diffB, ratio);
+        return Style(
+          foreground: color,
+          background: baseStyle.background,
+          modifiers: baseStyle.modifiers,
+        );
+      });
+      return _HorizontalBorderGradient(cache);
+    }
+
+    final cosA = cos(angle);
+    final sinA = sin(angle);
+    final dx = size.width - 1.0;
+    final dy = size.height - 1.0;
+    final pW0 = dx * cosA;
+    final p0H = dy * sinA;
+    final pWH = pW0 + p0H;
+    final pMin = min(min(0.0, pW0), min(p0H, pWH));
+    final pMax = max(max(0.0, pW0), max(p0H, pWH));
+
+    return _AngledBorderGradient(
+      startColor: start,
+      diffR: diffR,
+      diffG: diffG,
+      diffB: diffB,
+      cosA: cosA,
+      sinA: sinA,
+      pMin: pMin,
+      pRange: pMax - pMin,
+    );
+  }
+
+  Style styleAt(int x, int y, Style baseStyle);
+
+  static Color _interpolateRgb(
+    Color start,
+    int diffR,
+    int diffG,
+    int diffB,
+    double ratio,
+  ) {
+    final r = (start.r + diffR * ratio).round().clamp(0, 255);
+    final g = (start.g + diffG * ratio).round().clamp(0, 255);
+    final b = (start.b + diffB * ratio).round().clamp(0, 255);
+    return Color(r, g, b);
+  }
+}
+
+final class _HorizontalBorderGradient extends _BorderGradient {
+  final List<Style> _cache;
+
+  const _HorizontalBorderGradient(this._cache);
+
+  @override
+  Style styleAt(int x, int y, Style baseStyle) => _cache[x];
+}
+
+final class _AngledBorderGradient extends _BorderGradient {
+  final Color startColor;
+  final int diffR;
+  final int diffG;
+  final int diffB;
+  final double cosA;
+  final double sinA;
+  final double pMin;
+  final double pRange;
+
+  const _AngledBorderGradient({
+    required this.startColor,
+    required this.diffR,
+    required this.diffG,
+    required this.diffB,
+    required this.cosA,
+    required this.sinA,
+    required this.pMin,
+    required this.pRange,
+  });
+
+  @override
+  Style styleAt(int x, int y, Style baseStyle) {
+    final color = !pRange.isFinite || pRange.abs() < 1e-5
+        ? startColor
+        : _BorderGradient._interpolateRgb(
+            startColor,
+            diffR,
+            diffG,
+            diffB,
+            (x * cosA + y * sinA - pMin) / pRange,
+          );
+    return Style(
+      foreground: color,
+      background: baseStyle.background,
+      modifiers: baseStyle.modifiers,
+    );
   }
 }

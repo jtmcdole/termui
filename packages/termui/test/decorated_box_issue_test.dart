@@ -62,4 +62,28 @@ void main() {
       expect(rootElement.size.width, greaterThanOrEqualTo(6));
     },
   );
+
+  test(
+    'DecoratedBox renders without throwing when borderGradientAngle is NaN',
+    () {
+      const startColor = Color(10, 20, 30);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(
+          border: Border.single,
+          borderStartColor: startColor,
+          borderEndColor: Color(200, 210, 220),
+          borderGradientAngle: double.nan,
+        ),
+        child: Text('Hi'),
+      );
+
+      final element = widget.createElement();
+      element.mount(null);
+      element.layout(const BoxConstraints.tightFor(width: 6, height: 3));
+
+      final buffer = Buffer(6, 3);
+      expect(() => element.paint(buffer, Offset.zero), returnsNormally);
+      expect(buffer.getCharacter(0, 0), equals('┌'));
+    },
+  );
 }
