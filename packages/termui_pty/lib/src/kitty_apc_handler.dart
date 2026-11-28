@@ -241,7 +241,7 @@ final class KittyApcHandler {
 
   /// Whether local regular-file (`t=f`, non-unlinking) transmission media is enabled.
   /// Defaults to `false`.
-  final bool allowLocalFiles;
+  bool allowLocalFiles;
 
   final Map<int, _PendingUpload> _pendingUploads = {};
   final Map<int, int> _imageNumberToId = {};

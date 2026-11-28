@@ -138,6 +138,10 @@ final class PtyRouter {
     bool allowLocalKittyMedia = false,
     bool? allowLocalKittyShm,
     bool allowLocalKittyFiles = false,
+    bool allowClipboardWrite = true,
+    bool allowClipboardRead = false,
+    FutureOr<String?> Function(String selection)? onClipboardRead,
+    bool Function()? canReadClipboard,
   }) {
     if (_disposed) {
       throw StateError('PtyRouter has been disposed.');
@@ -177,6 +181,10 @@ final class PtyRouter {
       allowLocalKittyMedia: allowLocalKittyMedia,
       allowLocalKittyShm: allowLocalKittyShm,
       allowLocalKittyFiles: allowLocalKittyFiles,
+      allowClipboardWrite: allowClipboardWrite,
+      allowClipboardRead: allowClipboardRead,
+      onClipboardRead: onClipboardRead,
+      canReadClipboard: canReadClipboard,
       onDispose: () => _sessions.remove(sessionId),
     );
     _sessions[sessionId] = session;
@@ -273,6 +281,10 @@ final class PtyRouterSession {
     required bool allowLocalKittyMedia,
     required bool? allowLocalKittyShm,
     required bool allowLocalKittyFiles,
+    required bool allowClipboardWrite,
+    required bool allowClipboardRead,
+    required FutureOr<String?> Function(String selection)? onClipboardRead,
+    required bool Function()? canReadClipboard,
     required void Function() onDispose,
   }) : _onDispose = onDispose,
        terminal = VirtualTerminal(
@@ -291,6 +303,10 @@ final class PtyRouterSession {
          allowLocalKittyMedia: allowLocalKittyMedia,
          allowLocalKittyShm: allowLocalKittyShm,
          allowLocalKittyFiles: allowLocalKittyFiles,
+         allowClipboardWrite: allowClipboardWrite,
+         allowClipboardRead: allowClipboardRead,
+         onClipboardRead: onClipboardRead,
+         canReadClipboard: canReadClipboard,
        ) {
     _syncFullShadowState();
     terminal
