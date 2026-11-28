@@ -1479,5 +1479,129 @@ void main() {
         atlas.dispose();
       }
     });
+
+    test('PR #503 H1: HiDPI devicePixelRatio 2.0 divides physical X/Y cellOffset pixels before logical placement', () async {
+      final atlas = await GlyphAtlasGenerator.generate(
+        fontFamily: 'monospace',
+        fontSize: 14.0,
+        devicePixelRatio: 2.0,
+      );
+      try {
+        final reg = KittyImageRegistry();
+        final imgData = _makeSolidKittyData(
+          imageId: 95,
+          r: 0,
+          g: 255,
+          b: 0,
+          width: 4,
+          height: 4,
+        );
+        reg.registerImage(imgData);
+        // Physical cell is ~16x32 at dpr=2.0 (logical ~8x16).
+        // X=6, Y=10 physical pixels should shift dstX by 6.0 physical px and dstY by 10.0 physical px
+        // (NOT 12.0 and 20.0 physical px!).
+        reg.registerPlacement(
+          const KittyPlacement(
+            imageId: 95,
+            placementId: 1,
+            isVirtual: false,
+            isAltScreen: false,
+            gridCol: 0,
+            gridRow: 0,
+            cols: 1,
+            rows: 1,
+            zIndex: 1,
+            cellOffsetX: 6,
+            cellOffsetY: 10,
+          ),
+        );
+
+        final buf = Buffer.blank(4, 2);
+        buf.registerKittyRegistry(const tui_geo.Rect(0, 0, 4, 2), reg);
+        final uiImg = await _decodeRgba(imgData.rgbaPixels, 4, 4);
+        try {
+          final batchBuilder = GpuAtlasBatchBuilder();
+          final painter = TuiAtlasPainter(
+            buffer: buf,
+            atlas: atlas,
+            fontFamily: 'monospace',
+            fallbackPainters: {},
+            onMissingGlyphs: null,
+            kittyImages: {imgData: uiImg},
+            defaultBackgroundArgb: 0xFF000000,
+          );
+          final batch = painter.stageForGpu(
+            Size(buf.width * atlas.cellWidth, buf.height * atlas.cellHeight),
+            2.0,
+            batchBuilder,
+          );
+          expect(batch.kittyQuads, hasLength(1));
+          expect(batch.kittyQuads.single.dstX, closeTo(6.0, 0.01));
+          expect(batch.kittyQuads.single.dstY, closeTo(10.0, 0.01));
+        } finally {
+          uiImg.dispose();
+        }
+      } finally {
+        atlas.dispose();
+      }
+    });
+
+    test('PR #503 M1: OSC 66 scaled anchor renders underline, strikethrough, overline, and underlineColor decorations', () async {
+      final atlas = await GlyphAtlasGenerator.generate(
+        fontFamily: 'monospace',
+        fontSize: 14.0,
+        devicePixelRatio: 1.0,
+      );
+      try {
+        TuiAtlasPainter.debugClearOsc66PainterCache();
+        final buf = Buffer.blank(4, 3);
+        buf.setCell(
+          0,
+          0,
+          'A',
+          0xFFFFFFFF,
+          0xFF000000,
+          Modifier.underline | Modifier.crossedOut | Modifier.overline,
+          underlineColor: 0xFFFF0000,
+        );
+        buf.setTextSizing(0, 0, KittyTextSizing.pack(scale: 2).bits);
+        for (var dy = 0; dy < 2; dy++) {
+          for (var dx = 0; dx < 2; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            buf.setCell(dx, dy, ' ', 0xFFFFFFFF, 0xFF000000, Modifier.none);
+            buf.setTextSizing(
+              dx,
+              dy,
+              KittyTextSizing.pack(
+                scale: 2,
+                isContinuation: true,
+                originDx: dx,
+                originDy: dy,
+              ).bits,
+            );
+          }
+        }
+
+        final painter = TuiAtlasPainter(
+          buffer: buf,
+          atlas: atlas,
+          fontFamily: 'monospace',
+          fallbackPainters: {},
+          onMissingGlyphs: null,
+          defaultBackgroundArgb: 0xFF000000,
+        );
+        final w = (buf.width * atlas.cellWidth).ceil();
+        final h = (buf.height * atlas.cellHeight).ceil();
+        final rgba = await _renderPainterRgba(painter);
+        expect(
+          _regionContainsColor(rgba, w, h, 0, 0, w, h, 255, 0, 0),
+          isTrue,
+          reason: 'OSC 66 anchor with Modifier.underline + red underlineColor must draw red decoration pixels',
+        );
+      } finally {
+        TuiAtlasPainter.debugClearOsc66PainterCache();
+        atlas.dispose();
+      }
+    });
   });
 }

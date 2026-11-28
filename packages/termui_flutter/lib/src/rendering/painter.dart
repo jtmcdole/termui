@@ -713,6 +713,7 @@ final class TuiAtlasPainter extends CustomPainter {
       buffer,
       cellWidth: geo.cellWidth,
       cellHeight: geo.cellHeight,
+      devicePixelRatio: atlas.devicePixelRatio,
     );
 
     _paintDefaultBackgroundRect(canvas, geo, count);
@@ -1525,11 +1526,12 @@ final class TuiAtlasPainter extends CustomPainter {
           dst,
           code: code,
           glyphCells: glyphCells,
+          cellIdx: idx,
+          linkIdx: linkIdx,
           gridCol: x,
           gridRow: y,
           modifiers: effectiveModifiers,
           fgArgb: fgArgb,
-          bgArgb: bgArgb,
           resolvedFg: resolvedFg,
           screenX: screenX,
           screenY: screenY,
@@ -1578,11 +1580,12 @@ final class TuiAtlasPainter extends CustomPainter {
     StagingBufferSet dst, {
     required int code,
     required GlyphCellList glyphCells,
+    required int cellIdx,
+    required int linkIdx,
     required int gridCol,
     required int gridRow,
     required int modifiers,
     required int fgArgb,
-    required int bgArgb,
     required int resolvedFg,
     required double screenX,
     required double screenY,
@@ -1591,16 +1594,22 @@ final class TuiAtlasPainter extends CustomPainter {
   }) {
     if (sizing.isContinuation ||
         code == GlyphCellList.wideContinuationCode ||
-        code == GlyphCellList.spaceCode) {
+        (code == GlyphCellList.spaceCode &&
+            (modifiers & _decorationMask) == 0)) {
       return;
     }
+    final resolvedUl = _resolveUnderlineColor(
+      cellIdx,
+      resolvedFg,
+      linkIdx >= 0 ? _hoveredLinkStyles.underlineColorAt(linkIdx) : null,
+    );
     dst.addFallbackCell(
       char: glyphCells.decodeCode(code),
       gridCol: gridCol,
       gridRow: gridRow,
       modifiers: modifiers,
       fgArgb: fgArgb,
-      bgArgb: bgArgb,
+      bgArgb: resolvedUl,
       resolvedFg: resolvedFg,
       x: screenX,
       y: screenY,
@@ -2619,6 +2628,7 @@ final class TuiAtlasPainter extends CustomPainter {
     final char = staged.fallbackChars[idx];
     final aBase = idx << 2;
     final modifiers = staged.fallbackAttrs[aBase];
+    final resolvedUl = staged.fallbackAttrs[aBase + 2];
     final resolvedFg = staged.fallbackAttrs[aBase + 3];
     final x = staged.fallbackRects[aBase];
     final y = staged.fallbackRects[aBase + 1];
@@ -2646,8 +2656,51 @@ final class TuiAtlasPainter extends CustomPainter {
     try {
       canvas.clipRect(Rect.fromLTWH(x, y, boxW, boxH));
       tp.paint(canvas, Offset(x + dx, y + dy));
+      if ((modifiers & _decorationMask) != 0) {
+        _paintOsc66Decorations(
+          canvas,
+          x: x,
+          y: y,
+          boxW: boxW,
+          boxH: boxH,
+          strokeWidth: math.max(1.0, sizing.fontScale),
+          modifiers: modifiers,
+          resolvedFg: resolvedFg,
+          resolvedUl: resolvedUl,
+        );
+      }
     } finally {
       canvas.restore();
+    }
+  }
+
+  void _paintOsc66Decorations(
+    Canvas canvas, {
+    required double x,
+    required double y,
+    required double boxW,
+    required double boxH,
+    required double strokeWidth,
+    required int modifiers,
+    required int resolvedFg,
+    required int resolvedUl,
+  }) {
+    final paint = Paint()..style = PaintingStyle.fill;
+    if (Modifier.has(modifiers, Modifier.overline)) {
+      paint.color = Color(resolvedFg);
+      canvas.drawRect(Rect.fromLTWH(x, y, boxW, strokeWidth), paint);
+    }
+    if (Modifier.has(modifiers, Modifier.crossedOut)) {
+      paint.color = Color(resolvedFg);
+      canvas.drawRect(
+        Rect.fromLTWH(x, y + (boxH - strokeWidth) * 0.5, boxW, strokeWidth),
+        paint,
+      );
+    }
+    if (Modifier.has(modifiers, Modifier.underline)) {
+      paint.color = Color(resolvedUl);
+      final ulY = math.max(y, y + boxH - strokeWidth * 1.5);
+      canvas.drawRect(Rect.fromLTWH(x, ulY, boxW, strokeWidth), paint);
     }
   }
 
@@ -2967,6 +3020,7 @@ final class TuiAtlasPainter extends CustomPainter {
       placement: placement,
       cellWidth: w,
       cellHeight: h,
+      devicePixelRatio: atlas.devicePixelRatio,
     );
     final gpuImage = kittyImages[data] ?? kittyImagesById[(registry, imageId)];
     if (gpuImage == null) {

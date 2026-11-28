@@ -801,6 +801,7 @@ final class GpuAtlasBatchBuilder {
       buffer,
       cellWidth: cellWidth,
       cellHeight: cellHeight,
+      devicePixelRatio: dpr,
     );
     if (layered.underBgPlacements.isEmpty &&
         layered.bgPlacements.isEmpty &&
@@ -1014,6 +1015,7 @@ final class GpuAtlasBatchBuilder {
       placement: placement,
       cellWidth: w,
       cellHeight: h,
+      devicePixelRatio: dpr,
     );
 
     return (
