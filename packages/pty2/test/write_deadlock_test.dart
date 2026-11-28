@@ -5,9 +5,86 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:pty2/pty2.dart';
+import 'package:pty2/src/pty_core.dart';
 import 'package:test/test.dart';
+
+final class _FakePtyCore implements PtyCore {
+  _FakePtyCore(this._worker, this._writer);
+
+  final PtyCoreWorker _worker;
+  final PtyCoreWriter _writer;
+
+  @override
+  PtyCoreWorker get worker => _worker;
+
+  @override
+  PtyCoreWriter get writer => _writer;
+
+  @override
+  Uint8List? read() => null;
+
+  @override
+  int? exitCodeNonBlocking() => 0;
+
+  @override
+  int exitCodeBlocking() => 0;
+
+  @override
+  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) => true;
+
+  @override
+  void resize(
+    int width,
+    int height, {
+    int pixelWidth = 0,
+    int pixelHeight = 0,
+  }) {}
+
+  @override
+  void write(List<int> data) {}
+
+  @override
+  void onReaderClosed() {}
+}
+
+final class _FakeWorker implements PtyCoreWorker {
+  const _FakeWorker();
+
+  @override
+  Uint8List? read() => null;
+
+  @override
+  int exitCodeBlocking() => 0;
+
+  @override
+  void free() {}
+}
+
+final class _FakeWriter implements PtyCoreWriter {
+  _FakeWriter(this.eventsPort, {this.failAfterWrites = -1});
+
+  final SendPort eventsPort;
+  final int failAfterWrites;
+  int _writeCount = 0;
+
+  @override
+  bool write(Uint8List data) {
+    _writeCount++;
+    eventsPort.send('write:${utf8.decode(data)}');
+    if (failAfterWrites >= 0 && _writeCount >= failAfterWrites) {
+      return false;
+    }
+    return true;
+  }
+
+  @override
+  void free() {
+    eventsPort.send('free');
+  }
+}
 
 void _safeDeleteDir(Directory dir) {
   try {
@@ -333,5 +410,79 @@ Future<void> main() async {
     await done.future.timeout(const Duration(seconds: 10));
     await pty.exitCode.timeout(const Duration(seconds: 5));
     expect(output.toString(), contains('ORDERED:true:200'));
+  });
+
+  group('BlockingPseudoTerminal writer isolate lifecycle', () {
+    test(
+      'buffers pre-ready writes, skips empty writes, preserves UTF-8, and shuts down on writer failure',
+      () async {
+        final eventsPort = ReceivePort();
+        addTearDown(eventsPort.close);
+
+        final events = <String>[];
+        final freed = Completer<void>();
+        final sub = eventsPort.listen((msg) {
+          final event = msg as String;
+          events.add(event);
+          if (event == 'free' && !freed.isCompleted) {
+            freed.complete();
+          }
+        });
+        addTearDown(sub.cancel);
+
+        final pty = BlockingPseudoTerminal(
+          _FakePtyCore(
+            const _FakeWorker(),
+            _FakeWriter(eventsPort.sendPort, failAfterWrites: 2),
+          ),
+          false,
+        )..init();
+
+        pty
+          ..write('')
+          ..write('first-🚀')
+          ..write('second-世界')
+          ..write('third-dropped-after-fail');
+
+        await freed.future.timeout(const Duration(seconds: 5));
+        await pty.exitCode.timeout(const Duration(seconds: 5));
+
+        expect(events, equals(['write:first-🚀', 'write:second-世界', 'free']));
+      },
+    );
+
+    test(
+      'immediate kill() before writer isolate is ready still frees writer and ignores later writes',
+      () async {
+        final eventsPort = ReceivePort();
+        addTearDown(eventsPort.close);
+
+        final events = <String>[];
+        final freed = Completer<void>();
+        final sub = eventsPort.listen((msg) {
+          final event = msg as String;
+          events.add(event);
+          if (event == 'free' && !freed.isCompleted) {
+            freed.complete();
+          }
+        });
+        addTearDown(sub.cancel);
+
+        final pty = BlockingPseudoTerminal(
+          _FakePtyCore(const _FakeWorker(), _FakeWriter(eventsPort.sendPort)),
+          false,
+        )..init();
+
+        pty
+          ..write('dropped-before-kill')
+          ..kill()
+          ..write('dropped-after-kill');
+
+        await freed.future.timeout(const Duration(seconds: 5));
+        await pty.exitCode.timeout(const Duration(seconds: 5));
+
+        expect(events, equals(['free']));
+      },
+    );
   });
 }
