@@ -155,12 +155,17 @@ typedef _Osc66Params = ({
 final class _PendingOsc5522Write {
   final String selection;
   final String id;
+  final bool denied;
   final BytesBuilder textBytes = BytesBuilder(copy: false);
   String? activeMime;
   String? capturedMime;
   bool failed = false;
 
-  _PendingOsc5522Write({required this.selection, required this.id});
+  _PendingOsc5522Write({
+    required this.selection,
+    required this.id,
+    this.denied = false,
+  });
 }
 
 /// A virtual terminal that maintains primary and alternate screen buffers,
@@ -773,15 +778,39 @@ final class VirtualTerminal implements TerminalHandler {
   /// Callback invoked when an `OSC 133` semantic prompt transition occurs.
   void Function(ShellPromptZone zone, {int? exitCode})? onShellIntegration;
 
-  /// Callback invoked when an `OSC 52` clipboard write sequence is decoded.
+  /// Callback invoked when an `OSC 52` or `OSC 5522` clipboard write sequence is decoded.
   ///
   /// The `selection` parameter is the target selection buffer (e.g. `'c'` for
   /// clipboard or `'p'` for primary), and `text` is the decoded UTF-8 string.
   void Function(String selection, String text)? onClipboardWrite;
 
-  /// Callback invoked when a remote application sends an `OSC 52` clipboard
-  /// read query (`\x1b]52;<selection>;?\x07`), which is blocked for security.
+  /// Callback invoked when a terminal application sends an `OSC 52` or `OSC 5522`
+  /// clipboard read query that is denied by [allowClipboardRead] or
+  /// [canReadClipboard].
   void Function(String selection)? onClipboardReadBlocked;
+
+  /// Optional sync or async callback reading plain text from the host clipboard
+  /// for `OSC 52 ; ?` and `OSC 5522 ; type=read` when [allowClipboardRead] is `true`.
+  FutureOr<String?> Function(String selection)? onClipboardRead;
+
+  /// Optional synchronous focus/policy gate checked before serving a clipboard
+  /// read when [allowClipboardRead] is `true`.
+  ///
+  /// Returning `false` rejects the read with `EPERM` (for `OSC 5522`) and
+  /// invokes [onClipboardReadBlocked].
+  bool Function()? canReadClipboard;
+
+  /// Whether `OSC 52` and `OSC 5522` clipboard write sequences are permitted.
+  ///
+  /// Defaults to `true`. When `false`, `OSC 52` writes are ignored and
+  /// `OSC 5522` writes reply `status=EPERM`.
+  bool allowClipboardWrite;
+
+  /// Whether `OSC 52 ; ?` and `OSC 5522 ; type=read` clipboard read sequences
+  /// are permitted when [onClipboardRead] is configured.
+  ///
+  /// Defaults to `false` for security.
+  bool allowClipboardRead;
 
   /// Callback invoked when the terminal generates an escape sequence reply to a
   /// terminal query (`DSR`, `CPR`, `DECXCPR`, `DA1`, `DA2`, `DECRQM`, or `XTWINOPS 18t`).
@@ -874,6 +903,8 @@ final class VirtualTerminal implements TerminalHandler {
 
   bool _allowLocalKittyMedia;
   bool _allowLocalKittyShm;
+  bool _allowLocalKittyFiles;
+  bool _disposed = false;
   KittyApcHandler? _kittyApcHandlerInstance;
 
   /// Whether local Kitty Graphics Protocol transmission media (`t=t` temp files
@@ -907,7 +938,13 @@ final class VirtualTerminal implements TerminalHandler {
   ///
   /// Defaults to `false` so untrusted or remote PTY streams cannot read local
   /// filesystem files unless explicitly opted in.
-  final bool allowLocalKittyFiles;
+  bool get allowLocalKittyFiles => _allowLocalKittyFiles;
+
+  /// Updates whether local regular-file (`t=f`) transmission is permitted at runtime.
+  set allowLocalKittyFiles(bool value) {
+    _allowLocalKittyFiles = value;
+    _kittyApcHandlerInstance?.allowLocalFiles = value;
+  }
 
   KittyApcHandler get _kittyApcHandler =>
       _kittyApcHandlerInstance ??= KittyApcHandler(
@@ -924,7 +961,7 @@ final class VirtualTerminal implements TerminalHandler {
         onClearPlacementsAt: _clearKittyPlacementsAt,
         allowLocalMedia: _allowLocalKittyMedia,
         allowLocalShm: _allowLocalKittyShm,
-        allowLocalFiles: allowLocalKittyFiles,
+        allowLocalFiles: _allowLocalKittyFiles,
       );
 
   late final AudioApcHandler _audioApcHandler = AudioApcHandler(
@@ -957,9 +994,14 @@ final class VirtualTerminal implements TerminalHandler {
     this.shaderCapabilitiesProvider,
     bool allowLocalKittyMedia = false,
     bool? allowLocalKittyShm,
-    this.allowLocalKittyFiles = false,
+    bool allowLocalKittyFiles = false,
+    this.allowClipboardWrite = true,
+    this.allowClipboardRead = false,
+    this.onClipboardRead,
+    this.canReadClipboard,
   }) : _allowLocalKittyMedia = allowLocalKittyMedia,
        _allowLocalKittyShm = allowLocalKittyShm ?? allowLocalKittyMedia,
+       _allowLocalKittyFiles = allowLocalKittyFiles,
        width = math.max(1, width),
        _colorScheme =
            colorScheme ?? theme?.brightness ?? TerminalBrightness.dark,
@@ -1287,6 +1329,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   /// Disposes of resources.
   void dispose() {
+    _disposed = true;
     _syncSafetyTimer?.cancel();
     _syncSafetyTimer = null;
     _pendingOsc99.clear();
@@ -4197,7 +4240,7 @@ final class VirtualTerminal implements TerminalHandler {
     final meta = _parseOsc5522Meta(metaPart);
     switch (meta.type) {
       case 'read':
-        _handleOsc5522Read(meta);
+        _handleOsc5522Read(meta, bodyPart);
       case 'write':
         _handleOsc5522WriteStart(meta, bodyPart);
       case 'wdata':
@@ -4245,12 +4288,95 @@ final class VirtualTerminal implements TerminalHandler {
     onReply?.call('\x1b]5522;type=$type:status=$status$idSuffix\x1b\\');
   }
 
+  static const String _osc5522PlainTextMimeB64 = 'dGV4dC9wbGFpbg==';
+  static const int _osc5522DataChunkChars = 4096;
+
+  bool _isClipboardReadPermitted() {
+    if (!allowClipboardRead || onClipboardRead == null) return false;
+    return canReadClipboard?.call() ?? true;
+  }
+
+  static String? _validateOsc5522ReadMimes(String bodyPart) {
+    final trimmed = bodyPart.trim();
+    if (trimmed.isEmpty) return null;
+    var hasSupportedMime = false;
+    for (final token in trimmed.split(_whitespaceRegex)) {
+      if (token.isEmpty) continue;
+      final decoded = _decodeOsc5522Mime(token);
+      if (decoded == null) return 'EINVAL';
+      if (_isSupportedOsc5522Mime(decoded)) hasSupportedMime = true;
+    }
+    return hasSupportedMime ? null : 'ENOSYS';
+  }
+
+  static List<int> _encodeBoundedClipboardUtf8(String text, int maxBytes) {
+    final full = utf8.encode(text);
+    if (full.length <= maxBytes) return full;
+    var end = maxBytes;
+    while (end > 0 && (full[end] & 0xC0) == 0x80) {
+      end--;
+    }
+    return full.sublist(0, end);
+  }
+
+  void _emitOsc5522ReadReply(String id, String? text) {
+    if (_disposed) return;
+    _replyOsc5522('read', 'OK', id);
+    if (text != null && text.isNotEmpty) {
+      final safeId = _sanitizeOsc99Id(id);
+      final idSuffix = safeId.isEmpty ? '' : ':id=$safeId';
+      final encoded = base64Encode(
+        _encodeBoundedClipboardUtf8(text, _maxOsc5522DecodedBytes),
+      );
+      for (var i = 0; i < encoded.length; i += _osc5522DataChunkChars) {
+        final end = math.min(i + _osc5522DataChunkChars, encoded.length);
+        final chunk = encoded.substring(i, end);
+        onReply?.call(
+          '\x1b]5522;type=read:status=DATA:mime=$_osc5522PlainTextMimeB64'
+          '$idSuffix;$chunk\x1b\\',
+        );
+      }
+    }
+    _replyOsc5522('read', 'DONE', id);
+  }
+
   void _handleOsc5522Read(
     ({String type, String loc, String? mime, String id}) meta,
+    String bodyPart,
   ) {
-    final selection = _resolveOsc5522Selection(meta.loc) ?? 'c';
-    onClipboardReadBlocked?.call(selection);
-    _replyOsc5522('read', 'EPERM', meta.id);
+    final selection = _resolveOsc5522Selection(meta.loc);
+    if (selection == null) {
+      _replyOsc5522('read', 'ENOSYS', meta.id);
+      return;
+    }
+    if (!_isClipboardReadPermitted()) {
+      onClipboardReadBlocked?.call(selection);
+      _replyOsc5522('read', 'EPERM', meta.id);
+      return;
+    }
+    final mimeError = _validateOsc5522ReadMimes(bodyPart);
+    if (mimeError != null) {
+      _replyOsc5522('read', mimeError, meta.id);
+      return;
+    }
+    final reader = onClipboardRead!;
+    try {
+      final result = reader(selection);
+      if (result is Future<String?>) {
+        unawaited(
+          result.then(
+            (text) => _emitOsc5522ReadReply(meta.id, text),
+            onError: (_, _) {
+              if (!_disposed) _replyOsc5522('read', 'EIO', meta.id);
+            },
+          ),
+        );
+      } else {
+        _emitOsc5522ReadReply(meta.id, result);
+      }
+    } on Object {
+      if (!_disposed) _replyOsc5522('read', 'EIO', meta.id);
+    }
   }
 
   void _handleOsc5522WriteStart(
@@ -4267,7 +4393,12 @@ final class VirtualTerminal implements TerminalHandler {
       _pendingOsc5522Write = _PendingOsc5522Write(
         selection: selection,
         id: meta.id,
+        denied: !allowClipboardWrite,
       );
+      return;
+    }
+    if (!allowClipboardWrite) {
+      _replyOsc5522('write', 'EPERM', meta.id);
       return;
     }
     final decodedMime = meta.mime != null
@@ -4300,7 +4431,7 @@ final class VirtualTerminal implements TerminalHandler {
       _finishOsc5522Write(pending);
       return;
     }
-    if (pending.failed) return;
+    if (pending.denied || pending.failed) return;
     if (meta.mime != null) {
       final decodedMime = _decodeOsc5522Mime(meta.mime!);
       if (decodedMime == null) {
@@ -4335,6 +4466,10 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _finishOsc5522Write(_PendingOsc5522Write pending) {
     _pendingOsc5522Write = null;
+    if (pending.denied || !allowClipboardWrite) {
+      _replyOsc5522('write', 'EPERM', pending.id);
+      return;
+    }
     if (pending.failed || pending.capturedMime == null) {
       _replyOsc5522('write', 'EINVAL', pending.id);
       return;
@@ -4816,6 +4951,33 @@ final class VirtualTerminal implements TerminalHandler {
     return int.tryParse(token);
   }
 
+  void _emitOsc52ReadReply(String selection, String? text) {
+    if (_disposed || text == null) return;
+    final encoded = base64Encode(
+      _encodeBoundedClipboardUtf8(text, _maxOsc52DecodedBytes),
+    );
+    onReply?.call('\x1b]52;$selection;$encoded\x1b\\');
+  }
+
+  void _dispatchOsc52Read(String selection) {
+    final reader = onClipboardRead!;
+    try {
+      final result = reader(selection);
+      if (result is Future<String?>) {
+        unawaited(
+          result.then(
+            (text) => _emitOsc52ReadReply(selection, text),
+            onError: (_, _) {},
+          ),
+        );
+      } else {
+        _emitOsc52ReadReply(selection, result);
+      }
+    } on Object {
+      // Ignore host clipboard read errors.
+    }
+  }
+
   void _handleOsc52(String payload) {
     if (payload.length > _maxOsc52PayloadLength) return;
     final semi = payload.indexOf(';');
@@ -4824,9 +4986,14 @@ final class VirtualTerminal implements TerminalHandler {
     final selection = rawSelection.isEmpty ? 'c' : rawSelection;
     final body = payload.substring(semi + 1).trim();
     if (body == '?') {
-      onClipboardReadBlocked?.call(selection);
+      if (!_isClipboardReadPermitted()) {
+        onClipboardReadBlocked?.call(selection);
+        return;
+      }
+      _dispatchOsc52Read(selection);
       return;
     }
+    if (!allowClipboardWrite) return;
     final writer = onClipboardWrite;
     if (writer == null) return;
     final text = _decodeOsc52Payload(body);

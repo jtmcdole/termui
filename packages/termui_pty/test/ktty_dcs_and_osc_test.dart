@@ -687,6 +687,125 @@ void main() {
         ]),
       );
     });
+
+    test(
+      'enforces allowClipboardWrite=false for OSC 52 and single/chunked OSC 5522',
+      () {
+        final replies = <String>[];
+        final writes = <(String, String)>[];
+        final vt = VirtualTerminal(
+          onReply: replies.add,
+          allowClipboardWrite: false,
+        )..onClipboardWrite = (sel, text) => writes.add((sel, text));
+
+        // OSC 52 write silently dropped; OSC 5522 replies EPERM (single and chunked).
+        vt.writeString(
+          '\x1b]52;c;aGk=\x1b\\'
+          '\x1b]5522;type=write:mime=$plainMimeB64:id=w1;aGk=\x1b\\'
+          '\x1b]5522;type=write:id=w2;\x1b\\'
+          '\x1b]5522;type=wdata:mime=$plainMimeB64;aGk=\x1b\\'
+          '\x1b]5522;type=wdata;\x1b\\',
+        );
+        expect(writes, isEmpty);
+        expect(
+          replies,
+          equals([
+            '\x1b]5522;type=write:status=EPERM:id=w1\x1b\\',
+            '\x1b]5522;type=write:status=EPERM:id=w2\x1b\\',
+          ]),
+        );
+
+        // Re-enabling at runtime immediately permits writes again.
+        replies.clear();
+        vt.allowClipboardWrite = true;
+        vt.writeString(
+          '\x1b]5522;type=write:mime=$plainMimeB64:id=w3;aGk=\x1b\\',
+        );
+        expect(writes, equals([('c', 'hi')]));
+        expect(
+          replies,
+          equals(['\x1b]5522;type=write:status=DONE:id=w3\x1b\\']),
+        );
+      },
+    );
+
+    test(
+      'serves OSC 52 and OSC 5522 reads when allowClipboardRead is enabled and respects canReadClipboard',
+      () async {
+        final replies = <String>[];
+        final blocked = <String>[];
+        var focused = true;
+        String? clipboardValue = 'hello world';
+        final vt = VirtualTerminal(
+          onReply: replies.add,
+          allowClipboardRead: true,
+          onClipboardRead: (_) async => clipboardValue,
+          canReadClipboard: () => focused,
+        )..onClipboardReadBlocked = blocked.add;
+
+        // 1. Async OSC 52 read succeeds when focused.
+        vt.writeString('\x1b]52;c;?\x1b\\');
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          replies,
+          equals([
+            '\x1b]52;c;${base64Encode(utf8.encode('hello world'))}\x1b\\',
+          ]),
+        );
+        replies.clear();
+
+        // 2. Async OSC 5522 read streams OK -> DATA -> DONE.
+        vt.writeString('\x1b]5522;type=read:id=r1;$plainMimeB64\x1b\\');
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          replies,
+          equals([
+            '\x1b]5522;type=read:status=OK:id=r1\x1b\\',
+            '\x1b]5522;type=read:status=DATA:mime=$plainMimeB64:id=r1;'
+                '${base64Encode(utf8.encode('hello world'))}\x1b\\',
+            '\x1b]5522;type=read:status=DONE:id=r1\x1b\\',
+          ]),
+        );
+        replies.clear();
+
+        // 3. Empty clipboard still completes cleanly with OK -> DONE.
+        clipboardValue = null;
+        vt.writeString('\x1b]5522;type=read:id=r2;\x1b\\');
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          replies,
+          equals([
+            '\x1b]5522;type=read:status=OK:id=r2\x1b\\',
+            '\x1b]5522;type=read:status=DONE:id=r2\x1b\\',
+          ]),
+        );
+        replies.clear();
+
+        // 4. Unsupported MIME returns ENOSYS; invalid base64 returns EINVAL.
+        vt.writeString(
+          '\x1b]5522;type=read:id=r3;$pngMimeB64\x1b\\'
+          '\x1b]5522;type=read:id=r4;!!!\x1b\\',
+        );
+        expect(
+          replies,
+          equals([
+            '\x1b]5522;type=read:status=ENOSYS:id=r3\x1b\\',
+            '\x1b]5522;type=read:status=EINVAL:id=r4\x1b\\',
+          ]),
+        );
+        replies.clear();
+
+        // 5. Unfocused canReadClipboard() == false blocks with EPERM.
+        focused = false;
+        vt.writeString('\x1b]52;c;?\x1b\\\x1b]5522;type=read:id=r5;\x1b\\');
+        expect(blocked, equals(['c', 'c']));
+        expect(
+          replies,
+          equals(['\x1b]5522;type=read:status=EPERM:id=r5\x1b\\']),
+        );
+        vt.dispose();
+      },
+    );
   });
 
   group('Kitty Registry Sync, Scroll Shift & PtyRouter Options', () {
@@ -792,9 +911,16 @@ void main() {
           backend: backendOptIn,
           allowLocalKittyMedia: true,
           allowLocalKittyFiles: true,
+          allowClipboardWrite: false,
+          allowClipboardRead: true,
         );
         expect(optInSession.terminal.allowLocalKittyMedia, isTrue);
         expect(optInSession.terminal.allowLocalKittyFiles, isTrue);
+        expect(optInSession.terminal.allowClipboardWrite, isFalse);
+        expect(optInSession.terminal.allowClipboardRead, isTrue);
+
+        optInSession.terminal.allowLocalKittyFiles = false;
+        expect(optInSession.terminal.allowLocalKittyFiles, isFalse);
 
         await router.dispose();
       },
