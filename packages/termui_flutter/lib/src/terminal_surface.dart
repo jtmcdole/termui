@@ -26,6 +26,7 @@ import 'rendering/atlas_controller.dart';
 import 'rendering/cell_transform_painter.dart';
 import 'rendering/gpu_atlas_batch.dart';
 import 'rendering/gpu_frame_watchdog.dart';
+import 'rendering/kitty_run_helper.dart';
 import 'rendering/painter.dart';
 import 'rendering/perf_trace.dart';
 import 'rendering/png_rgba_decoder.dart';
@@ -466,6 +467,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   (int, int)? _cachedDirectPtySize;
   int _cachedDirectRegionRev = -1;
   int _cachedDirectTransformRev = -1;
+  int _cachedDirectKittyRev = -1;
   bool _cachedDirectHasTransforms = false;
   final _SurfaceRepaintNotifier _paintNotifier = _SurfaceRepaintNotifier();
   final _ShaderMouseNotifier _shaderMouseNotifier = _ShaderMouseNotifier();
@@ -510,7 +512,21 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   ({int col, int row})? _lastHoverCell;
   bool _hoverLinkResolved = false;
   bool _isLinkModifierActive = false;
+  static const Duration _kittyAnimationTickInterval = Duration(
+    milliseconds: 16,
+  );
   Timer? _linkHoverTimer;
+  Timer? _kittyAnimationTimer;
+  int _lastAnimatedKittyRevisionHash = -1;
+
+  /// Whether the Kitty Graphics animation timer is currently active.
+  @visibleForTesting
+  bool get debugIsKittyAnimationTimerActive =>
+      _kittyAnimationTimer?.isActive ?? false;
+
+  /// Current paint notification version for verifying repaint triggers in tests.
+  @visibleForTesting
+  int get debugPaintNotifyVersion => _paintNotifier.version;
   late SelectionGestureMachine _gestureMachine;
   int _lastTopVirtualRow = 0;
   Object? _lastSelectionEpoch;
@@ -1361,7 +1377,10 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     if (bindingsChanged) {
       _scheduleGeometrySync();
     }
-    if (activeBuf == null) return;
+    if (activeBuf == null) {
+      _stopKittyAnimationTimer();
+      return;
+    }
     if (!alreadyPrepared &&
         (bindingsChanged || widget.bufferListenable == null)) {
       _prepareBufferResources(activeBuf);
@@ -1410,6 +1429,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   @override
   void dispose() {
     _stopLinkHoverTicker();
+    _stopKittyAnimationTimer();
     _disposeCliShaderAndWatchdog();
     WidgetsBinding.instance.removeObserver(this);
     HardwareKeyboard.instance.removeHandler(_onHardwareKeyEvent);
@@ -1791,6 +1811,8 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       _bufferResourcesDirty = false;
     }
     _kittyCache.ensureForBuffer(buffer);
+    _lastAnimatedKittyRevisionHash = computeScopedKittyRevisionHash(buffer);
+    _syncKittyAnimationTimer(buffer);
     _atlasController.ensureFallbackPaintersForBuffer(
       buffer,
       defaultForegroundArgb: widget.foregroundColor.toARGB32(),
@@ -1798,6 +1820,83 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       faintOpacity: widget.faintOpacity,
       palette: widget.palette,
     );
+  }
+
+  static bool _hasVisibleRunningKittyAnimations(Buffer? buffer) {
+    if (KittyImageRegistry.global.hasRunningAnimations) return true;
+    if (buffer == null) return false;
+    for (final entry in buffer.scopedKittyRegistries) {
+      if (entry.registry.hasRunningAnimations) return true;
+    }
+    return false;
+  }
+
+  void _syncKittyAnimationTimer(Buffer? buffer) {
+    if (!mounted || !_hasVisibleRunningKittyAnimations(buffer)) {
+      _stopKittyAnimationTimer();
+      return;
+    }
+    if (_kittyAnimationTimer != null) return;
+    _kittyAnimationTimer = Timer.periodic(
+      _kittyAnimationTickInterval,
+      (_) => _onKittyAnimationTick(),
+    );
+  }
+
+  void _onKittyAnimationTick() {
+    if (!mounted) {
+      _stopKittyAnimationTimer();
+      return;
+    }
+    final buf = _activeBuffer;
+    if (buf == null) {
+      _stopKittyAnimationTimer();
+      return;
+    }
+    var anyChanged = false;
+    if (_hasVisibleRunningKittyAnimations(buf)) {
+      final nowMs = clock.now().millisecondsSinceEpoch;
+      anyChanged = _advanceVisibleKittyAnimations(buf, nowMs);
+    }
+    final nextHash = computeScopedKittyRevisionHash(buf);
+    if (nextHash != _lastAnimatedKittyRevisionHash) {
+      _lastAnimatedKittyRevisionHash = nextHash;
+      anyChanged = true;
+    }
+    if (anyChanged) {
+      _kittyCache.ensureForBuffer(buf);
+      _notifyDirectSurfaceVisualChange();
+    }
+    if (!_hasVisibleRunningKittyAnimations(buf)) {
+      _stopKittyAnimationTimer();
+    }
+  }
+
+  static bool _advanceVisibleKittyAnimations(Buffer buf, int nowMs) {
+    final visited = Set<KittyImageRegistry>.identity();
+    var anyChanged = false;
+    if (KittyImageRegistry.global.hasRunningAnimations) {
+      visited.add(KittyImageRegistry.global);
+      final before = KittyImageRegistry.global.revision;
+      if (KittyImageRegistry.global.advanceAnimations(nowMs) ||
+          KittyImageRegistry.global.revision != before) {
+        anyChanged = true;
+      }
+    }
+    for (final entry in buf.scopedKittyRegistries) {
+      final reg = entry.registry;
+      if (!reg.hasRunningAnimations || !visited.add(reg)) continue;
+      final before = reg.revision;
+      if (reg.advanceAnimations(nowMs) || reg.revision != before) {
+        anyChanged = true;
+      }
+    }
+    return anyChanged;
+  }
+
+  void _stopKittyAnimationTimer() {
+    _kittyAnimationTimer?.cancel();
+    _kittyAnimationTimer = null;
   }
 
   void _scheduleGeometrySync() {
@@ -3023,6 +3122,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       cursor == _cachedDirectCursor &&
       activePty == _cachedDirectPtySize &&
       buf.regionRevision == _cachedDirectRegionRev &&
+      computeScopedKittyRevisionHash(buf) == _cachedDirectKittyRev &&
       buf.hasCellTransforms == _cachedDirectHasTransforms;
 
   bool _canReuseDirectBatchCache({
@@ -3097,6 +3197,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _cachedDirectPtySize = activePty;
     _cachedDirectRegionRev = buf.regionRevision;
     _cachedDirectTransformRev = buf.transformRevision;
+    _cachedDirectKittyRev = computeScopedKittyRevisionHash(buf);
     _cachedDirectHasTransforms = buf.hasCellTransforms;
   }
 
@@ -3611,6 +3712,7 @@ final class _KittyGpuImageCache {
   _KittyGpuImageCache({required this.onDecoded});
 
   void ensureForBuffer(Buffer buffer) {
+    _ensureRegistriesPlacementsAndAnimations(buffer);
     if (!buffer.hasKittyImages) return;
     final width = buffer.width;
     final total = width * buffer.height;
@@ -3648,6 +3750,44 @@ final class _KittyGpuImageCache {
     }
   }
 
+  void _ensureRegistriesPlacementsAndAnimations(Buffer buffer) {
+    final visited = Set<KittyImageRegistry>.identity();
+    if (KittyImageRegistry.global.hasPlacements ||
+        KittyImageRegistry.global.hasRunningAnimations) {
+      visited.add(KittyImageRegistry.global);
+      _ensureSingleRegistry(KittyImageRegistry.global);
+    }
+    for (final entry in buffer.scopedKittyRegistries) {
+      final reg = entry.registry;
+      if (!visited.add(reg)) continue;
+      if (reg.hasPlacements || reg.hasRunningAnimations) {
+        _ensureSingleRegistry(reg);
+      }
+    }
+  }
+
+  void _ensureSingleRegistry(KittyImageRegistry registry) {
+    final activeAlt = registry.activeAltScreen;
+    for (final placement in registry.allPlacements) {
+      if (placement.isAltScreen != activeAlt) continue;
+      _ensureActiveAndNextFrame(registry, placement.imageId);
+    }
+  }
+
+  void _ensureActiveAndNextFrame(KittyImageRegistry registry, int imageId) {
+    final active = registry.activeImageData(imageId);
+    if (active != null) {
+      _ensureImage(registry, active);
+    }
+    final anim = registry.lookupAnimation(imageId);
+    if (anim == null || anim.frames.length <= 1) return;
+    final nextIdx = (anim.currentFrameIndex + 1) % anim.frames.length;
+    final nextData = anim.frames[nextIdx].imageData;
+    if (!identical(nextData, active)) {
+      _ensureImage(registry, nextData);
+    }
+  }
+
   KittyImageData? _resolveAndEnsure(
     Buffer buffer,
     int x,
@@ -3658,9 +3798,9 @@ final class _KittyGpuImageCache {
     final imageId = extractKittyCellImageId(char, buffer.getForeground(x, y));
     if (imageId == 0) return lastKittyData;
     final registry = buffer.lookupKittyRegistry(x, y);
-    final data = registry.lookupImage(imageId);
+    final data = registry.activeImageData(imageId);
     if (data != null && !identical(data, lastKittyData)) {
-      _ensureImage(registry, data);
+      _ensureActiveAndNextFrame(registry, imageId);
       return data;
     }
     return lastKittyData;
@@ -3790,13 +3930,27 @@ final class _KittyGpuImageCache {
     _scheduleImageDisposal(evicted);
   }
 
+  static bool _isLiveImageData(
+    KittyImageRegistry registry,
+    KittyImageData data,
+  ) {
+    if (identical(registry.lookupImage(data.imageId), data)) return true;
+    final anim = registry.lookupAnimation(data.imageId);
+    if (anim == null) return false;
+    for (final frame in anim.frames) {
+      if (identical(frame.imageData, data)) return true;
+    }
+    return false;
+  }
+
   bool _isStaleDecodedImage(
     KittyImageRegistry registry,
     KittyImageData data,
     KittyImageData? previousData,
   ) {
+    if (!_isLiveImageData(registry, data)) return true;
+    if (registry.lookupAnimation(data.imageId) != null) return false;
     final currentData = registry.lookupImage(data.imageId);
-    if (currentData == null) return true;
     return previousData != null &&
         identical(previousData, currentData) &&
         !identical(previousData, data);
@@ -3819,7 +3973,9 @@ final class _KittyGpuImageCache {
       decoded.dispose();
       return;
     }
-    if (previousData != null && previousData != data) {
+    if (previousData != null &&
+        !identical(previousData, data) &&
+        !_isLiveImageData(registry, previousData)) {
       final superseded = images.remove(previousData);
       decodedRgbaPixels.remove(previousData);
       if (superseded != null && !identical(superseded, decoded)) {
