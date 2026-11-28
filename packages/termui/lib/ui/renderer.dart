@@ -153,6 +153,10 @@ class Renderer {
             _frontBuffer.getUnderlineColor(x, y)) {
       return true;
     }
+    if ((backBuffer.hasTextSizing || _frontBuffer.hasTextSizing) &&
+        backBuffer.getTextSizing(x, y) != _frontBuffer.getTextSizing(x, y)) {
+      return true;
+    }
     if (!backBuffer.hasUris && !_frontBuffer.hasUris) return false;
     return backBuffer.getUri(x, y) != _frontBuffer.getUri(x, y);
   }
@@ -249,6 +253,7 @@ class Renderer {
     int cellMod,
     int cellUlColor,
     String? cellUri,
+    int cellTextSizing,
   ) {
     final frontCells = _frontBuffer.glyphCellList;
     if ((backCode & GlyphCellList.clusterFlag) == 0) {
@@ -265,6 +270,9 @@ class Renderer {
     }
     if (cellUri != null || _frontBuffer.hasUris) {
       _frontBuffer.setUri(rx, y, cellUri);
+    }
+    if (cellTextSizing != KittyTextSizing.none || _frontBuffer.hasTextSizing) {
+      _frontBuffer.setTextSizing(rx, y, cellTextSizing);
     }
   }
 
@@ -343,17 +351,11 @@ class Renderer {
     int runStart,
     int runEnd,
   ) {
-    if (mode == RenderingMode.inline) {
-      _moveCursorRelative(out, state.cursorX, state.cursorY, runStart, y);
-      state.cursorX = runStart;
-      state.cursorY = y;
-    } else {
-      out.write('\x1b[${y + 1};${runStart + 1}H');
-    }
-
     final backCodes = backBuffer.glyphCodes;
     final backCells = backBuffer.glyphCellList;
     final backAttr = backBuffer.attributes;
+    final hasTextSizing = backBuffer.hasTextSizing;
+    var runCursorX = -1;
 
     for (var rx = runStart; rx < runEnd; rx++) {
       final rxIdx = rowOffset + rx;
@@ -363,6 +365,29 @@ class Renderer {
       final cellMod = backAttr[rxAttrIdx + 2];
       final cellUlColor = backBuffer.getUnderlineColor(rx, y);
       final cellUri = backBuffer.getUri(rx, y);
+      final cellTextSizing = hasTextSizing
+          ? backBuffer.getTextSizing(rx, y)
+          : KittyTextSizing.none;
+      final backCode = backCodes[rxIdx];
+      final char = backCells.decodeCode(backCode);
+
+      _syncFrontCell(
+        rx,
+        y,
+        rxIdx,
+        rxAttrIdx,
+        backCode,
+        char,
+        cellFg,
+        cellBg,
+        cellMod,
+        cellUlColor,
+        cellUri,
+        cellTextSizing,
+      );
+      if (KittyTextSizing(cellTextSizing).isContinuation) continue;
+
+      runCursorX = _positionCursorForCell(out, state, runCursorX, rx, y);
 
       if (cellUri != state.activeUri) {
         out.write('\x1b]8;;${sanitizeOsc8Uri(cellUri ?? '')}\x1b\\');
@@ -385,32 +410,119 @@ class Renderer {
       state.activeMod = cellMod;
       state.activeUlColor = cellUlColor;
 
-      final backCode = backCodes[rxIdx];
-      final char = backCells.decodeCode(backCode);
-      out.write(char);
-      _syncFrontCell(
+      runCursorX = _emitCellGlyph(
+        out,
+        state,
+        runCursorX,
         rx,
-        y,
-        rxIdx,
-        rxAttrIdx,
-        backCode,
+        backBuffer.width,
         char,
-        cellFg,
-        cellBg,
-        cellMod,
-        cellUlColor,
-        cellUri,
+        cellTextSizing,
       );
-
-      if (mode == RenderingMode.inline) {
-        state.cursorX++;
-      }
     }
 
     if (state.activeUri != null) {
       out.write('\x1b]8;;\x1b\\');
       state.activeUri = null;
     }
+  }
+
+  int _positionCursorForCell(
+    StringSink out,
+    _RenderCursorState state,
+    int runCursorX,
+    int rx,
+    int y,
+  ) {
+    if (mode == RenderingMode.inline) {
+      if (state.cursorY != y || state.cursorX != rx) {
+        _moveCursorRelative(out, state.cursorX, state.cursorY, rx, y);
+        state.cursorX = rx;
+        state.cursorY = y;
+      }
+      return rx;
+    }
+    if (runCursorX != rx) {
+      out.write('\x1b[${y + 1};${rx + 1}H');
+    }
+    return rx;
+  }
+
+  int _emitCellGlyph(
+    StringSink out,
+    _RenderCursorState state,
+    int runCursorX,
+    int rx,
+    int bufferWidth,
+    String char,
+    int cellTextSizing,
+  ) {
+    final ts = KittyTextSizing(cellTextSizing);
+    if (ts.isAnchor) {
+      final sanitized = sanitizeOsc8Uri(char);
+      final payload = sanitized.isEmpty ? ' ' : sanitized;
+      _writeOsc66Sequence(out, ts, payload);
+      final advance = _osc66Advance(ts, payload, rx, bufferWidth);
+      if (mode == RenderingMode.inline) {
+        state.cursorX += advance;
+      }
+      return runCursorX + advance;
+    }
+    out.write(char);
+    if (mode == RenderingMode.inline) {
+      state.cursorX++;
+    }
+    return runCursorX + 1;
+  }
+
+  static void _writeOsc66Sequence(
+    StringSink out,
+    KittyTextSizing ts,
+    String payload,
+  ) {
+    out
+      ..write('\x1b]66;s=')
+      ..write(ts.scale);
+    if (ts.explicitWidth > 0) {
+      out
+        ..write(':w=')
+        ..write(ts.explicitWidth);
+    }
+    if (ts.numerator > 0 && ts.denominator > ts.numerator) {
+      out
+        ..write(':n=')
+        ..write(ts.numerator)
+        ..write(':d=')
+        ..write(ts.denominator);
+    }
+    if (ts.vAlign != 0) {
+      out
+        ..write(':v=')
+        ..write(ts.vAlign);
+    }
+    if (ts.hAlign != 0) {
+      out
+        ..write(':h=')
+        ..write(ts.hAlign);
+    }
+    out
+      ..write(';')
+      ..write(payload)
+      ..write('\x1b\\');
+  }
+
+  static int _osc66Advance(
+    KittyTextSizing ts,
+    String payload,
+    int x,
+    int bufferWidth,
+  ) {
+    final baseWidth = ts.explicitWidth > 0
+        ? ts.explicitWidth
+        : (isWideGrapheme(payload) ? 2 : 1);
+    final scaled = ts.scale * baseWidth;
+    final remaining = bufferWidth - x;
+    return scaled < remaining ? scaled : remaining;
   }
 
   void _moveCursorRelative(
