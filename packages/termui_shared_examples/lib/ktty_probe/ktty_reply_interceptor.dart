@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'ktty_probe_assets.dart';
 import 'ktty_probe_report.dart';
 
 enum _InterceptorState { ground, esc, csi, osc, dcs, apc, stringEsc }
@@ -17,6 +18,7 @@ final class KttyReplyInterceptor {
   static final RegExp _xtwinops16Regex = RegExp(r'^6;(\d+);(\d+)t$');
   static final RegExp _xtwinops18Regex = RegExp(r'^8;(\d+);(\d+)t$');
   static final RegExp _colorSchemeRegex = RegExp(r'^\?997;(\d+)n$');
+  static final RegExp _cprRegex = RegExp(r'^(\d+);(\d+)R$');
   static final RegExp _sgrMouseBodyRegex = RegExp(
     r'^<(\d+);(\d+);(\d+)([Mm])$',
   );
@@ -175,6 +177,8 @@ final class KttyReplyInterceptor {
       return;
     }
     _resetToGround();
+    _seqBytes.add(0x1B);
+    _state = .esc;
     _handleEsc(byte, out);
   }
 
@@ -270,6 +274,16 @@ final class KttyReplyInterceptor {
   }
 
   bool _handleDeviceAttrsCsi(String body) {
+    if (report.isExpectingCpr) {
+      final cpr = _cprRegex.firstMatch(body);
+      if (cpr != null) {
+        report.recordCursorPositionReport(
+          int.tryParse(cpr.group(1)!) ?? 0,
+          int.tryParse(cpr.group(2)!) ?? 0,
+        );
+        return true;
+      }
+    }
     final da2 = _da2Regex.firstMatch(body);
     if (da2 != null) {
       report.recordDa2(da2.group(1) ?? '');
@@ -313,8 +327,53 @@ final class KttyReplyInterceptor {
   bool _inspectDcsPayload(String payload) {
     if (payload.startsWith('>|')) {
       report.recordXtVersion(payload.substring(2));
+    } else if (payload.startsWith('1+r')) {
+      _parseXtgettcapPayload(payload.substring(3), supported: true);
+    } else if (payload.startsWith('0+r')) {
+      _parseXtgettcapPayload(payload.substring(3), supported: false);
+    } else if (payload.startsWith('1\$r')) {
+      report.recordDecrqssReply(valid: true, body: payload.substring(3));
+    } else if (payload.startsWith('0\$r')) {
+      report.recordDecrqssReply(valid: false, body: payload.substring(3));
     }
     return false;
+  }
+
+  void _parseXtgettcapPayload(String body, {required bool supported}) {
+    if (body.isEmpty) return;
+    for (final entry in body.split(';')) {
+      if (entry.isEmpty) continue;
+      final eq = entry.indexOf('=');
+      final nameHex = eq >= 0 ? entry.substring(0, eq) : entry;
+      final name = _decodeHexString(nameHex);
+      if (name == null || name.isEmpty) continue;
+      if (!supported) {
+        report.recordXtgettcapReply(name, supported: false);
+        continue;
+      }
+      final valHex = eq >= 0 ? entry.substring(eq + 1) : '';
+      final decodedVal = valHex.isEmpty ? '' : (_decodeHexString(valHex) ?? '');
+      report.recordXtgettcapReply(name, value: decodedVal, supported: true);
+    }
+  }
+
+  static int _hexNibble(int cu) {
+    if (cu >= 0x30 && cu <= 0x39) return cu - 0x30;
+    if (cu >= 0x41 && cu <= 0x46) return cu - 0x41 + 10;
+    if (cu >= 0x61 && cu <= 0x66) return cu - 0x61 + 10;
+    return -1;
+  }
+
+  static String? _decodeHexString(String hex) {
+    if (hex.isEmpty || hex.length.isOdd) return null;
+    final bytes = Uint8List(hex.length ~/ 2);
+    for (var i = 0; i < bytes.length; i++) {
+      final hi = _hexNibble(hex.codeUnitAt(i * 2));
+      final lo = _hexNibble(hex.codeUnitAt(i * 2 + 1));
+      if (hi < 0 || lo < 0) return null;
+      bytes[i] = (hi << 4) | lo;
+    }
+    return utf8.decode(bytes, allowMalformed: true);
   }
 
   bool _inspectOscPayload(String payload) {
@@ -322,23 +381,61 @@ final class KttyReplyInterceptor {
     if (semi <= 0) return false;
     final code = int.tryParse(payload.substring(0, semi));
     final rest = payload.substring(semi + 1);
-    if (code == 10 || code == 11) {
-      report.recordOscColor(code!, rest, parseOscColorSpecToHex(rest));
-      return false;
-    }
-    if (code == 22) {
-      report.recordOsc22PointerQuery(rest);
-      return false;
-    }
-    if (code == 52) {
-      _tryRecordOsc52(rest);
-      return true;
-    }
-    if (code == 99) {
-      _recordOsc99Reply(rest);
-      return false;
+    switch (code) {
+      case 4:
+        _recordOsc4Reply(rest);
+      case 10 || 11:
+        report.recordOscColor(code!, rest, parseOscColorSpecToHex(rest));
+      case 22:
+        report.recordOsc22PointerQuery(rest);
+      case 52:
+        _tryRecordOsc52(rest);
+        return true;
+      case 99:
+        _recordOsc99Reply(rest);
+      case 5522:
+        _recordOsc5522Reply(rest);
+      default:
+        break;
     }
     return false;
+  }
+
+  void _recordOsc4Reply(String rest) {
+    final semi = rest.indexOf(';');
+    if (semi <= 0) return;
+    final index = int.tryParse(rest.substring(0, semi).trim());
+    if (index != kttyProbeColorStackIndex) return;
+    final spec = rest.substring(semi + 1);
+    report.recordOsc4ColorStackSample(
+      parseOscColorSpecToHex(spec),
+      rawSpec: spec,
+    );
+  }
+
+  void _recordOsc5522Reply(String rest) {
+    final semi = rest.indexOf(';');
+    final meta = semi >= 0 ? rest.substring(0, semi) : rest;
+    var type = '';
+    var status = '';
+    var id = '';
+    for (final kv in meta.split(':')) {
+      final eq = kv.indexOf('=');
+      if (eq <= 0) continue;
+      final k = kv.substring(0, eq).trim();
+      final v = kv.substring(eq + 1).trim();
+      switch (k) {
+        case 'type':
+          type = v;
+        case 'status':
+          status = v;
+        case 'id':
+          id = v;
+      }
+    }
+    if (type.isNotEmpty && id == kttyProbeOsc5522Id) {
+      report.recordOsc5522Reply(type: type, status: status, raw: rest);
+    }
   }
 
   void _recordOsc99Reply(String rest) {
@@ -375,47 +472,84 @@ final class KttyReplyInterceptor {
     }
   }
 
-  bool _inspectApcPayload(String payload) {
-    final int prefixLen;
-    if (payload.startsWith('_G')) {
-      prefixLen = 2;
-    } else if (payload.startsWith('G')) {
-      prefixLen = 1;
-    } else {
-      return false;
-    }
-    final semi = payload.indexOf(';', prefixLen);
-    final control = semi >= 0
-        ? payload.substring(prefixLen, semi)
-        : payload.substring(prefixLen);
-    final status = semi >= 0 ? payload.substring(semi + 1) : '';
-    int? id;
-    int? num;
-    int? pid;
+  static Map<String, String> _parseApcKeyValues(String control) {
+    final map = <String, String>{};
+    if (control.isEmpty) return map;
     for (final kv in control.split(',')) {
       final eq = kv.indexOf('=');
-      if (eq <= 0) continue;
-      final key = kv.substring(0, eq);
-      final val = int.tryParse(kv.substring(eq + 1));
-      if (val == null) continue;
-      switch (key) {
-        case 'i':
-          id = val;
-        case 'I':
-          num = val;
-        case 'p':
-          pid = val;
+      if (eq > 0) {
+        map[kv.substring(0, eq).trim()] = kv.substring(eq + 1).trim();
       }
     }
+    return map;
+  }
+
+  bool _inspectApcPayload(String payload) {
+    if (payload.startsWith('_G') || payload.startsWith('G')) {
+      _inspectKittyGraphicsApc(
+        payload.startsWith('_G') ? payload.substring(2) : payload.substring(1),
+      );
+    } else if (payload.startsWith('_S') || payload.startsWith('S')) {
+      _inspectShaderApc(
+        payload.startsWith('_S') ? payload.substring(2) : payload.substring(1),
+      );
+    } else if (payload.startsWith('_A') || payload.startsWith('A')) {
+      _inspectAudioApc(
+        payload.startsWith('_A') ? payload.substring(2) : payload.substring(1),
+      );
+    }
+    return false;
+  }
+
+  void _inspectKittyGraphicsApc(String body) {
+    final semi = body.indexOf(';');
+    final control = semi >= 0 ? body.substring(0, semi) : body;
+    final status = semi >= 0 ? body.substring(semi + 1) : '';
+    final kvs = _parseApcKeyValues(control);
+    final id = int.tryParse(kvs['i'] ?? '');
+    final num = int.tryParse(kvs['I'] ?? '');
+    final pid = int.tryParse(kvs['p'] ?? '');
+    final frameNum = int.tryParse(kvs['r'] ?? '');
     if (id != null || num != null) {
       report.recordApcReply(
         id ?? 0,
         status,
         imageNumber: num,
         placementId: pid,
+        frameNumber: frameNum,
       );
     }
-    return false;
+  }
+
+  void _inspectShaderApc(String body) {
+    final semi = body.indexOf(';');
+    final control = _parseApcKeyValues(
+      semi >= 0 ? body.substring(0, semi) : body,
+    );
+    if (control['a'] == 'caps') {
+      report.recordShaderApcReply(control);
+    }
+  }
+
+  void _inspectAudioApc(String body) {
+    final semi = body.indexOf(';');
+    final control = _parseApcKeyValues(
+      semi >= 0 ? body.substring(0, semi) : body,
+    );
+    final reqId = control['q'] ?? '';
+    if (control['a'] != 'waver' || reqId != '$kttyProbeAudioWaveRequestId') {
+      return;
+    }
+    final data = semi >= 0 ? body.substring(semi + 1).trim() : '';
+    var sampleCount = 0;
+    if (data.isNotEmpty) {
+      try {
+        sampleCount = base64Decode(data).length ~/ 4;
+      } on FormatException {
+        sampleCount = 0;
+      }
+    }
+    report.recordAudioApcReply(requestId: reqId, sampleCount: sampleCount);
   }
 
   /// Normalizes an XParseColor string (`rgb:RRRR/GGGG/BBBB` or `#RRGGBB`) to `#RRGGBB`.
