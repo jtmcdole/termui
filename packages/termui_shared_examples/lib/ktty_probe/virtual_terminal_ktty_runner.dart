@@ -47,6 +47,7 @@ VirtualTerminal _createConfiguredVirtualTerminal({
     defaultForeground: const Color(220, 228, 240),
     defaultBackground: const Color(18, 22, 32),
     allowLocalKittyMedia: true,
+    allowLocalKittyFiles: true,
     onReply: (reply) => _enqueueReply(probeInput, reply),
     onNotification: (title, message) {
       telemetry.lastNotification = title.isEmpty ? message : '$title: $message';
@@ -154,6 +155,7 @@ Future<KttyProbeReport> runVirtualTerminalKttyProbe(
       options: KttyProbeOptions(
         tempProbeFilePath: mediaSession.tempFilePath,
         shmProbeName: mediaSession.shmObjectName,
+        fileProbeFilePath: mediaSession.tempFilePath,
       ),
     );
   } finally {

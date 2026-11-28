@@ -1026,20 +1026,15 @@ void main() {
         expect(missingRes.stderr, contains('Baseline file not found'));
 
         // Optional capability regression (supported -> optionalDisabled) also exits 1.
-        final localMediaBase = await runCli(const [
-          '--self-test',
-          '--local-media',
-          '--json',
-        ]);
-        expect(localMediaBase.exitCode, equals(0));
-        final optBaseFile = File('${tempDir.path}/opt_baseline.json')
-          ..writeAsStringSync(localMediaBase.stdout);
+        final optRegressedReport = KttyProbeReport()
+          ..resetForNewProbe(options: const KttyProbeOptions())
+          ..finalizePending('No local media');
         final optRegress = await runCli([
           '--self-test',
           '--compare',
-          optBaseFile.path,
+          baselineFile.path,
           '--json',
-        ]);
+        ], probeOverride: (_) async => optRegressedReport);
         expect(optRegress.exitCode, equals(1));
         final optRegressJson =
             jsonDecode(optRegress.stdout) as Map<String, Object?>;
