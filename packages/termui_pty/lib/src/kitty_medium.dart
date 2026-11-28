@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-/// Result of reading a local Kitty Graphics Protocol medium (`t=t` or `t=s`).
+/// Result of reading a local Kitty Graphics Protocol medium (`t=t`, `t=s`, or `t=f`).
 sealed class KittyMediumReadResult {
   /// Creates a [KittyMediumReadResult].
   const KittyMediumReadResult();

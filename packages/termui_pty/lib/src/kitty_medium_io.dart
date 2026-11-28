@@ -36,9 +36,10 @@ const _ResolvedKittyTarget _notFoundTarget = (
 );
 
 /// Returns whether the current `dart:io` platform supports reading Kitty
-/// transmission medium [medium] (`'t'` temp file or `'s'` POSIX shared memory).
+/// transmission medium [medium] (`'t'` temp file, `'s'` POSIX shared memory,
+/// or `'f'` local regular file).
 bool platformSupportsKittyMedium(String medium) => switch (medium) {
-  't' => true,
+  't' || 'f' => true,
   's' => Platform.isLinux || Platform.isMacOS,
   _ => false,
 };
@@ -170,10 +171,14 @@ KittyMediumReadResult _readFileSlice(
   required int maxBytes,
   required int offset,
   required int? size,
+  bool checkTotalFileSize = false,
 }) {
   final raf = file.openSync();
   try {
     final fileLen = raf.lengthSync();
+    if (checkTotalFileSize && fileLen > maxBytes) {
+      return const KittyMediumReadTooLarge();
+    }
     if (offset > fileLen) return const KittyMediumReadInvalid();
     final available = fileLen - offset;
     final effectiveSize = (size != null && size > 0) ? size : available;
@@ -202,6 +207,7 @@ KittyMediumReadResult _readWindowsKittyFile(
   required int? size,
   required bool unlink,
   required bool Function(Uint8List bytes)? shouldUnlink,
+  bool checkTotalFileSize = false,
 }) {
   final entityType = FileSystemEntity.typeSync(targetPath, followLinks: false);
   if (entityType == FileSystemEntityType.notFound) {
@@ -219,6 +225,7 @@ KittyMediumReadResult _readWindowsKittyFile(
       maxBytes: maxBytes,
       offset: offset,
       size: size,
+      checkTotalFileSize: checkTotalFileSize,
     );
   } on FileSystemException {
     return const KittyMediumReadInvalid();
@@ -231,12 +238,51 @@ KittyMediumReadResult _readWindowsKittyFile(
   return result;
 }
 
-/// Reads a Kitty Graphics Protocol temp file (`t=t`) or Linux/macOS POSIX
-/// shared-memory object (`t=s`), enforcing [maxBytes] and safety checks.
+KittyMediumReadResult _readRegularFileMedium(
+  String decoded, {
+  required int maxBytes,
+  required int offset,
+  required int? size,
+}) {
+  if (_hasParentTraversal(decoded) ||
+      _isUncOrDoubleSlash(decoded) ||
+      !File(decoded).isAbsolute) {
+    return const KittyMediumReadInvalid();
+  }
+  final leaf = decoded.split(_pathSeparatorRegex).last;
+  if (leaf.isEmpty ||
+      leaf == '.' ||
+      leaf == '..' ||
+      (Platform.isWindows && leaf.contains(':'))) {
+    return const KittyMediumReadInvalid();
+  }
+  if (!Platform.isWindows) {
+    return readRegularFileSafe(
+      path: decoded,
+      maxBytes: maxBytes,
+      offset: offset,
+      size: size,
+    );
+  }
+  return _readWindowsKittyFile(
+    decoded,
+    maxBytes: maxBytes,
+    offset: offset,
+    size: size,
+    unlink: false,
+    shouldUnlink: null,
+    checkTotalFileSize: true,
+  );
+}
+
+/// Reads a Kitty Graphics Protocol temp file (`t=t`), Linux/macOS POSIX
+/// shared-memory object (`t=s`), or local regular file (`t=f`), enforcing
+/// [maxBytes] and safety checks.
 ///
-/// When [unlink] is `true`, the backing file or shared-memory object is
-/// unlinked after a successful read (and after [shouldUnlink], if provided,
-/// returns `true`).
+/// When [unlink] is `true` and [medium] is `'t'` or `'s'`, the backing file or
+/// shared-memory object is unlinked after a successful read (and after
+/// [shouldUnlink], if provided, returns `true`). Regular files (`t=f`) are
+/// never unlinked.
 KittyMediumReadResult readPlatformKittyMedium(
   String medium,
   Uint8List encodedPathBytes, {
@@ -261,6 +307,14 @@ KittyMediumReadResult readPlatformKittyMedium(
   }
   if (decoded.isEmpty || decoded.contains('\x00')) {
     return const KittyMediumReadInvalid();
+  }
+  if (medium == 'f') {
+    return _readRegularFileMedium(
+      decoded,
+      maxBytes: maxBytes,
+      offset: offset,
+      size: size,
+    );
   }
   if (medium == 's' && Platform.isMacOS) {
     return readMacosPosixShm(
