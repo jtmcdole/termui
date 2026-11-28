@@ -398,20 +398,20 @@ final class FlutterTerminal extends core.Terminal {
   /// A stream that emits whether ligatures are enabled whenever changed.
   Stream<bool> watchEnableLigatures() => _enableLigaturesController.stream;
 
-  /// Current rounded logical pixel dimensions `(width, height)` of a single terminal cell (`CSI 16 t`).
+  /// Current rounded physical pixel dimensions `(width, height)` of a single terminal cell (`CSI 16 t`).
   (int, int) get cellPixelSize => _cellPixelSize;
 
-  /// A stream that emits rounded `(width, height)` cell pixel dimensions whenever the font atlas changes.
+  /// A stream that emits rounded physical `(width, height)` cell pixel dimensions whenever the font atlas changes.
   Stream<(int, int)> watchCellPixelSize() => _cellPixelSizeController.stream;
 
-  /// Current exact unrounded logical pixel dimensions `(width, height)` of a single terminal cell.
+  /// Current exact unrounded physical pixel dimensions `(width, height)` of a single terminal cell.
   (double, double) get exactCellPixelSize => _exactCellPixelSize;
 
-  /// A stream that emits exact unrounded `(width, height)` cell pixel dimensions whenever the font atlas changes.
+  /// A stream that emits exact unrounded physical `(width, height)` cell pixel dimensions whenever the font atlas changes.
   Stream<(double, double)> watchExactCellPixelSize() =>
       _exactCellPixelSizeController.stream;
 
-  /// Updates the rounded logical pixel dimensions of a single terminal cell (`>= 1`).
+  /// Updates the rounded physical pixel dimensions of a single terminal cell (`>= 1`).
   void updateCellPixelSize(int width, int height) {
     final next = (max(1, width), max(1, height));
     if (_cellPixelSize != next) {
@@ -422,7 +422,7 @@ final class FlutterTerminal extends core.Terminal {
     }
   }
 
-  /// Updates the exact unrounded logical pixel dimensions of a single terminal cell (`>= 1.0`).
+  /// Updates the exact unrounded physical pixel dimensions of a single terminal cell (`>= 1.0`).
   void updateExactCellPixelSize(double width, double height) {
     final safeW = width.isFinite && width > 1.0 ? width : 1.0;
     final safeH = height.isFinite && height > 1.0 ? height : 1.0;

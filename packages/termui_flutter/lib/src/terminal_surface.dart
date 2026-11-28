@@ -1076,8 +1076,8 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final media = MediaQuery.maybeOf(context);
-    final dpr = media?.devicePixelRatio ?? 1.0;
+    final maybeDpr = MediaQuery.maybeDevicePixelRatioOf(context);
+    final dpr = maybeDpr ?? 1.0;
     if (_ownsAtlasController) {
       final dprChanged =
           dpr.isFinite && dpr > 0.0 && _atlasController.devicePixelRatio != dpr;
@@ -1100,7 +1100,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
           ),
         );
       }
-    } else if (media != null &&
+    } else if (maybeDpr != null &&
         dpr.isFinite &&
         dpr > 0.0 &&
         _atlasController.devicePixelRatio != dpr) {
@@ -1529,9 +1529,12 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     final terminal = widget.terminal;
     final atlas = _atlasController.atlas;
     if (terminal == null || atlas == null) return;
+    final dpr = _effectiveDpr(atlas);
+    final physCellW = atlas.cellWidth * dpr;
+    final physCellH = atlas.cellHeight * dpr;
     terminal
-      ..updateExactCellPixelSize(atlas.cellWidth, atlas.cellHeight)
-      ..updateCellPixelSize(atlas.cellWidth.round(), atlas.cellHeight.round());
+      ..updateExactCellPixelSize(physCellW, physCellH)
+      ..updateCellPixelSize(physCellW.round(), physCellH.round());
   }
 
   void _onExternalBufferChanged() {
@@ -2071,15 +2074,25 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _scrollRemainderDy -= rawSteps * cellH;
     _hoverLinkResolved = false;
 
-    final (col, row, _) = _clampCellToActiveGrid(
+    final (:col, :row, :effCols, :effRows) = _clampCellToActiveGrid(
       (event.localPosition.dx / cellW).floor(),
       (event.localPosition.dy / cellH).floor(),
       maxCol,
       maxRow,
     );
     final dpr = _effectiveDpr(atlas);
-    final pixelX = (event.localPosition.dx * dpr).floor().clamp(0, 100000) + 1;
-    final pixelY = (event.localPosition.dy * dpr).floor().clamp(0, 100000) + 1;
+    final pixelX = _clampPhysicalPixel(
+      event.localPosition.dx,
+      dpr,
+      effCols,
+      cellW,
+    );
+    final pixelY = _clampPhysicalPixel(
+      event.localPosition.dy,
+      dpr,
+      effRows,
+      cellH,
+    );
     final steps = rawSteps.abs().clamp(1, _maxWheelStepsPerEvent);
     final button = rawSteps < 0
         ? term.MouseButton.wheelUp
@@ -2102,7 +2115,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _syncVirtualScrollSelection();
   }
 
-  (int, int, int) _clampCellToActiveGrid(
+  ({int col, int row, int effCols, int effRows}) _clampCellToActiveGrid(
     int rawCol,
     int rawRow,
     int maxC,
@@ -2116,9 +2129,10 @@ final class TerminalSurfaceState extends State<TerminalSurface>
         ? math.max(1, math.min(maxR, active.$2))
         : maxR;
     return (
-      rawCol.clamp(0, effCols - 1),
-      rawRow.clamp(0, effRows - 1),
-      effRows,
+      col: rawCol.clamp(0, effCols - 1),
+      row: rawRow.clamp(0, effRows - 1),
+      effCols: effCols,
+      effRows: effRows,
     );
   }
 
@@ -2154,25 +2168,43 @@ final class TerminalSurfaceState extends State<TerminalSurface>
 
     final rawCol = (event.localPosition.dx / atlas.cellWidth).floor();
     final rawRow = (event.localPosition.dy / atlas.cellHeight).floor();
-    final (clampedCol, clampedRow, effRows) = _clampCellToActiveGrid(
-      rawCol,
-      rawRow,
-      maxCol,
-      maxRow,
-    );
+    final (col: clampedCol, row: clampedRow, :effCols, :effRows) =
+        _clampCellToActiveGrid(rawCol, rawRow, maxCol, maxRow);
     final dpr = _effectiveDpr(atlas);
     return (
       col: clampedCol,
       row: clampedRow,
       rawRow: rawRow,
       effRows: effRows,
-      pixelX: (event.localPosition.dx * dpr).floor().clamp(0, 100000) + 1,
-      pixelY: (event.localPosition.dy * dpr).floor().clamp(0, 100000) + 1,
+      pixelX: _clampPhysicalPixel(
+        event.localPosition.dx,
+        dpr,
+        effCols,
+        atlas.cellWidth,
+      ),
+      pixelY: _clampPhysicalPixel(
+        event.localPosition.dy,
+        dpr,
+        effRows,
+        atlas.cellHeight,
+      ),
     );
   }
 
+  static int _clampPhysicalPixel(
+    double localCoord,
+    double dpr,
+    int effCells,
+    double cellSize,
+  ) {
+    final maxPixel = math.max(1, (effCells * cellSize * dpr).round());
+    return (localCoord * dpr).floor().clamp(0, maxPixel - 1) + 1;
+  }
+
   static double _effectiveDpr(GlyphAtlas atlas) =>
-      atlas.devicePixelRatio > 0 ? atlas.devicePixelRatio : 1.0;
+      atlas.devicePixelRatio.isFinite && atlas.devicePixelRatio > 0.0
+      ? atlas.devicePixelRatio
+      : 1.0;
 
   Size? _resolveLogicalLayoutSize() {
     final cached = _lastLayoutSize;
@@ -2459,12 +2491,8 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     if (cell == null) return;
     final buf = _activeBuffer;
     if (buf == null || buf.width <= 0 || buf.height <= 0) return;
-    final (clampedCol, clampedRow, effRows) = _clampCellToActiveGrid(
-      cell.col,
-      cell.row,
-      buf.width,
-      buf.height,
-    );
+    final (col: clampedCol, row: clampedRow, effCols: _, :effRows) =
+        _clampCellToActiveGrid(cell.col, cell.row, buf.width, buf.height);
     _gestureMachine.dispatch(.pointerDrag, (
       col: clampedCol,
       row: clampedRow,
