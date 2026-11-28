@@ -298,9 +298,11 @@ void main() {
         expect(listenerCalls, equals(1));
         replies.clear();
 
-        // Combined grid + cell pixel resize emits a single atomic report.
+        // Combined grid + cell pixel resize emits a single atomic report and notifies listeners.
+        listenerCalls = 0;
         vt.resize(90, 25, cellPixelWidth: 10, cellPixelHeight: 20);
         expect(replies, equals(<String>['\x1b[48;25;90;500;900t']));
+        expect(listenerCalls, equals(1));
         replies.clear();
 
         // No-op resize emits nothing.

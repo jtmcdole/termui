@@ -101,21 +101,18 @@ final class GlyphAtlasController extends ChangeNotifier {
   /// Monotonically incremented generation counter for atlas recreations.
   int get generationId => _generationId;
 
-  /// Current rounded logical cell dimensions `(width, height)`.
+  /// Current rounded physical pixel dimensions `(width, height)` of a single cell.
   (int, int) get cellPixelSize {
-    final active = _atlas;
-    if (active == null) return (9, 18);
-    return (
-      active.cellWidth.round().clamp(1, 1024),
-      active.cellHeight.round().clamp(1, 1024),
-    );
+    final (physW, physH) = exactCellPixelSize;
+    return (physW.round().clamp(1, 1024), physH.round().clamp(1, 1024));
   }
 
-  /// Current exact logical cell dimensions `(width, height)`.
+  /// Current exact physical pixel dimensions `(width, height)` of a single cell.
   (double, double) get exactCellPixelSize {
     final active = _atlas;
     if (active == null) return (9.0, 18.0);
-    return (active.cellWidth, active.cellHeight);
+    final dpr = _sanitizePositive(active.devicePixelRatio, 1.0);
+    return (active.cellWidth * dpr, active.cellHeight * dpr);
   }
 
   /// Bounded cache of fallback [TextPainter] instances shared with [TuiAtlasPainter].

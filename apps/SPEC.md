@@ -610,7 +610,7 @@ This section lists all custom APC queries alongside the standard VT/OSC/CSI quer
 | Extended CPR (`DECXCPR`) | `CSI ? 6 n` | `CSI ? <row> ; <col> ; 1 R` | 1-based coordinates with page `1`. |
 | Color Scheme (`DSR 996`) | `CSI ? 996 n` | `CSI ? 997 ; <1\|2> n` | `1` = dark, `2` = light. Also emitted unsolicited on theme change when `DECSET 2031` is active. |
 | Request Mode (`DECRQM`) | `CSI ? <Ps> $ p` or `CSI <Ps> $ p` | `CSI [?] <Ps> ; <Pm> $ y` | `Pm`: `0` unrecognized, `1` set, `2` reset. Private modes recognized: `1, 6, 7, 9, 25, 47, 1000, 1002, 1003, 1004, 1006, 1007, 1016, 1047, 1048, 1049, 2004, 2026, 2027, 2031, 2048`. Standard mode recognized: `4` (`IRM`). |
-| In-Band Window Resize (`DECSET 2048`) | `CSI ? 2048 h` / `l` | `CSI 48 ; <rows> ; <cols> ; <pxH> ; <pxW> t` | Emitted immediately on enable and whenever grid or cell pixel dimensions change. |
+| In-Band Window Resize (`DECSET 2048`) | `CSI ? 2048 h` / `l` | `CSI 48 ; <rows> ; <cols> ; <pxH> ; <pxW> t` | Emitted on enable (including repeat `h`) and when grid or cell pixel dimensions change; cleared by `DECSTR` and `RIS`. |
 | Window Pixel Size (`XTWINOPS 14t`) | `CSI 14 t` | `CSI 4 ; <pxH> ; <pxW> t` | Viewport size in pixels (`height * cellPxH`, `width * cellPxW`). |
 | Cell Pixel Size (`XTWINOPS 16t`) | `CSI 16 t` | `CSI 6 ; <cellPxH> ; <cellPxW> t` | Single cell dimensions in pixels. |
 | Grid Size (`XTWINOPS 18t`) | `CSI 18 t` | `CSI 8 ; <rows> ; <cols> t` | Active grid dimensions in cells. |

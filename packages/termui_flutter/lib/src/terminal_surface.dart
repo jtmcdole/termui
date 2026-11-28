@@ -1527,11 +1527,8 @@ final class TerminalSurfaceState extends State<TerminalSurface>
 
   void _syncTerminalCellMetrics() {
     final terminal = widget.terminal;
-    final atlas = _atlasController.atlas;
-    if (terminal == null || atlas == null) return;
-    final dpr = _effectiveDpr(atlas);
-    final physCellW = atlas.cellWidth * dpr;
-    final physCellH = atlas.cellHeight * dpr;
+    if (terminal == null || _atlasController.atlas == null) return;
+    final (physCellW, physCellH) = _atlasController.exactCellPixelSize;
     terminal
       ..updateExactCellPixelSize(physCellW, physCellH)
       ..updateCellPixelSize(physCellW.round(), physCellH.round());

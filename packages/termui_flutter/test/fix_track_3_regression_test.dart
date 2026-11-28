@@ -462,6 +462,11 @@ void main() {
 
         final terminal = FlutterTerminal();
         addTearDown(terminal.dispose);
+        final atlasController = GlyphAtlasController(
+          fontSize: 14.0,
+          devicePixelRatio: 1.0,
+        );
+        addTearDown(atlasController.dispose);
         final reports = <({int cols, int rows, double cellW, double cellH})>[];
         final buffer = Buffer(40, 20);
 
@@ -474,6 +479,7 @@ void main() {
                 height: 300,
                 child: TerminalSurface(
                   terminal: terminal,
+                  atlasController: atlasController,
                   buffer: buffer,
                   onViewportSizeChanged: (cols, rows, cellW, cellH) =>
                       reports.add((
@@ -490,6 +496,14 @@ void main() {
         await tester.pumpAndSettle();
         expect(reports, isNotEmpty);
         final dpr1 = reports.last;
+        expect(
+          atlasController.exactCellPixelSize,
+          equals((dpr1.cellW, dpr1.cellH)),
+        );
+        expect(
+          atlasController.cellPixelSize,
+          equals((dpr1.cellW.round(), dpr1.cellH.round())),
+        );
         expect(terminal.exactCellPixelSize, equals((dpr1.cellW, dpr1.cellH)));
         expect(
           terminal.cellPixelSize,
@@ -497,13 +511,21 @@ void main() {
         );
 
         // Switching to 2.0x DPR without rebuilding the widget tree updates
-        // both onViewportSizeChanged and FlutterTerminal physical cell metrics.
+        // onViewportSizeChanged, GlyphAtlasController, and FlutterTerminal physical cell metrics.
         tester.view.devicePixelRatio = 2.0;
         await tester.pumpAndSettle();
         final dpr2 = reports.last;
 
         expect(dpr2.cellW, closeTo(dpr1.cellW * 2.0, 2.0));
         expect(dpr2.cellH, closeTo(dpr1.cellH * 2.0, 2.0));
+        expect(
+          atlasController.exactCellPixelSize,
+          equals((dpr2.cellW, dpr2.cellH)),
+        );
+        expect(
+          atlasController.cellPixelSize,
+          equals((dpr2.cellW.round(), dpr2.cellH.round())),
+        );
         expect(terminal.exactCellPixelSize, equals((dpr2.cellW, dpr2.cellH)));
         expect(
           terminal.cellPixelSize,
