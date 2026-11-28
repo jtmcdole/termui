@@ -137,6 +137,7 @@ final class PtyRouter {
     TerminalBrightness? colorScheme,
     bool allowLocalKittyMedia = false,
     bool? allowLocalKittyShm,
+    bool allowLocalKittyFiles = false,
   }) {
     if (_disposed) {
       throw StateError('PtyRouter has been disposed.');
@@ -175,6 +176,7 @@ final class PtyRouter {
       colorScheme: colorScheme,
       allowLocalKittyMedia: allowLocalKittyMedia,
       allowLocalKittyShm: allowLocalKittyShm,
+      allowLocalKittyFiles: allowLocalKittyFiles,
       onDispose: () => _sessions.remove(sessionId),
     );
     _sessions[sessionId] = session;
@@ -244,6 +246,7 @@ final class PtyRouterSession {
   late Uint32List _shadowAttrs;
   late Uint32List _shadowUnderlineColors;
   late List<String?> _shadowUris;
+  Uint32List? _shadowTextSizing;
   late int _lastImageRegistryRevision;
   late bool _lastAltScreen;
   int _renderRevision = 1;
@@ -269,6 +272,7 @@ final class PtyRouterSession {
     required TerminalBrightness? colorScheme,
     required bool allowLocalKittyMedia,
     required bool? allowLocalKittyShm,
+    required bool allowLocalKittyFiles,
     required void Function() onDispose,
   }) : _onDispose = onDispose,
        terminal = VirtualTerminal(
@@ -286,6 +290,7 @@ final class PtyRouterSession {
          colorScheme: colorScheme,
          allowLocalKittyMedia: allowLocalKittyMedia,
          allowLocalKittyShm: allowLocalKittyShm,
+         allowLocalKittyFiles: allowLocalKittyFiles,
        ) {
     _syncFullShadowState();
     terminal
@@ -332,6 +337,15 @@ final class PtyRouterSession {
         _shadowUris[i] = buf.getUriAt(i);
       }
     }
+    if (buf.hasTextSizing) {
+      final shadowTs = Uint32List(total);
+      for (var i = 0; i < total; i++) {
+        shadowTs[i] = buf.getTextSizingAt(i);
+      }
+      _shadowTextSizing = shadowTs;
+    } else {
+      _shadowTextSizing = null;
+    }
     _lastImageRegistryRevision = terminal.imageRegistryRevision;
     _lastAltScreen = terminal.isUsingAlternateScreen;
   }
@@ -352,7 +366,9 @@ final class PtyRouterSession {
     final ul = buf.hasUnderlineColors ? buf.getUnderlineColorAt(index) : 0;
     if (ul != _shadowUnderlineColors[index]) return true;
     final uri = buf.hasUris ? buf.getUriAt(index) : null;
-    return uri != _shadowUris[index];
+    if (uri != _shadowUris[index]) return true;
+    final ts = buf.hasTextSizing ? buf.getTextSizingAt(index) : 0;
+    return ts != (_shadowTextSizing?[index] ?? 0);
   }
 
   void _syncShadowRange(
@@ -377,6 +393,16 @@ final class PtyRouterSession {
       }
     } else {
       _shadowUris.fillRange(start, end, null);
+    }
+    if (buf.hasTextSizing) {
+      final shadowTs = _shadowTextSizing ??= Uint32List(
+        _shadowCols * _shadowRows,
+      );
+      for (var i = start; i < end; i++) {
+        shadowTs[i] = buf.getTextSizingAt(i);
+      }
+    } else {
+      _shadowTextSizing?.fillRange(start, end, 0);
     }
   }
 

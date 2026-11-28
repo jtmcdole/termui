@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
@@ -135,6 +136,33 @@ final class _PendingOsc99 {
   }
 }
 
+typedef _ColorStackEntry = ({
+  Map<int, Color> osc4Overrides,
+  Color? osc10Override,
+  Color? osc11Override,
+  Color? osc12Override,
+});
+
+typedef _Osc66Params = ({
+  int scale,
+  int explicitWidth,
+  int numerator,
+  int denominator,
+  int vAlign,
+  int hAlign,
+});
+
+final class _PendingOsc5522Write {
+  final String selection;
+  final String id;
+  final BytesBuilder textBytes = BytesBuilder(copy: false);
+  String? activeMime;
+  String? capturedMime;
+  bool failed = false;
+
+  _PendingOsc5522Write({required this.selection, required this.id});
+}
+
 /// A virtual terminal that maintains primary and alternate screen buffers,
 /// cursor state, scroll margins, and terminal modes in response to ANSI/VT100
 /// escape sequences.
@@ -213,6 +241,26 @@ final class VirtualTerminal implements TerminalHandler {
   static const int _maxOsc99Chars = 16 * 1024;
   static const int _maxPendingOsc99 = 32;
   static const int _maxCellGraphemeUnits = 32;
+  static const int _maxXtgettcapQueries = 64;
+  static const int _maxColorStackDepth = 10;
+  static const int _maxOsc5522DecodedBytes = 65536;
+  static const int _maxOsc66TextUnits = 64;
+  static const Map<String, String> _xtgettcapValues = {
+    'TN': 'xterm-256color',
+    'name': 'xterm-256color',
+    'RGB': '8/8/8',
+    'Tc': '1',
+    'Smulx': '\x1b[4:%p1%dm',
+    'Setulc':
+        '\x1b[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%d%;m',
+    'Sync': '1',
+    'Su': '1',
+    'colors': '256',
+    'Co': '256',
+    'setrgbf': '\x1b[38:2:%p1%d:%p2%d:%p3%dm',
+    'setrgbb': '\x1b[48:2:%p1%d:%p2%d:%p3%dm',
+    'Ms': '\x1b]52;%p1%s;%p2%s\x07',
+  };
 
   /// The width of the virtual terminal in columns.
   int width;
@@ -515,6 +563,7 @@ final class VirtualTerminal implements TerminalHandler {
       copyW,
       underlineColors: sbLine.underlineColors,
       uris: sbLine.uris,
+      textSizing: sbLine.textSizing,
     );
     final sbCells = sbLine.glyphCellList;
     final n = math.min(sbCells.length, copyW);
@@ -755,6 +804,8 @@ final class VirtualTerminal implements TerminalHandler {
   Color? _osc10Override;
   Color? _osc11Override;
   Color? _osc12Override;
+  final List<_ColorStackEntry> _colorStack = [];
+  _PendingOsc5522Write? _pendingOsc5522Write;
   TerminalBrightness _colorScheme;
   bool _colorSchemeReporting = false;
   bool _inBandWindowResize = false;
@@ -851,6 +902,13 @@ final class VirtualTerminal implements TerminalHandler {
     _kittyApcHandlerInstance?.allowLocalShm = value;
   }
 
+  /// Whether local regular-file (`t=f`, non-unlinking) Kitty Graphics
+  /// transmission is permitted on this terminal.
+  ///
+  /// Defaults to `false` so untrusted or remote PTY streams cannot read local
+  /// filesystem files unless explicitly opted in.
+  final bool allowLocalKittyFiles;
+
   KittyApcHandler get _kittyApcHandler =>
       _kittyApcHandlerInstance ??= KittyApcHandler(
         registry: imageRegistry,
@@ -865,6 +923,7 @@ final class VirtualTerminal implements TerminalHandler {
         onClearPlacementsAt: _clearKittyPlacementsAt,
         allowLocalMedia: _allowLocalKittyMedia,
         allowLocalShm: _allowLocalKittyShm,
+        allowLocalFiles: allowLocalKittyFiles,
       );
 
   late final AudioApcHandler _audioApcHandler = AudioApcHandler(
@@ -897,6 +956,7 @@ final class VirtualTerminal implements TerminalHandler {
     this.shaderCapabilitiesProvider,
     bool allowLocalKittyMedia = false,
     bool? allowLocalKittyShm,
+    this.allowLocalKittyFiles = false,
   }) : _allowLocalKittyMedia = allowLocalKittyMedia,
        _allowLocalKittyShm = allowLocalKittyShm ?? allowLocalKittyMedia,
        width = math.max(1, width),
@@ -1016,9 +1076,107 @@ final class VirtualTerminal implements TerminalHandler {
         (placementId > 0 && cellUnderline == (0xFF00_0000 | masked));
   }
 
-  void _advanceCursorForKittyPlacement(int cols, int rows) {}
+  void _advanceCursorForKittyPlacement(int cols, int rows) {
+    if (cols <= 0 || rows <= 0) return;
+    _resolvePendingWrapBeforeWrite();
+    final startX = cursorX.clamp(0, width - 1);
+    final validCols = math.min(cols, width - startX);
+    var y = cursorY.clamp(0, height - 1);
+    final extraRows = rows - 1;
+    if (extraRows > 0) {
+      if (y <= _scrollBottom) {
+        final room = _scrollBottom - y;
+        if (extraRows <= room) {
+          y += extraRows;
+        } else {
+          _scrollRegion(
+            _scrollTop,
+            _scrollBottom,
+            extraRows - room,
+            up: true,
+            evictTop: _scrollTop == 0,
+          );
+          y = _scrollBottom;
+        }
+      } else {
+        y = math.min(height - 1, y + extraRows);
+      }
+    }
+    cursorY = y;
+    cursorX = startX;
+    _advanceCursorAfterPrint(validCols);
+  }
 
-  void _clearKittyPlacementsAt({int? col, int? row, int? zIndex}) {}
+  void _clearKittyPlacementsAt({int? col, int? row, int? zIndex}) {
+    if (zIndex != null && zIndex != 0) return;
+    if (col != null && (col < 0 || col >= width)) return;
+    if (row != null && (row < 0 || row >= height)) return;
+    if (col == null && row == null) {
+      _clearKittyPlacements(null, directOnly: true);
+      return;
+    }
+    final active = buffer;
+    final matches = _collectDirectPlacementsAt(active, col: col, row: row);
+    if (matches.isEmpty) return;
+    _clearMatchingDirectPlacements(active, matches);
+  }
+
+  Set<(int imageId, int underline)> _collectDirectPlacementsAt(
+    Buffer active, {
+    int? col,
+    int? row,
+  }) {
+    final matches = <(int, int)>{};
+    final startY = row ?? 0;
+    final endY = row != null ? row + 1 : height;
+    final startX = col ?? 0;
+    final endX = col != null ? col + 1 : width;
+    for (var y = startY; y < endY; y++) {
+      final rowBase = y * width;
+      for (var x = startX; x < endX; x++) {
+        final key = _directPlacementKeyAt(active, rowBase + x, x, y);
+        if (key != null) matches.add(key);
+      }
+    }
+    return matches;
+  }
+
+  (int imageId, int underline)? _directPlacementKeyAt(
+    Buffer active,
+    int cellIdx,
+    int x,
+    int y,
+  ) {
+    if (!Modifier.has(
+      active.attributes[cellIdx * 3 + 2],
+      Modifier.kittyPlaceholder,
+    )) {
+      return null;
+    }
+    final ul = active.getUnderlineColorAt(cellIdx);
+    if ((ul & 0xFF00_0000) != _kittyDirectPlacementTag) return null;
+    final cellId = extractKittyCellImageId(
+      active.getCharacter(x, y),
+      active.attributes[cellIdx * 3],
+    );
+    return (cellId, ul);
+  }
+
+  void _clearMatchingDirectPlacements(
+    Buffer active,
+    Set<(int imageId, int underline)> matches,
+  ) {
+    for (var y = 0; y < height; y++) {
+      final rowBase = y * width;
+      for (var x = 0; x < width; x++) {
+        final cellIdx = rowBase + x;
+        final key = _directPlacementKeyAt(active, cellIdx, x, y);
+        if (key != null && matches.contains(key)) {
+          _resetSplitCell(active, cellIdx);
+        }
+      }
+    }
+  }
 
   void _clearKittyPlacements(
     int? imageId, {
@@ -1084,6 +1242,7 @@ final class VirtualTerminal implements TerminalHandler {
     int imageIdMsb,
     int underlineColor,
   ) {
+    _clearOverlappingTextSizing(buffer, startX, y, validCols);
     for (var c = 0; c < validCols; c++) {
       buffer.setAttributes(
         startX + c,
@@ -1130,6 +1289,8 @@ final class VirtualTerminal implements TerminalHandler {
     _syncSafetyTimer?.cancel();
     _syncSafetyTimer = null;
     _pendingOsc99.clear();
+    _pendingOsc5522Write = null;
+    _colorStack.clear();
     _pointerShapeStack.clear();
     _kittyApcHandler.reset();
     _audioApcHandler.reset();
@@ -1235,6 +1396,7 @@ final class VirtualTerminal implements TerminalHandler {
     _syncSafetyTimer?.cancel();
     _syncSafetyTimer = null;
     _pendingOsc99.clear();
+    _pendingOsc5522Write = null;
     final previousCursorShape = mouseCursorShape;
     _pointerShapeStack.clear();
     if (previousCursorShape != null) {
@@ -1252,6 +1414,7 @@ final class VirtualTerminal implements TerminalHandler {
       _osc10Override = null;
       _osc11Override = null;
       _osc12Override = null;
+      _colorStack.clear();
       _colorSchemeReporting = false;
       _resetFullScreenState();
     } else {
@@ -1285,6 +1448,8 @@ final class VirtualTerminal implements TerminalHandler {
     _primaryWrapped.fillRange(0, height, false);
     _scrollback.clear();
     _viewportOffset = 0;
+    imageRegistry.activeAltScreen = false;
+    imageRegistry.viewportScrollOffset = 0;
     _promptLineIndices.clear();
     _fillRowsWithEraseAttributes(_primaryBuffer, 0, height);
     _syncBufferShaderMetadata(
@@ -1368,6 +1533,7 @@ final class VirtualTerminal implements TerminalHandler {
     cursorX = cursorX.clamp(0, width - 1);
     cursorY = cursorY.clamp(0, height - 1);
     _viewportOffset = _viewportOffset.clamp(0, _scrollback.retainedLines);
+    imageRegistry.viewportScrollOffset = _usingAltScreen ? 0 : _viewportOffset;
     _resizeShaderState(_primaryShaderState, oldWidth, oldHeight, width, height);
     if (_altShaderState case final altShader?) {
       _resizeShaderState(altShader, oldWidth, oldHeight, width, height);
@@ -1400,6 +1566,7 @@ final class VirtualTerminal implements TerminalHandler {
       imageRegistry,
     );
     if (shrunkHorizontally) _healRightEdgeWideGraphemes(buffer);
+    if (buffer.hasTextSizing) _healClippedTextSizing(buffer);
   }
 
   void _resizeTabStops(int newWidth) {
@@ -1426,6 +1593,11 @@ final class VirtualTerminal implements TerminalHandler {
     _copyCellSpan(_primaryBuffer, 0, evictCount * width, clampedHeight * width);
     _primaryWrapped.setRange(0, clampedHeight, _primaryWrapped, evictCount);
     _shiftShaderStateRows(_primaryShaderState, 0, height - 1, -evictCount);
+    imageRegistry.shiftDirectPlacements(
+      -evictCount,
+      altScreen: false,
+      evictAboveRow: -_scrollback.maxLines,
+    );
     _savedPrimary = (
       x: _savedPrimary.x,
       y: math.max(0, _savedPrimary.y.clamp(0, height - 1) - evictCount),
@@ -1456,6 +1628,7 @@ final class VirtualTerminal implements TerminalHandler {
     final codes = buf.glyphCodes;
     for (var cell = rowStart; cell < rowEnd; cell++) {
       if (codes[cell] != GlyphCellList.spaceCode) return true;
+      if (buf.getTextSizingAt(cell) != KittyTextSizing.none) return true;
       final attrIdx = cell * 3;
       if (buf.attributes[attrIdx + 1] != 0 ||
           (buf.attributes[attrIdx + 2] & ~Modifier.transparent) != 0) {
@@ -1491,6 +1664,77 @@ final class VirtualTerminal implements TerminalHandler {
         ? Modifier.transparent
         : Modifier.none;
     buf.clearCellAuxRange(cellIdx, cellIdx + 1);
+  }
+
+  void _healClippedTextSizing(Buffer buf) {
+    final w = buf.width;
+    final h = buf.height;
+    for (var y = 0; y < h; y++) {
+      final rowBase = y * w;
+      for (var x = 0; x < w; x++) {
+        final bits = buf.getTextSizingAt(rowBase + x);
+        if (bits == KittyTextSizing.none) continue;
+        final ts = KittyTextSizing(bits);
+        final anchorX = x - ts.originDx;
+        final anchorY = y - ts.originDy;
+        if (anchorX < 0 ||
+            anchorY < 0 ||
+            anchorX + ts.boxCols > w ||
+            anchorY + ts.boxRows > h) {
+          _clearTextSizingBox(buf, anchorX, anchorY, ts.boxCols, ts.boxRows);
+        }
+      }
+    }
+  }
+
+  void _clearOverlappingTextSizing(
+    Buffer active,
+    int startX,
+    int y,
+    int count,
+  ) {
+    if (!active.hasTextSizing || count <= 0 || y < 0 || y >= active.height) {
+      return;
+    }
+    final endX = math.min(active.width, startX + count);
+    final rowBase = y * active.width;
+    for (var x = math.max(0, startX); x < endX; x++) {
+      final bits = active.getTextSizingAt(rowBase + x);
+      if (bits == KittyTextSizing.none) continue;
+      final ts = KittyTextSizing(bits);
+      _clearTextSizingBox(
+        active,
+        x - ts.originDx,
+        y - ts.originDy,
+        ts.boxCols,
+        ts.boxRows,
+      );
+    }
+  }
+
+  void _clearTextSizingBox(
+    Buffer active,
+    int anchorX,
+    int anchorY,
+    int boxCols,
+    int boxRows,
+  ) {
+    final minX = math.max(0, anchorX);
+    final maxX = math.min(active.width, anchorX + boxCols);
+    final minY = math.max(0, anchorY);
+    final maxY = math.min(active.height, anchorY + boxRows);
+    for (var cy = minY; cy < maxY; cy++) {
+      final rowBase = cy * active.width;
+      for (var cx = minX; cx < maxX; cx++) {
+        final idx = rowBase + cx;
+        final bits = active.getTextSizingAt(idx);
+        if (bits == KittyTextSizing.none) continue;
+        final cTs = KittyTextSizing(bits);
+        if (cx - cTs.originDx == anchorX && cy - cTs.originDy == anchorY) {
+          _resetSplitCell(active, idx);
+        }
+      }
+    }
   }
 
   void _clearSplitWideEdges(
@@ -1552,6 +1796,7 @@ final class VirtualTerminal implements TerminalHandler {
     if (startX >= endX || y < 0 || y >= height) return;
     final active = buffer;
     final rowOffset = y * width;
+    _clearOverlappingTextSizing(active, startX, y, endX - startX);
     _clearSplitWideEdges(active, rowOffset, startX, endX);
     final startCell = rowOffset + startX;
     final endCell = rowOffset + endX;
@@ -1592,6 +1837,7 @@ final class VirtualTerminal implements TerminalHandler {
           _scrollback.clear();
           _viewportOffset = 0;
           _promptLineIndices.clear();
+          _purgeScrollbackDirectPlacements();
           _syncPrimaryShaderOverlays();
         }
     }
@@ -1664,6 +1910,14 @@ final class VirtualTerminal implements TerminalHandler {
     _evictTopRowsToScrollback(top, shift, up: up, evictTop: evictTop);
     final keepRows = regionRows - shift;
     final active = buffer;
+    _clearScrollBoundaryTextSizing(
+      active,
+      top,
+      bottom,
+      shift,
+      up: up,
+      evictTop: evictTop,
+    );
     if (keepRows > 0) {
       final dstRow = up ? top : top + shift;
       final srcRow = up ? top + shift : top;
@@ -1681,8 +1935,145 @@ final class VirtualTerminal implements TerminalHandler {
     final fillEnd = up ? bottom + 1 : top + shift;
     _fillRowsWithEraseAttributes(active, fillStart, fillEnd);
     _clearWrappedRange(fillStart, fillEnd);
-    _shiftShaderStateRows(_activeShaderState, top, bottom, up ? -shift : shift);
+    final deltaRows = up ? -shift : shift;
+    _shiftShaderStateRows(_activeShaderState, top, bottom, deltaRows);
     _syncActiveBufferShaderMetadata();
+    _shiftKittyDirectPlacements(top, bottom, deltaRows, evictTop: evictTop);
+  }
+
+  void _clearScrollBoundaryTextSizing(
+    Buffer active,
+    int top,
+    int bottom,
+    int shift, {
+    required bool up,
+    required bool evictTop,
+  }) {
+    if (!active.hasTextSizing) return;
+    final preserveTopEviction = evictTop && up && !_usingAltScreen && top == 0;
+    if (top > 0) {
+      _clearStraddlingTextSizingRow(
+        active,
+        top,
+        minAnchorY: top,
+        maxEndY: height,
+      );
+    }
+    if (bottom + 1 < height) {
+      _clearStraddlingTextSizingRow(
+        active,
+        bottom,
+        minAnchorY: 0,
+        maxEndY: bottom + 1,
+      );
+    }
+    if (up) {
+      if (!preserveTopEviction) {
+        for (var r = top; r < top + shift; r++) {
+          _clearOverlappingTextSizing(active, 0, r, width);
+        }
+      }
+    } else {
+      for (var r = bottom - shift + 1; r <= bottom; r++) {
+        _clearOverlappingTextSizing(active, 0, r, width);
+      }
+    }
+  }
+
+  void _clearStraddlingTextSizingRow(
+    Buffer active,
+    int row, {
+    required int minAnchorY,
+    required int maxEndY,
+  }) {
+    final rowBase = row * active.width;
+    for (var x = 0; x < active.width; x++) {
+      final bits = active.getTextSizingAt(rowBase + x);
+      if (bits == KittyTextSizing.none) continue;
+      final ts = KittyTextSizing(bits);
+      final anchorY = row - ts.originDy;
+      if (anchorY < minAnchorY || anchorY + ts.boxRows > maxEndY) {
+        _clearTextSizingBox(
+          active,
+          x - ts.originDx,
+          anchorY,
+          ts.boxCols,
+          ts.boxRows,
+        );
+      }
+    }
+  }
+
+  void _shiftKittyDirectPlacements(
+    int top,
+    int bottom,
+    int deltaRows, {
+    required bool evictTop,
+  }) {
+    final scrollsIntoScrollback =
+        evictTop && deltaRows < 0 && !_usingAltScreen && top == 0;
+    if (deltaRows > 0) {
+      _evictPlacementsShiftedPastBottom(top, bottom, deltaRows);
+    }
+    imageRegistry.shiftDirectPlacements(
+      deltaRows,
+      altScreen: _usingAltScreen,
+      minRow: scrollsIntoScrollback ? null : top,
+      maxRow: bottom,
+      evictAboveRow: deltaRows < 0
+          ? (scrollsIntoScrollback ? -_scrollback.maxLines : top)
+          : null,
+    );
+  }
+
+  void _evictPlacementsShiftedPastBottom(int top, int bottom, int deltaRows) {
+    final evicted = <(int, int)>{};
+    for (final p in imageRegistry.allPlacements) {
+      if (p.isVirtual || p.isRelative || p.isAltScreen != _usingAltScreen) {
+        continue;
+      }
+      if (p.gridRow >= top &&
+          p.gridRow <= bottom &&
+          p.gridRow + deltaRows > bottom) {
+        evicted.add((p.imageId & 0xFFFFFFFF, p.placementId & 0xFFFFFFFF));
+      }
+    }
+    if (evicted.isNotEmpty) _removePlacementsWithCascade(evicted);
+  }
+
+  void _purgeScrollbackDirectPlacements() {
+    final evicted = <(int, int)>{};
+    for (final p in imageRegistry.allPlacements) {
+      if (p.isVirtual || p.isRelative || p.isAltScreen) continue;
+      if (p.gridRow + p.rows <= 0) {
+        evicted.add((p.imageId & 0xFFFFFFFF, p.placementId & 0xFFFFFFFF));
+      }
+    }
+    if (evicted.isNotEmpty) _removePlacementsWithCascade(evicted);
+  }
+
+  void _removePlacementsWithCascade(Set<(int, int)> initial) {
+    var frontier = initial;
+    while (frontier.isNotEmpty) {
+      final batch = frontier;
+      imageRegistry.removePlacementsWhere(
+        (p) => batch.contains((
+          p.imageId & 0xFFFFFFFF,
+          p.placementId & 0xFFFFFFFF,
+        )),
+      );
+      final children = <(int, int)>{};
+      for (final p in imageRegistry.allPlacements) {
+        if (p.isRelative &&
+            batch.contains((
+              p.parentImageId & 0xFFFFFFFF,
+              p.parentPlacementId & 0xFFFFFFFF,
+            ))) {
+          children.add((p.imageId & 0xFFFFFFFF, p.placementId & 0xFFFFFFFF));
+        }
+      }
+      frontier = children;
+    }
   }
 
   void _evictTopRowsToScrollback(
@@ -1769,6 +2160,12 @@ final class VirtualTerminal implements TerminalHandler {
     final startCell = startRow * width;
     final endCell = endRowExclusive * width;
     if (startCell >= endCell) return;
+    if (buf.hasTextSizing) {
+      if (startRow > 0) _clearOverlappingTextSizing(buf, 0, startRow, width);
+      if (endRowExclusive < height) {
+        _clearOverlappingTextSizing(buf, 0, endRowExclusive - 1, width);
+      }
+    }
     buf.glyphCellList.fillCodeRange(
       startCell,
       endCell,
@@ -1932,6 +2329,7 @@ final class VirtualTerminal implements TerminalHandler {
     String? uri,
   ) {
     final rowOffset = y * width;
+    _clearOverlappingTextSizing(active, startX, y, count);
     _clearSplitWideEdges(active, rowOffset, startX, startX + count);
     final cells = active.glyphCellList;
     final attrs = active.attributes;
@@ -1995,6 +2393,7 @@ final class VirtualTerminal implements TerminalHandler {
     if (_insertMode) _insertBlankChars(1);
     final printedX = cursorX;
     final printedY = cursorY;
+    _clearOverlappingTextSizing(buffer, printedX, printedY, 1);
     buffer.setAttributes(
       printedX,
       printedY,
@@ -2054,6 +2453,7 @@ final class VirtualTerminal implements TerminalHandler {
     final uri = active.getUri(prevX, prevY) ?? '';
     if (prevX + 1 < width) {
       if (_insertMode) _insertBlankChars(1);
+      _clearOverlappingTextSizing(active, prevX, prevY, 2);
       active.setAttributes(
         prevX,
         prevY,
@@ -2072,6 +2472,7 @@ final class VirtualTerminal implements TerminalHandler {
     final padMod = (transparentBackground && bg == 0)
         ? (mod | Modifier.transparent)
         : mod;
+    _clearOverlappingTextSizing(active, prevX, prevY, 1);
     active.setAttributes(
       prevX,
       prevY,
@@ -2091,6 +2492,7 @@ final class VirtualTerminal implements TerminalHandler {
     if (_insertMode) _insertBlankChars(2);
     final wrappedX = cursorX;
     final wrappedY = cursorY;
+    _clearOverlappingTextSizing(active, wrappedX, wrappedY, 2);
     active.setAttributes(
       wrappedX,
       wrappedY,
@@ -2163,6 +2565,7 @@ final class VirtualTerminal implements TerminalHandler {
     bool bgTransparent,
   ) {
     if (cursorX == width - 1) {
+      _clearOverlappingTextSizing(buffer, cursorX, cursorY, 1);
       buffer.setAttributes(
         cursorX,
         cursorY,
@@ -2181,6 +2584,7 @@ final class VirtualTerminal implements TerminalHandler {
     if (_insertMode) _insertBlankChars(2);
     final printedX = cursorX;
     final printedY = cursorY;
+    _clearOverlappingTextSizing(buffer, printedX, printedY, 2);
     buffer.setAttributes(
       printedX,
       printedY,
@@ -2333,6 +2737,8 @@ final class VirtualTerminal implements TerminalHandler {
       _altBuffer = _newBuffer(width, height);
       _altShaderState = _ScreenShaderState(_handleShaderEvent);
       _usingAltScreen = true;
+      imageRegistry.activeAltScreen = true;
+      imageRegistry.viewportScrollOffset = 0;
       _scrollTop = 0;
       _scrollBottom = height - 1;
       _audioApcHandler.reset();
@@ -2346,6 +2752,9 @@ final class VirtualTerminal implements TerminalHandler {
     }
     if (!enable && _usingAltScreen) {
       _usingAltScreen = false;
+      imageRegistry.clearPlacements(altScreen: true);
+      imageRegistry.activeAltScreen = false;
+      imageRegistry.viewportScrollOffset = _viewportOffset;
       _altBuffer?.shaderRegions.clear();
       _altBuffer?.clearCellTransforms();
       _altBuffer = null;
@@ -2462,6 +2871,10 @@ final class VirtualTerminal implements TerminalHandler {
       case (' ', 'q'):
         _markDirty();
         _setCursorShape(params);
+      case ('#', 'P'):
+        _pushColorStack(params);
+      case ('#', 'Q'):
+        _popColorStack(params);
     }
   }
 
@@ -2817,6 +3230,7 @@ final class VirtualTerminal implements TerminalHandler {
   void _deleteChars(int count) {
     _clampPendingWrap();
     final active = buffer;
+    _clearOverlappingTextSizing(active, cursorX, cursorY, width - cursorX);
     final rowBase = cursorY * width;
     final codes = active.glyphCodes;
     if (cursorX > 0 &&
@@ -2837,6 +3251,7 @@ final class VirtualTerminal implements TerminalHandler {
   void _insertBlankChars(int count) {
     _clampPendingWrap();
     final active = buffer;
+    _clearOverlappingTextSizing(active, cursorX, cursorY, width - cursorX);
     final rowBase = cursorY * width;
     if (cursorX > 0 &&
         active.glyphCodes[rowBase + cursorX] ==
@@ -3061,7 +3476,152 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   @override
-  void dcs(String payload) {}
+  void dcs(String payload) {
+    _clearLastPrintedCell();
+    if (payload.startsWith('+q')) {
+      _handleXtgettcap(payload.substring(2));
+    } else if (payload.startsWith(r'$q')) {
+      _handleDecrqss(payload.substring(2));
+    }
+  }
+
+  void _handleXtgettcap(String body) {
+    final reply = onReply;
+    if (reply == null || body.isEmpty) return;
+    final tokens = body.split(';');
+    final limit = math.min(tokens.length, _maxXtgettcapQueries);
+    for (var i = 0; i < limit; i++) {
+      final token = tokens[i];
+      if (token.isEmpty) continue;
+      final capName = _decodeHexAscii(token);
+      if (capName == null) {
+        reply('\x1bP0+r\x1b\\');
+        continue;
+      }
+      final value = _xtgettcapValues[capName];
+      if (value != null) {
+        reply('\x1bP1+r$token=${_encodeHexAscii(value)}\x1b\\');
+      } else {
+        reply('\x1bP0+r$token\x1b\\');
+      }
+    }
+  }
+
+  static int _hexNibble(int cu) {
+    if (cu >= 0x30 && cu <= 0x39) return cu - 0x30;
+    if (cu >= 0x41 && cu <= 0x46) return cu - 0x41 + 10;
+    if (cu >= 0x61 && cu <= 0x66) return cu - 0x61 + 10;
+    return -1;
+  }
+
+  static String? _decodeHexAscii(String hex) {
+    if (hex.isEmpty || hex.length.isOdd) return null;
+    final bytes = List<int>.filled(hex.length ~/ 2, 0);
+    for (var i = 0; i < bytes.length; i++) {
+      final hi = _hexNibble(hex.codeUnitAt(i * 2));
+      final lo = _hexNibble(hex.codeUnitAt(i * 2 + 1));
+      if (hi < 0 || lo < 0) return null;
+      bytes[i] = (hi << 4) | lo;
+    }
+    return String.fromCharCodes(bytes);
+  }
+
+  static String _encodeHexAscii(String text) {
+    final bytes = utf8.encode(text);
+    final sb = StringBuffer();
+    for (final b in bytes) {
+      sb.write(b.toRadixString(16).padLeft(2, '0'));
+    }
+    return sb.toString();
+  }
+
+  void _handleDecrqss(String query) {
+    final reply = onReply;
+    if (reply == null) return;
+    switch (query) {
+      case 'm':
+        reply('\x1bP1\$r${_formatActiveSgr()}m\x1b\\');
+      case ' q':
+        reply('\x1bP1\$r${_cursorShapeCode(_cursorShape)} q\x1b\\');
+      case 'r':
+        reply('\x1bP1\$r${_scrollTop + 1};${_scrollBottom + 1}r\x1b\\');
+      default:
+        reply('\x1bP0\$r\x1b\\');
+    }
+  }
+
+  static int _cursorShapeCode(TerminalCursorShape shape) => switch (shape) {
+    .defaultShape => 0,
+    .blinkingBlock => 1,
+    .steadyBlock => 2,
+    .blinkingUnderline => 3,
+    .steadyUnderline => 4,
+    .blinkingBar => 5,
+    .steadyBar => 6,
+  };
+
+  String _formatActiveSgr() {
+    final parts = <String>['0'];
+    _appendSgrModifiers(parts, _currentStyle.modifiers);
+    if (_currentStyle.foreground case final fg?) {
+      _appendSgrColor(parts, fg, 30, 90, 38);
+    }
+    if (_currentStyle.background case final bg?) {
+      _appendSgrColor(parts, bg, 40, 100, 48);
+    }
+    if (_currentStyle.underlineColor case final ul?) {
+      _appendSgrExtendedColor(parts, ul, 58);
+    }
+    return parts.join(';');
+  }
+
+  static void _appendSgrModifiers(List<String> parts, int mods) {
+    if (Modifier.has(mods, Modifier.bold)) parts.add('1');
+    if (Modifier.has(mods, Modifier.dim)) parts.add('2');
+    if (Modifier.has(mods, Modifier.italic)) parts.add('3');
+    final ulStyle = Modifier.getUnderlineStyle(mods);
+    if (ulStyle != UnderlineStyle.none) {
+      parts.add(ulStyle == UnderlineStyle.single ? '4' : '4:${ulStyle.index}');
+    }
+    if (Modifier.has(mods, Modifier.blink)) parts.add('5');
+    if (Modifier.has(mods, Modifier.reverse)) parts.add('7');
+    if (Modifier.has(mods, Modifier.hidden)) parts.add('8');
+    if (Modifier.has(mods, Modifier.crossedOut)) parts.add('9');
+    if (Modifier.has(mods, Modifier.overline)) parts.add('53');
+  }
+
+  static void _appendSgrColor(
+    List<String> parts,
+    Color color,
+    int base,
+    int brightBase,
+    int extCode,
+  ) {
+    if (color.isAnsiIndexed) {
+      final idx = color.ansiIndex;
+      if (idx < 8) {
+        parts.add('${base + idx}');
+      } else if (idx < 16) {
+        parts.add('${brightBase + idx - 8}');
+      } else {
+        parts.add('$extCode;5;$idx');
+      }
+      return;
+    }
+    parts.add('$extCode;2;${color.r};${color.g};${color.b}');
+  }
+
+  static void _appendSgrExtendedColor(
+    List<String> parts,
+    Color color,
+    int extCode,
+  ) {
+    if (color.isAnsiIndexed) {
+      parts.add('$extCode;5;${color.ansiIndex}');
+    } else {
+      parts.add('$extCode;2;${color.r};${color.g};${color.b}');
+    }
+  }
 
   void _handleShaderEvent(TerminalShaderApcEvent event) {
     switch (event) {
@@ -3194,6 +3754,7 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   void _syncPrimaryShaderOverlays() {
+    imageRegistry.viewportScrollOffset = _usingAltScreen ? 0 : _viewportOffset;
     _syncBufferShaderMetadata(
       _primaryBuffer,
       _primaryShaderState,
@@ -3361,6 +3922,8 @@ final class VirtualTerminal implements TerminalHandler {
         _handleOsc22(payload);
       case 52:
         _handleOsc52(payload);
+      case 66:
+        _handleOsc66(payload);
       case 99:
         _handleOsc99(payload);
       case 104:
@@ -3383,8 +3946,433 @@ final class VirtualTerminal implements TerminalHandler {
       case 133:
         _markDirty();
         _handleOsc133(payload);
+      case 5522:
+        _handleOsc5522(payload);
+      case 30001:
+        _pushColorStack();
+      case 30101:
+        _popColorStack();
       default:
         _handleOscUnknown(command, payload);
+    }
+  }
+
+  void _pushColorStack([List<int> params = const []]) {
+    if (params.isNotEmpty && !(params.length == 1 && params[0] == 0)) return;
+    if (_colorStack.length >= _maxColorStackDepth) {
+      _colorStack.removeAt(0);
+    }
+    _colorStack.add((
+      osc4Overrides: Map<int, Color>.of(_osc4Overrides),
+      osc10Override: _osc10Override,
+      osc11Override: _osc11Override,
+      osc12Override: _osc12Override,
+    ));
+  }
+
+  void _popColorStack([List<int> params = const []]) {
+    if (_colorStack.isEmpty) return;
+    final _ColorStackEntry entry;
+    if (params.isEmpty || params[0] == 0) {
+      entry = _colorStack.removeLast();
+    } else if (params[0] >= 1 && params[0] <= _colorStack.length) {
+      entry = _colorStack.removeAt(params[0] - 1);
+    } else {
+      return;
+    }
+    _osc4Overrides
+      ..clear()
+      ..addAll(entry.osc4Overrides);
+    _osc10Override = entry.osc10Override;
+    _osc11Override = entry.osc11Override;
+    _osc12Override = entry.osc12Override;
+    _markDirty();
+  }
+
+  void _handleOsc66(String payload) {
+    final semi = payload.indexOf(';');
+    if (semi < 0) return;
+    final meta = _parseOsc66Meta(payload.substring(0, semi));
+    if (meta == null) return;
+    final textPart = payload.substring(semi + 1);
+    if (textPart.isEmpty) return;
+    _markDirty();
+    if (meta.explicitWidth > 0) {
+      final sanitized = _sanitizeOsc66Text(textPart);
+      if (sanitized.isEmpty) return;
+      _writeOsc66Block(sanitized, meta, packedW: meta.explicitWidth);
+      return;
+    }
+    for (final g in textPart.characters) {
+      if (g.isEmpty || _containsControlCodeUnit(g)) continue;
+      final capped = _capGrapheme(g);
+      _writeOsc66Block(capped, meta, packedW: isWideGrapheme(capped) ? 2 : 0);
+    }
+  }
+
+  static bool _inRange(int value, int min, int max) =>
+      value >= min && value <= max;
+
+  static _Osc66Params? _parseOsc66Meta(String metaPart) {
+    final values = <String, int>{};
+    for (final entry in metaPart.split(':')) {
+      if (entry.isEmpty) continue;
+      final eq = entry.indexOf('=');
+      if (eq <= 0) return null;
+      final parsed = int.tryParse(entry.substring(eq + 1));
+      if (parsed == null) return null;
+      values[entry.substring(0, eq)] = parsed;
+    }
+    final scale = values['s'] ?? 1;
+    final explicitWidth = values['w'] ?? 0;
+    final numerator = values['n'] ?? 0;
+    final denominator = values['d'] ?? 0;
+    final vAlign = values['v'] ?? 0;
+    final hAlign = values['h'] ?? 0;
+    final validRanges =
+        _inRange(scale, 1, 7) &&
+        _inRange(explicitWidth, 0, 7) &&
+        _inRange(numerator, 0, 15) &&
+        _inRange(denominator, 0, 15) &&
+        _inRange(vAlign, 0, 2) &&
+        _inRange(hAlign, 0, 2) &&
+        (numerator == 0 || denominator > numerator);
+    if (!validRanges) return null;
+    return (
+      scale: scale,
+      explicitWidth: explicitWidth,
+      numerator: numerator,
+      denominator: numerator == 0 ? 0 : denominator,
+      vAlign: vAlign,
+      hAlign: hAlign,
+    );
+  }
+
+  static String _sanitizeOsc66Text(String raw) {
+    final sb = StringBuffer();
+    for (var i = 0; i < raw.length; i++) {
+      final cu = raw.codeUnitAt(i);
+      if (cu <= 0x1F || (cu >= 0x7F && cu <= 0x9F)) continue;
+      sb.writeCharCode(cu);
+    }
+    final cleaned = sb.toString();
+    if (cleaned.length <= _maxOsc66TextUnits) return cleaned;
+    final out = StringBuffer();
+    var units = 0;
+    for (final cluster in cleaned.characters) {
+      if (units + cluster.length > _maxOsc66TextUnits) break;
+      out.write(cluster);
+      units += cluster.length;
+    }
+    return out.toString();
+  }
+
+  int _osc66WrapStep() {
+    if (!buffer.hasTextSizing) return 1;
+    var maxRows = 1;
+    final rowBase = cursorY * width;
+    for (var x = 0; x < width; x++) {
+      final bits = buffer.getTextSizingAt(rowBase + x);
+      if (bits == KittyTextSizing.none) continue;
+      final ts = KittyTextSizing(bits);
+      final remaining = ts.boxRows - ts.originDy;
+      if (remaining > maxRows) maxRows = remaining;
+    }
+    return maxRows;
+  }
+
+  void _advanceLinesForOsc66(int lines, {required bool wrapped}) {
+    for (var i = 0; i < lines; i++) {
+      _wrappingNextIndexDown = wrapped && i == 0;
+      _indexDown();
+      _wrappingNextIndexDown = false;
+    }
+  }
+
+  void _writeOsc66Block(
+    String text,
+    _Osc66Params meta, {
+    required int packedW,
+  }) {
+    final boxCols = meta.scale * (packedW > 0 ? packedW : 1);
+    final boxRows = meta.scale;
+    if (cursorX >= width || (cursorX > 0 && cursorX + boxCols > width)) {
+      if (_autoWrap) {
+        final step = _osc66WrapStep();
+        cursorX = 0;
+        _advanceLinesForOsc66(step, wrapped: true);
+      } else if (cursorX >= width) {
+        cursorX = width - 1;
+      }
+    }
+    if (cursorY <= _scrollBottom) {
+      final overflow = (cursorY + boxRows) - (_scrollBottom + 1);
+      final scrollCount = math.min(overflow, cursorY - _scrollTop);
+      if (scrollCount > 0) {
+        _scrollRegion(
+          _scrollTop,
+          _scrollBottom,
+          scrollCount,
+          up: true,
+          evictTop: _scrollTop == 0,
+        );
+        cursorY -= scrollCount;
+      }
+    }
+    final startX = cursorX.clamp(0, width - 1);
+    final startY = cursorY.clamp(0, height - 1);
+    final maxRowEnd = startY <= _scrollBottom ? _scrollBottom + 1 : height;
+    final actualCols = math.min(boxCols, width - startX);
+    final actualRows = math.min(boxRows, maxRowEnd - startY);
+    if (actualCols <= 0 || actualRows <= 0) return;
+
+    _paintOsc66Cells(
+      text,
+      meta,
+      packedW: packedW,
+      startX: startX,
+      startY: startY,
+      actualCols: actualCols,
+      actualRows: actualRows,
+    );
+    cursorX = startX;
+    _advanceCursorAfterPrint(actualCols);
+  }
+
+  void _paintOsc66Cells(
+    String text,
+    _Osc66Params meta, {
+    required int packedW,
+    required int startX,
+    required int startY,
+    required int actualCols,
+    required int actualRows,
+  }) {
+    final active = buffer;
+    final (fgArg, bgArg, modArg, bgTransparent) = _resolvePrintAttributes(text);
+    final spaceMod = bgTransparent ? (modArg | Modifier.transparent) : modArg;
+    final ulColor = _resolveOscColorArg(_currentStyle.underlineColor, null);
+    final uri = _activeUri;
+    for (var dy = 0; dy < actualRows; dy++) {
+      final y = startY + dy;
+      final rowOffset = y * width;
+      _clearOverlappingTextSizing(active, startX, y, actualCols);
+      _clearSplitWideEdges(active, rowOffset, startX, startX + actualCols);
+      for (var dx = 0; dx < actualCols; dx++) {
+        final idx = rowOffset + startX + dx;
+        final isCont = dx != 0 || dy != 0;
+        if (isCont) {
+          active.glyphCellList.setCodeAt(idx, GlyphCellList.spaceCode);
+        } else {
+          active.characters[idx] = text;
+        }
+        final attrIdx = idx * 3;
+        active.attributes[attrIdx] = fgArg;
+        active.attributes[attrIdx + 1] = bgArg;
+        active.attributes[attrIdx + 2] = isCont ? spaceMod : modArg;
+        active.setUnderlineColorAt(idx, ulColor);
+        active.setUriAt(idx, uri);
+        final bits = KittyTextSizing.pack(
+          scale: meta.scale,
+          explicitWidth: packedW,
+          numerator: meta.numerator,
+          denominator: meta.denominator,
+          vAlign: meta.vAlign,
+          hAlign: meta.hAlign,
+          isContinuation: isCont,
+          originDx: dx,
+          originDy: dy,
+        ).bits;
+        active.setTextSizingAt(idx, bits);
+      }
+    }
+  }
+
+  void _handleOsc5522(String payload) {
+    final semi = payload.indexOf(';');
+    final metaPart = semi < 0 ? payload : payload.substring(0, semi);
+    final bodyPart = semi < 0 ? '' : payload.substring(semi + 1);
+    final meta = _parseOsc5522Meta(metaPart);
+    switch (meta.type) {
+      case 'read':
+        _handleOsc5522Read(meta);
+      case 'write':
+        _handleOsc5522WriteStart(meta, bodyPart);
+      case 'wdata':
+        _handleOsc5522WriteData(meta, bodyPart);
+      default:
+        _replyOsc5522('write', 'EINVAL', meta.id);
+    }
+  }
+
+  static ({String type, String loc, String? mime, String id}) _parseOsc5522Meta(
+    String metaPart,
+  ) {
+    var type = '';
+    var loc = 'clipboard';
+    String? mime;
+    var id = '';
+    for (final entry in metaPart.split(':')) {
+      final eq = entry.indexOf('=');
+      if (eq <= 0) continue;
+      final k = entry.substring(0, eq).trim();
+      final v = entry.substring(eq + 1).trim();
+      switch (k) {
+        case 'type':
+          type = v;
+        case 'loc':
+          loc = v;
+        case 'mime':
+          mime = v;
+        case 'id':
+          id = v;
+      }
+    }
+    return (type: type, loc: loc, mime: mime, id: id);
+  }
+
+  static String? _resolveOsc5522Selection(String loc) => switch (loc) {
+    '' || 'clipboard' => 'c',
+    'primary' => 'p',
+    _ => null,
+  };
+
+  void _replyOsc5522(String type, String status, String id) {
+    final safeId = _sanitizeOsc99Id(id);
+    final idSuffix = safeId.isEmpty ? '' : ':id=$safeId';
+    onReply?.call('\x1b]5522;type=$type:status=$status$idSuffix\x1b\\');
+  }
+
+  void _handleOsc5522Read(
+    ({String type, String loc, String? mime, String id}) meta,
+  ) {
+    final selection = _resolveOsc5522Selection(meta.loc) ?? 'c';
+    onClipboardReadBlocked?.call(selection);
+    _replyOsc5522('read', 'EPERM', meta.id);
+  }
+
+  void _handleOsc5522WriteStart(
+    ({String type, String loc, String? mime, String id}) meta,
+    String bodyPart,
+  ) {
+    _pendingOsc5522Write = null;
+    final selection = _resolveOsc5522Selection(meta.loc);
+    if (selection == null) {
+      _replyOsc5522('write', 'EINVAL', meta.id);
+      return;
+    }
+    if (meta.mime == null && bodyPart.isEmpty) {
+      _pendingOsc5522Write = _PendingOsc5522Write(
+        selection: selection,
+        id: meta.id,
+      );
+      return;
+    }
+    final decodedMime = meta.mime != null
+        ? _decodeOsc5522Mime(meta.mime!)
+        : null;
+    if (decodedMime == null || !_isSupportedOsc5522Mime(decodedMime)) {
+      _replyOsc5522('write', 'EINVAL', meta.id);
+      return;
+    }
+    final bytes = _decodeOsc5522Data(bodyPart);
+    if (bytes == null || bytes.length > _maxOsc5522DecodedBytes) {
+      _replyOsc5522('write', 'EINVAL', meta.id);
+      return;
+    }
+    final text = utf8.decode(bytes, allowMalformed: true);
+    onClipboardWrite?.call(selection, text);
+    _replyOsc5522('write', 'DONE', meta.id);
+  }
+
+  void _handleOsc5522WriteData(
+    ({String type, String loc, String? mime, String id}) meta,
+    String bodyPart,
+  ) {
+    final pending = _pendingOsc5522Write;
+    if (pending == null) {
+      _replyOsc5522('write', 'EINVAL', meta.id);
+      return;
+    }
+    if (meta.mime == null && bodyPart.isEmpty) {
+      _finishOsc5522Write(pending);
+      return;
+    }
+    if (pending.failed) return;
+    if (meta.mime != null) {
+      final decodedMime = _decodeOsc5522Mime(meta.mime!);
+      if (decodedMime == null) {
+        pending.failed = true;
+        pending.textBytes.clear();
+        return;
+      }
+      pending.activeMime = _normalizeOsc5522Mime(decodedMime);
+    }
+    final activeMime = pending.activeMime;
+    if (activeMime == null) {
+      pending.failed = true;
+      pending.textBytes.clear();
+      return;
+    }
+    if (!_isSupportedOsc5522Mime(activeMime)) return;
+    if (pending.capturedMime == null) {
+      pending.capturedMime = activeMime;
+    } else if (pending.capturedMime != activeMime) {
+      return;
+    }
+    if (bodyPart.isEmpty) return;
+    final bytes = _decodeOsc5522Data(bodyPart);
+    if (bytes == null ||
+        pending.textBytes.length + bytes.length > _maxOsc5522DecodedBytes) {
+      pending.failed = true;
+      pending.textBytes.clear();
+      return;
+    }
+    pending.textBytes.add(bytes);
+  }
+
+  void _finishOsc5522Write(_PendingOsc5522Write pending) {
+    _pendingOsc5522Write = null;
+    if (pending.failed || pending.capturedMime == null) {
+      _replyOsc5522('write', 'EINVAL', pending.id);
+      return;
+    }
+    final text = utf8.decode(
+      pending.textBytes.takeBytes(),
+      allowMalformed: true,
+    );
+    onClipboardWrite?.call(pending.selection, text);
+    _replyOsc5522('write', 'DONE', pending.id);
+  }
+
+  static String? _decodeOsc5522Mime(String b64Mime) {
+    final cleaned = b64Mime.replaceAll(_whitespaceRegex, '');
+    if (cleaned.isEmpty || cleaned.length % 4 == 1) return null;
+    try {
+      final bytes = base64.decode(base64.normalize(cleaned));
+      return utf8.decode(bytes);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  static String _normalizeOsc5522Mime(String mime) =>
+      mime.trim().toLowerCase().replaceAll(' ', '');
+
+  static bool _isSupportedOsc5522Mime(String mime) {
+    final normalized = _normalizeOsc5522Mime(mime);
+    return normalized == 'text/plain' ||
+        normalized == 'text/plain;charset=utf-8';
+  }
+
+  static Uint8List? _decodeOsc5522Data(String body) {
+    final cleaned = body.replaceAll(_whitespaceRegex, '');
+    if (cleaned.isEmpty) return Uint8List(0);
+    if (cleaned.length % 4 == 1) return null;
+    try {
+      return base64.decode(base64.normalize(cleaned));
+    } on FormatException {
+      return null;
     }
   }
 
