@@ -785,5 +785,76 @@ void main() {
         expect(parent.getTextSizing(3, 1), equals(KittyTextSizing.none));
       },
     );
+
+    test(
+      'clearImages preserves activeAltScreen and viewportScrollOffset state (PR #501 H2)',
+      () {
+        final reg = KittyImageRegistry();
+        reg
+          ..activeAltScreen = true
+          ..viewportScrollOffset = 7
+          ..registerImage(_solidImage(1));
+
+        reg.clearImages();
+
+        expect(reg.hasImages, isFalse);
+        expect(reg.activeAltScreen, isTrue);
+        expect(reg.viewportScrollOffset, equals(7));
+      },
+    );
+
+    test(
+      'paused loading animation clears lastStepMs so newly uploaded frames do not skip on resume (PR #501 M1)',
+      () {
+        final reg = KittyImageRegistry();
+        reg.registerImage(_solidImage(50));
+        reg.registerAnimationFrame(
+          50,
+          KittyAnimationFrame(
+            frameNumber: 2,
+            imageData: _solidImage(50, r: 0x11),
+            gapMs: 100,
+          ),
+        );
+        reg.setAnimationPlayback(
+          50,
+          playback: KittyAnimationPlayback.loading,
+          frameGapMs: 100,
+        );
+
+        // Initialize timer at t=1000, advance onto frame 2 at t=1100 -> stalls in loading.
+        expect(reg.advanceAnimations(1000), isFalse);
+        expect(reg.advanceAnimations(1100), isTrue);
+        expect(reg.lookupAnimation(50)!.currentFrameNumber, equals(2));
+        expect(reg.lookupAnimation(50)!.isActivelyStepping, isFalse);
+
+        // Long idle pause before frames 3 and 4 arrive at t=10000.
+        reg.registerAnimationFrame(
+          50,
+          KittyAnimationFrame(
+            frameNumber: 3,
+            imageData: _solidImage(50, r: 0x22),
+            gapMs: 100,
+          ),
+        );
+        reg.registerAnimationFrame(
+          50,
+          KittyAnimationFrame(
+            frameNumber: 4,
+            imageData: _solidImage(50, r: 0x33),
+            gapMs: 100,
+          ),
+        );
+        expect(reg.lookupAnimation(50)!.isActivelyStepping, isTrue);
+
+        // First tick after resume should re-anchor lastStepMs at t=10000 instead of skipping frame 3.
+        expect(reg.advanceAnimations(10000), isFalse);
+        expect(reg.lookupAnimation(50)!.currentFrameNumber, equals(2));
+
+        // After 100ms, steps smoothly to frame 3 (not jumping past it).
+        expect(reg.advanceAnimations(10100), isTrue);
+        expect(reg.lookupAnimation(50)!.currentFrameNumber, equals(3));
+      },
+    );
   });
 }

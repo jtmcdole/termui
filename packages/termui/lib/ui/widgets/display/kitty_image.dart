@@ -941,8 +941,6 @@ class KittyImageRegistry {
     _placements.clear();
     _animations.clear();
     _totalAnimationBytes = 0;
-    _activeAltScreen = false;
-    _viewportScrollOffset = 0;
     _revision++;
   }
 
@@ -1506,15 +1504,16 @@ class KittyImageRegistry {
       }
       changed = true;
     }
-    if (changed) {
-      final nextGap = state.isActivelyStepping
-          ? KittyAnimationState.effectiveGapMs(state.activeFrame)
-          : 0;
-      state.lastStepMs = nextGap > 0 && remaining < nextGap
-          ? nowMs - remaining
-          : nowMs;
+    if (!changed) return false;
+    if (!state.isActivelyStepping) {
+      state.lastStepMs = null;
+      return true;
     }
-    return changed;
+    final nextGap = KittyAnimationState.effectiveGapMs(state.activeFrame);
+    state.lastStepMs = nextGap > 0 && remaining < nextGap
+        ? nowMs - remaining
+        : nowMs;
+    return true;
   }
 
   /// Advances [state] by one frame; returns `false` if playback stopped.

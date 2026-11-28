@@ -276,6 +276,80 @@ class Renderer {
     }
   }
 
+  /// Invalidates owning `OSC 66` anchors (and any remaining sibling overlay
+  /// cells in their footprints) whenever a continuation cell transitions from
+  /// non-continuation back to continuation, so the anchor re-emits over stale
+  /// glyphs left by closed overlays.
+  void _invalidateUncoveredOsc66Anchors(Buffer backBuffer) {
+    final width = backBuffer.width;
+    final height = backBuffer.height;
+    for (var y = 0; y < height; y++) {
+      for (var x = 0; x < width; x++) {
+        _invalidateUncoveredAnchorAt(backBuffer, x, y, width, height);
+      }
+    }
+  }
+
+  void _invalidateUncoveredAnchorAt(
+    Buffer backBuffer,
+    int x,
+    int y,
+    int width,
+    int height,
+  ) {
+    final ts = KittyTextSizing(backBuffer.getTextSizing(x, y));
+    if (!ts.isContinuation) return;
+    if (KittyTextSizing(_frontBuffer.getTextSizing(x, y)).isContinuation) {
+      return;
+    }
+    final anchorX = x - ts.originDx;
+    final anchorY = y - ts.originDy;
+    if (anchorX < 0 || anchorY < 0 || anchorX >= width || anchorY >= height) {
+      return;
+    }
+    final anchorTs = KittyTextSizing(
+      backBuffer.getTextSizing(anchorX, anchorY),
+    );
+    if (!anchorTs.isAnchor) return;
+    _invalidateOsc66Footprint(backBuffer, anchorX, anchorY, anchorTs);
+  }
+
+  void _invalidateOsc66Footprint(
+    Buffer backBuffer,
+    int anchorX,
+    int anchorY,
+    KittyTextSizing anchorTs,
+  ) {
+    if (_frontBuffer.getTextSizing(anchorX, anchorY) == KittyTextSizing.none) {
+      return;
+    }
+    _frontBuffer.setTextSizing(anchorX, anchorY, KittyTextSizing.none);
+    final width = backBuffer.width;
+    final height = backBuffer.height;
+    final boxCols = _osc66Advance(
+      anchorTs,
+      backBuffer.glyphCellList.decodeCode(
+        backBuffer.glyphCodes[anchorY * width + anchorX],
+      ),
+      anchorX,
+      width,
+    );
+    final endX = anchorX + boxCols < width ? anchorX + boxCols : width;
+    final endY = anchorY + anchorTs.scale < height
+        ? anchorY + anchorTs.scale
+        : height;
+    final frontAttr = _frontBuffer.attributes;
+    for (var fy = anchorY; fy < endY; fy++) {
+      for (var fx = anchorX; fx < endX; fx++) {
+        if (fx == anchorX && fy == anchorY) continue;
+        if (KittyTextSizing(backBuffer.getTextSizing(fx, fy)).isContinuation) {
+          continue;
+        }
+        frontAttr[(fy * width + fx) * 3] ^= 1;
+      }
+    }
+  }
+
   /// Diffs [backBuffer] against [_frontBuffer] and writes minimal ANSI escape sequences to [out].
   void render(Buffer backBuffer, StringSink out) {
     Tracer.record(_traceRenderId, Phase.begin, TraceCategory.paint);
@@ -287,6 +361,9 @@ class Renderer {
         _emittedCellTransforms.clear();
       }
       _emitPendingKittyImages(backBuffer, out);
+      if (!sizeChanged && backBuffer.hasTextSizing) {
+        _invalidateUncoveredOsc66Anchors(backBuffer);
+      }
 
       var state = _RenderCursorState();
       final width = backBuffer.width;
