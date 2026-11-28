@@ -1356,6 +1356,9 @@ final class VirtualTerminal implements TerminalHandler {
     if (_inBandWindowResize) {
       _replyWindowResize();
     }
+    if (cellChanged) {
+      _notifyListeners();
+    }
   }
 
   void _resizeBuffer(

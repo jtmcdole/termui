@@ -799,7 +799,9 @@ final class PtyRouterSession {
     } else if (cellChanged) {
       terminal.setCellPixelSize(cellW, cellH);
     }
-    if (gridChanged) _dispatchChange();
+    if (gridChanged && (!cellChanged || terminal.synchronizedOutput)) {
+      _dispatchChange();
+    }
   }
 
   /// Reads up to [count] primary-screen scrollback lines starting at [startLine].

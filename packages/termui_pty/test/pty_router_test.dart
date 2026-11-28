@@ -764,12 +764,16 @@ void main() {
         backend.writtenChunks.clear();
         backend.eventOrder.clear();
 
-        // Combined grid + cell pixel resize updates TIOCSWINSZ before emitting CSI 48.
+        // Combined grid + cell pixel resize updates TIOCSWINSZ before emitting CSI 48
+        // and dispatches change listeners exactly once.
+        var changeCount = 0;
+        port.addListener(() => changeCount++);
         port.setViewportSize(100, 30, cellPixelWidth: 16, cellPixelHeight: 32);
         expect(
           backend.eventOrder,
           equals(['resize:100x30:1600x960', 'write:\x1b[48;30;100;960;1600t']),
         );
+        expect(changeCount, equals(1));
         backend.writtenChunks.clear();
         backend.eventOrder.clear();
 
