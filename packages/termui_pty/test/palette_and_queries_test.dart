@@ -275,6 +275,11 @@ void main() {
         );
         replies.clear();
 
+        // Re-enabling ?2048h while already enabled re-emits the current size.
+        vt.writeString('\x1b[?2048h');
+        expect(replies, equals(<String>['\x1b[48;30;100;960;1600t']));
+        replies.clear();
+
         // Grid-only resize emits a single report.
         vt.resize(120, 40);
         expect(replies, equals(<String>['\x1b[48;40;120;1280;1920t']));
@@ -283,6 +288,14 @@ void main() {
         // Cell-pixel-only change (e.g. monitor DPR change) emits a single report.
         vt.setCellPixelSize(12, 24);
         expect(replies, equals(<String>['\x1b[48;40;120;960;1440t']));
+        replies.clear();
+
+        // Cell-pixel-only update via resize() also notifies listeners and emits CSI 48.
+        var listenerCalls = 0;
+        vt.addListener(() => listenerCalls++);
+        vt.resize(120, 40, cellPixelWidth: 14, cellPixelHeight: 28);
+        expect(replies, equals(<String>['\x1b[48;40;120;1120;1680t']));
+        expect(listenerCalls, equals(1));
         replies.clear();
 
         // Combined grid + cell pixel resize emits a single atomic report.
@@ -303,7 +316,15 @@ void main() {
         vt.resize(80, 24);
         expect(replies, isEmpty);
 
-        // Re-enable and verify RIS clears mode 2048.
+        // Re-enable and verify DECSTR soft reset clears mode 2048.
+        vt.writeString('\x1b[?2048h');
+        replies.clear();
+        vt.writeString('\x1b[!p');
+        expect(vt.inBandWindowResize, isFalse);
+        vt.resize(75, 22);
+        expect(replies, isEmpty);
+
+        // Re-enable and verify RIS hard reset clears mode 2048.
         vt.writeString('\x1b[?2048h');
         replies.clear();
         vt.writeString('\x1bc');

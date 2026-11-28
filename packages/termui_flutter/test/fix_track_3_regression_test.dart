@@ -418,6 +418,9 @@ void main() {
         kind: PointerDeviceKind.mouse,
       );
       await tester.pump();
+      // Drag well past the right/bottom edge to verify physical pixel clamping.
+      await gesture.moveTo(topLeft + const Offset(9999, 9999));
+      await tester.pump();
       await gesture.up();
       await tester.pump();
 
@@ -425,45 +428,87 @@ void main() {
       // 23.7 * 1.5 = 35.55 -> floor 35 + 1 = 36; 41.2 * 1.5 = 61.8 -> floor 61 + 1 = 62
       expect(mouseEvents.first.pixelX, equals(36));
       expect(mouseEvents.first.pixelY, equals(62));
+
+      final (exactCellW, exactCellH) = terminal.exactCellPixelSize;
+      final maxPhysX = (terminal.backend.size.x * exactCellW).round();
+      final maxPhysY = (terminal.backend.size.y * exactCellH).round();
+      final dragEvent = mouseEvents.firstWhere(
+        (e) => e.type == term.MouseEventType.drag,
+      );
+      expect(dragEvent.pixelX, equals(maxPhysX));
+      expect(dragEvent.pixelY, equals(maxPhysY));
+
+      // Verify PointerScrollEvent also reports 1-based physical pixel coordinates.
+      mouseEvents.clear();
+      await tester.sendEventToBinding(
+        PointerScrollEvent(
+          position: topLeft + const Offset(23.7, 41.2),
+          scrollDelta: const Offset(0, 60),
+        ),
+      );
+      await tester.pump();
+      final wheelEvent = mouseEvents.firstWhere(
+        (e) => e.button == term.MouseButton.wheelDown,
+      );
+      expect(wheelEvent.pixelX, equals(36));
+      expect(wheelEvent.pixelY, equals(62));
     });
 
     testWidgets(
-      'onViewportSizeChanged reports physical cell pixels scaled by devicePixelRatio and updates on DPR change',
+      'onViewportSizeChanged and FlutterTerminal cellPixelSize report physical cell pixels and update on DPR change',
       (tester) async {
         tester.view.devicePixelRatio = 1.0;
         addTearDown(tester.view.resetDevicePixelRatio);
 
-        final reports = <(int cols, int rows, double cellW, double cellH)>[];
+        final terminal = FlutterTerminal();
+        addTearDown(terminal.dispose);
+        final reports = <({int cols, int rows, double cellW, double cellH})>[];
         final buffer = Buffer(40, 20);
 
-        Widget buildSurface() => _testApp(
-          home: Align(
-            alignment: Alignment.topLeft,
-            child: SizedBox(
-              width: 400,
-              height: 300,
-              child: TerminalSurface(
-                buffer: buffer,
-                onViewportSizeChanged: (cols, rows, cellW, cellH) =>
-                    reports.add((cols, rows, cellW, cellH)),
+        await tester.pumpWidget(
+          _testApp(
+            home: Align(
+              alignment: Alignment.topLeft,
+              child: SizedBox(
+                width: 400,
+                height: 300,
+                child: TerminalSurface(
+                  terminal: terminal,
+                  buffer: buffer,
+                  onViewportSizeChanged: (cols, rows, cellW, cellH) =>
+                      reports.add((
+                        cols: cols,
+                        rows: rows,
+                        cellW: cellW,
+                        cellH: cellH,
+                      )),
+                ),
               ),
             ),
           ),
         );
-
-        await tester.pumpWidget(buildSurface());
         await tester.pumpAndSettle();
         expect(reports, isNotEmpty);
         final dpr1 = reports.last;
+        expect(terminal.exactCellPixelSize, equals((dpr1.cellW, dpr1.cellH)));
+        expect(
+          terminal.cellPixelSize,
+          equals((dpr1.cellW.round(), dpr1.cellH.round())),
+        );
 
-        // Switching to 2.0x DPR doubles reported physical cell pixel dimensions.
+        // Switching to 2.0x DPR without rebuilding the widget tree updates
+        // both onViewportSizeChanged and FlutterTerminal physical cell metrics.
         tester.view.devicePixelRatio = 2.0;
-        await tester.pumpWidget(buildSurface());
         await tester.pumpAndSettle();
         final dpr2 = reports.last;
 
-        expect(dpr2.$3, greaterThan(dpr1.$3 * 1.5));
-        expect(dpr2.$4, greaterThan(dpr1.$4 * 1.5));
+        expect(dpr2.cellW, closeTo(dpr1.cellW * 2.0, 2.0));
+        expect(dpr2.cellH, closeTo(dpr1.cellH * 2.0, 2.0));
+        expect(terminal.exactCellPixelSize, equals((dpr2.cellW, dpr2.cellH)));
+        expect(
+          terminal.cellPixelSize,
+          equals((dpr2.cellW.round(), dpr2.cellH.round())),
+        );
       },
     );
   });

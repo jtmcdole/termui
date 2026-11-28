@@ -779,16 +779,6 @@ final class PtyRouterSession {
         pixelWidth != _lastPixelWidth || pixelHeight != _lastPixelHeight;
     if (!gridChanged && !cellChanged && !pixelChanged) return;
 
-    if (gridChanged) {
-      terminal.resize(
-        minCols,
-        minRows,
-        cellPixelWidth: cellChanged ? cellW : null,
-        cellPixelHeight: cellChanged ? cellH : null,
-      );
-    } else if (cellChanged) {
-      terminal.setCellPixelSize(cellW, cellH);
-    }
     _lastPixelWidth = pixelWidth;
     _lastPixelHeight = pixelHeight;
     backend.resize(
@@ -797,6 +787,18 @@ final class PtyRouterSession {
       pixelWidth: pixelWidth,
       pixelHeight: pixelHeight,
     );
+    final nextCellW = cellChanged ? cellW : null;
+    final nextCellH = cellChanged ? cellH : null;
+    if (gridChanged) {
+      terminal.resize(
+        minCols,
+        minRows,
+        cellPixelWidth: nextCellW,
+        cellPixelHeight: nextCellH,
+      );
+    } else if (cellChanged) {
+      terminal.setCellPixelSize(cellW, cellH);
+    }
     if (gridChanged) _dispatchChange();
   }
 

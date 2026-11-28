@@ -1308,31 +1308,26 @@ final class VirtualTerminal implements TerminalHandler {
     final cellChanged =
         nextCellW != _cellPixelWidth || nextCellH != _cellPixelHeight;
     if (!gridChanged && !cellChanged) return;
-    _cellPixelWidth = nextCellW;
-    _cellPixelHeight = nextCellH;
     if (!gridChanged) {
-      if (_inBandWindowResize) _replyWindowResize();
+      setCellPixelSize(nextCellW, nextCellH);
       return;
     }
+    _cellPixelWidth = nextCellW;
+    _cellPixelHeight = nextCellH;
     _clearLastPrintedCell();
     final oldWidth = width;
     final oldHeight = height;
     _evictOverflowBeforeShrink(clampedHeight);
     final shrunkHorizontally = clampedWidth < width;
-    _primaryBuffer.resize(clampedWidth, clampedHeight);
-    _primaryBuffer.registerKittyRegistry(
-      Rect(0, 0, clampedWidth, clampedHeight),
-      imageRegistry,
+    _resizeBuffer(
+      _primaryBuffer,
+      clampedWidth,
+      clampedHeight,
+      shrunkHorizontally,
     );
-    if (shrunkHorizontally) _healRightEdgeWideGraphemes(_primaryBuffer);
     final alt = _altBuffer;
     if (alt != null) {
-      alt.resize(clampedWidth, clampedHeight);
-      alt.registerKittyRegistry(
-        Rect(0, 0, clampedWidth, clampedHeight),
-        imageRegistry,
-      );
-      if (shrunkHorizontally) _healRightEdgeWideGraphemes(alt);
+      _resizeBuffer(alt, clampedWidth, clampedHeight, shrunkHorizontally);
     }
     final nextWrapped = List<bool>.filled(clampedHeight, false);
     final copyWrapped = math.min(_primaryWrapped.length, clampedHeight);
@@ -1361,6 +1356,20 @@ final class VirtualTerminal implements TerminalHandler {
     if (_inBandWindowResize) {
       _replyWindowResize();
     }
+  }
+
+  void _resizeBuffer(
+    Buffer buffer,
+    int newWidth,
+    int newHeight,
+    bool shrunkHorizontally,
+  ) {
+    buffer.resize(newWidth, newHeight);
+    buffer.registerKittyRegistry(
+      Rect(0, 0, newWidth, newHeight),
+      imageRegistry,
+    );
+    if (shrunkHorizontally) _healRightEdgeWideGraphemes(buffer);
   }
 
   void _resizeTabStops(int newWidth) {

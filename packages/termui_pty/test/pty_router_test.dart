@@ -84,6 +84,7 @@ final class _FakeRoutedPtyBackend implements RoutedPtyBackend {
   final List<Uint8List> writtenChunks = [];
   final List<({int cols, int rows, int pixelWidth, int pixelHeight})> resizes =
       [];
+  final List<String> eventOrder = [];
   bool killed = false;
   bool disposed = false;
 
@@ -96,6 +97,7 @@ final class _FakeRoutedPtyBackend implements RoutedPtyBackend {
   @override
   void write(Uint8List bytes) {
     writtenChunks.add(Uint8List.fromList(bytes));
+    eventOrder.add('write:${utf8.decode(bytes, allowMalformed: true)}');
   }
 
   @override
@@ -106,6 +108,7 @@ final class _FakeRoutedPtyBackend implements RoutedPtyBackend {
       pixelWidth: pixelWidth,
       pixelHeight: pixelHeight,
     ));
+    eventOrder.add('resize:${cols}x$rows:${pixelWidth}x$pixelHeight');
   }
 
   @override
@@ -759,19 +762,23 @@ void main() {
           for (final w in backend.writtenChunks) utf8.decode(w),
         ], equals(['\x1b[48;24;80;384;640t']));
         backend.writtenChunks.clear();
+        backend.eventOrder.clear();
 
-        // Combined grid + cell pixel resize produces exactly one CSI 48 report.
+        // Combined grid + cell pixel resize updates TIOCSWINSZ before emitting CSI 48.
         port.setViewportSize(100, 30, cellPixelWidth: 16, cellPixelHeight: 32);
-        expect([
-          for (final w in backend.writtenChunks) utf8.decode(w),
-        ], equals(['\x1b[48;30;100;960;1600t']));
+        expect(
+          backend.eventOrder,
+          equals(['resize:100x30:1600x960', 'write:\x1b[48;30;100;960;1600t']),
+        );
         backend.writtenChunks.clear();
+        backend.eventOrder.clear();
 
-        // Cell-pixel-only change (same cols/rows, new DPR) also notifies.
+        // Cell-pixel-only change (same cols/rows, new DPR) also resizes backend before CSI 48.
         port.setViewportSize(100, 30, cellPixelWidth: 12, cellPixelHeight: 24);
-        expect([
-          for (final w in backend.writtenChunks) utf8.decode(w),
-        ], equals(['\x1b[48;30;100;720;1200t']));
+        expect(
+          backend.eventOrder,
+          equals(['resize:100x30:1200x720', 'write:\x1b[48;30;100;720;1200t']),
+        );
       },
     );
   });
