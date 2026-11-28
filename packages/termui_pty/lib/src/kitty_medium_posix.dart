@@ -525,3 +525,59 @@ KittyMediumReadResult readPosixKittyFile({
     lib.close(dirFd);
   }
 }
+
+/// Safely opens and reads a local regular file (`t=f`) on Linux/macOS without
+/// ever unlinking the target.
+///
+/// Opens [path] with `O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC`, verifies
+/// `S_ISREG`, `st_uid == geteuid()`, and `0 <= st_size <= maxBytes` via `fstat`
+/// on the open descriptor, and reads bytes via `pread`.
+KittyMediumReadResult readRegularFileSafe({
+  required String path,
+  required int maxBytes,
+  int offset = 0,
+  int? size,
+}) {
+  final lib = _loadPosixBindings();
+  if (lib == null) return const KittyMediumReadUnsupported();
+
+  final pathPtr = _allocCString(lib, path);
+  if (pathPtr == nullptr) return const KittyMediumReadInvalid();
+  final int fileFd;
+  try {
+    fileFd = lib.open(
+      pathPtr,
+      _oRdOnly | lib.abi.oNofollow | lib.abi.oNonblock | lib.abi.oCloexec,
+      0,
+    );
+  } finally {
+    lib.free(pathPtr);
+  }
+  if (fileFd < 0) {
+    return lib.errnoPtr().value == _enoent
+        ? const KittyMediumReadNotFound()
+        : const KittyMediumReadInvalid();
+  }
+  try {
+    final stat = _statFd(lib, fileFd);
+    if (stat == null ||
+        (stat.mode & _sIfmt) != _sIfreg ||
+        stat.uid != lib.geteuid() ||
+        stat.size < 0) {
+      return const KittyMediumReadInvalid();
+    }
+    if (stat.size > maxBytes) {
+      return const KittyMediumReadTooLarge();
+    }
+    return _preadSlice(
+      lib,
+      fileFd,
+      fileLen: stat.size,
+      maxBytes: maxBytes,
+      offset: offset,
+      size: size,
+    );
+  } finally {
+    lib.close(fileFd);
+  }
+}
