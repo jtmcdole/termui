@@ -49,6 +49,121 @@ int _premultiplyBlack(int color) {
   return 0xFF000000 | (r << 16) | (g << 8) | b;
 }
 
+/// Packed 28-bit Kitty Text Sizing (`OSC 66`) metadata for a single [Buffer] cell.
+///
+/// Bit layout (28 bits total, stored inside a lazy sparse `Uint32List`):
+/// - bits `0..2`   (3b): `scale` (`1..7`; `0` means [none])
+/// - bits `3..5`   (3b): `explicitWidth` (`0..7`; `0` = auto)
+/// - bits `6..9`   (4b): `numerator` (`0..15`)
+/// - bits `10..13` (4b): `denominator` (`0..15`)
+/// - bits `14..15` (2b): `vAlign` (`0` = top, `1` = bottom, `2` = center)
+/// - bits `16..17` (2b): `hAlign` (`0` = left, `1` = right, `2` = center)
+/// - bit  `18`     (1b): `isContinuation` (`1` for non-anchor multicell entries)
+/// - bits `19..24` (6b): `originDx` (`0..48`, covering `s * w <= 7 * 7 = 49`)
+/// - bits `25..27` (3b): `originDy` (`0..6`, covering `s <= 7`)
+extension type const KittyTextSizing(int bits) {
+  /// Sentinel value indicating no `OSC 66` text sizing is attached to a cell.
+  static const int none = 0;
+
+  static const int _scaleMask = 0x7;
+  static const int _widthShift = 3;
+  static const int _widthMask = 0x7;
+  static const int _numShift = 6;
+  static const int _numMask = 0xF;
+  static const int _denShift = 10;
+  static const int _denMask = 0xF;
+  static const int _vAlignShift = 14;
+  static const int _vAlignMask = 0x3;
+  static const int _hAlignShift = 16;
+  static const int _hAlignMask = 0x3;
+  static const int _continuationBit = 1 << 18;
+  static const int _originDxShift = 19;
+  static const int _originDxMask = 0x3F;
+  static const int _originDyShift = 25;
+  static const int _originDyMask = 0x7;
+
+  /// Packs Kitty `OSC 66` parameters into a 28-bit [KittyTextSizing] value.
+  factory KittyTextSizing.pack({
+    required int scale,
+    int explicitWidth = 0,
+    int numerator = 0,
+    int denominator = 0,
+    int vAlign = 0,
+    int hAlign = 0,
+    bool isContinuation = false,
+    int originDx = 0,
+    int originDy = 0,
+  }) {
+    final s = scale.clamp(1, 7);
+    final w = explicitWidth.clamp(0, 7);
+    final n = numerator.clamp(0, 15);
+    final d = denominator.clamp(0, 15);
+    final v = vAlign.clamp(0, 2);
+    final h = hAlign.clamp(0, 2);
+    final dx = originDx.clamp(0, 48);
+    final dy = originDy.clamp(0, 6);
+    return KittyTextSizing(
+      (s & _scaleMask) |
+          ((w & _widthMask) << _widthShift) |
+          ((n & _numMask) << _numShift) |
+          ((d & _denMask) << _denShift) |
+          ((v & _vAlignMask) << _vAlignShift) |
+          ((h & _hAlignMask) << _hAlignShift) |
+          (isContinuation ? _continuationBit : 0) |
+          ((dx & _originDxMask) << _originDxShift) |
+          ((dy & _originDyMask) << _originDyShift),
+    );
+  }
+
+  /// Whether this cell carries active `OSC 66` text sizing metadata.
+  bool get isActive => bits != none;
+
+  /// Integer scale factor (`1..7`, or `0` when [none]).
+  int get scale => bits & _scaleMask;
+
+  /// Explicit base cell width (`0..7`; `0` = auto).
+  int get explicitWidth => (bits >>> _widthShift) & _widthMask;
+
+  /// Fractional scale numerator (`0..15`).
+  int get numerator => (bits >>> _numShift) & _numMask;
+
+  /// Fractional scale denominator (`0..15`).
+  int get denominator => (bits >>> _denShift) & _denMask;
+
+  /// Vertical alignment (`0` = top, `1` = bottom, `2` = center).
+  int get vAlign => (bits >>> _vAlignShift) & _vAlignMask;
+
+  /// Horizontal alignment (`0` = left, `1` = right, `2` = center).
+  int get hAlign => (bits >>> _hAlignShift) & _hAlignMask;
+
+  /// Whether this cell is a continuation cell rather than the top-left anchor.
+  bool get isContinuation => (bits & _continuationBit) != 0;
+
+  /// Whether this cell is an active top-left anchor cell.
+  bool get isAnchor => isActive && !isContinuation;
+
+  /// Horizontal cell offset from the top-left anchor (`0..48`).
+  int get originDx => (bits >>> _originDxShift) & _originDxMask;
+
+  /// Vertical cell offset from the top-left anchor (`0..6`).
+  int get originDy => (bits >>> _originDyShift) & _originDyMask;
+
+  /// Fractional scale multiplier (`1.0` when fractional scaling is unused).
+  double get fraction => (numerator > 0 && denominator > numerator)
+      ? numerator / denominator
+      : 1.0;
+
+  /// Effective font scale multiplier (`scale * fraction`, or `1.0` when [none]).
+  double get fontScale => isActive ? scale * fraction : 1.0;
+
+  /// Total bounding box columns (`scale * max(1, explicitWidth)` when active, else `1`).
+  int get boxCols =>
+      isActive ? scale * (explicitWidth > 0 ? explicitWidth : 1) : 1;
+
+  /// Total bounding box rows (`scale` when active, else `1`).
+  int get boxRows => isActive ? scale : 1;
+}
+
 /// A 2D grid of cell data stored in parallel flat lists.
 class Buffer {
   static final int _traceClearId = Tracer.registerString('Buffer:clear');
@@ -86,6 +201,9 @@ class Buffer {
 
   /// Whether any cell in this buffer has a non-null OSC 8 hyperlink URI.
   bool get hasUris => _uris != null;
+
+  /// Lazily allocated array of packed 28-bit [KittyTextSizing] values (`0` = normal cell).
+  Uint32List? _textSizing;
 
   /// The list of terminal effects registered in this buffer.
   final List<RegisteredEffect> effects = [];
@@ -409,7 +527,7 @@ class Buffer {
     }
   }
 
-  /// Whether all cell channels (`char`, `fg`, `bg`, `modifiers`, `underlineColor`, `uri`)
+  /// Whether all cell channels (`char`, `fg`, `bg`, `modifiers`, `underlineColor`, `uri`, `textSizing`)
   /// at ([x], [y]) match [other] at ([ox], [oy]).
   bool cellsEqual(int x, int y, Buffer other, int ox, int oy) =>
       getCharacter(x, y) == other.getCharacter(ox, oy) &&
@@ -417,7 +535,8 @@ class Buffer {
       getBackground(x, y) == other.getBackground(ox, oy) &&
       getModifiers(x, y) == other.getModifiers(ox, oy) &&
       getUnderlineColor(x, y) == other.getUnderlineColor(ox, oy) &&
-      getUri(x, y) == other.getUri(ox, oy);
+      getUri(x, y) == other.getUri(ox, oy) &&
+      getTextSizing(x, y) == other.getTextSizing(ox, oy);
 
   /// Creates a new buffer of [width] by [height] initialized with transparent empty cell data.
   Buffer(this.width, this.height, {this.defaultBlend = true})
@@ -544,18 +663,26 @@ class Buffer {
   @pragma('vm:prefer-inline')
   void setUriAt(int cellIdx, String? uri) => _setUriAt(cellIdx, uri);
 
-  /// Copies SGR 58 underline color and OSC 8 URI from [source] at [srcIdx] to [dstIdx].
+  @pragma('vm:prefer-inline')
+  void _setTextSizingAt(int cellIdx, int bits) {
+    if (bits == 0 && _textSizing == null) return;
+    (_textSizing ??= Uint32List(width * height))[cellIdx] = bits;
+  }
+
+  /// Copies SGR 58 underline color, OSC 8 URI, and OSC 66 text sizing from [source] at [srcIdx] to [dstIdx].
   @pragma('vm:prefer-inline')
   void copyCellAuxAt(Buffer source, int dstIdx, int srcIdx) {
     _setUnderlineColorAt(dstIdx, source.getUnderlineColorAt(srcIdx));
     _setUriAt(dstIdx, source.getUriAt(srcIdx));
+    _setTextSizingAt(dstIdx, source.getTextSizingAt(srcIdx));
   }
 
-  /// Clears SGR 58 underline colors and OSC 8 URIs across `[start, end)`.
+  /// Clears SGR 58 underline colors, OSC 8 URIs, and OSC 66 text sizing across `[start, end)`.
   void clearCellAuxRange(int start, int end) {
     if (start >= end) return;
     _underlineColors?.fillRange(start, end, 0);
     _uris?.fillRange(start, end, null);
+    _textSizing?.fillRange(start, end, 0);
   }
 
   /// Copies `[srcStart, srcStart + count)` auxiliary attributes from [source] to `[dstStart, dstStart + count)`.
@@ -583,6 +710,14 @@ class Buffer {
     } else {
       _uris?.fillRange(dstStart, dstStart + count, null);
     }
+    final srcTs = source._textSizing;
+    if (srcTs != null) {
+      (_textSizing ??= Uint32List(
+        width * height,
+      )).setRange(dstStart, dstStart + count, srcTs, srcStart);
+    } else {
+      _textSizing?.fillRange(dstStart, dstStart + count, 0);
+    }
   }
 
   /// Copies non-empty SGR 58 underline colors across `[start, end)`, or `null` if all `0`.
@@ -605,16 +740,30 @@ class Buffer {
     return null;
   }
 
-  /// Writes optional [underlineColors] and [uris] slices into `[dstStart, dstStart + count)`.
+  /// Writes optional [underlineColors], [uris], and [textSizing] slices into
+  /// `[dstStart, dstStart + count)`.
   void writeCellAuxSlices(
     int dstStart,
     int count, {
     Uint32List? underlineColors,
     List<String?>? uris,
+    Uint32List? textSizing,
   }) {
     if (count <= 0) return;
     _writeUnderlineColorSlice(dstStart, count, underlineColors);
     _writeUriSlice(dstStart, count, uris);
+    _writeTextSizingSlice(dstStart, count, textSizing);
+  }
+
+  void _writeTextSizingSlice(int dstStart, int count, Uint32List? slice) {
+    if (slice == null || slice.isEmpty) {
+      _textSizing?.fillRange(dstStart, dstStart + count, 0);
+      return;
+    }
+    final dst = _textSizing ??= Uint32List(width * height);
+    final n = min(count, slice.length);
+    dst.setRange(dstStart, dstStart + n, slice, 0);
+    if (n < count) dst.fillRange(dstStart + n, dstStart + count, 0);
   }
 
   void _writeUnderlineColorSlice(int dstStart, int count, Uint32List? slice) {
@@ -718,6 +867,7 @@ class Buffer {
     attributes[attrIdx + 2] = _emptyModifiers;
     _underlineColors?[cellIdx] = 0;
     _uris?[cellIdx] = null;
+    _textSizing?[cellIdx] = 0;
   }
 
   @pragma('vm:prefer-inline')
@@ -789,6 +939,7 @@ class Buffer {
       attributes[idx + 2] = mod;
       _setUnderlineColorAt(cellIdx, underlineColor);
       _setUriAt(cellIdx, uri);
+      _textSizing?[cellIdx] = 0;
     }
   }
 
@@ -841,7 +992,11 @@ class Buffer {
       }
       final charCode = _glyphCells.encodeGrapheme(char);
       _glyphCells.setCodeAt(charIdx, charCode);
-      if (isWide && x + 1 < width) _placeWideContinuationAt(x, charIdx);
+      _textSizing?[charIdx] = 0;
+      if (isWide && x + 1 < width) {
+        _placeWideContinuationAt(x, charIdx);
+        _textSizing?[charIdx + 1] = 0;
+      }
     }
     _writeCellAttributes(
       charIdx * 3,
@@ -885,6 +1040,7 @@ class Buffer {
       attributes.fillRange(0, attributes.length, 0);
       _underlineColors?.fillRange(0, _underlineColors!.length, 0);
       _uris?.fillRange(0, _uris!.length, null);
+      _textSizing?.fillRange(0, _textSizing!.length, 0);
       for (var i = 2; i < attributes.length; i += 3) {
         attributes[i] = Modifier.transparent;
       }
@@ -915,6 +1071,7 @@ class Buffer {
         _glyphCells.length,
         _glyphCells.encodeGrapheme(char),
       );
+      _textSizing?.fillRange(0, _textSizing!.length, 0);
     }
     if (fg == null &&
         bg == null &&
@@ -959,19 +1116,7 @@ class Buffer {
     if (startX >= endX || startY >= endY) return;
 
     if (char != null) {
-      final clearWideEdges = char.isNotEmpty;
-      for (var y = startY; y < endY; y++) {
-        final rowOffset = y * width;
-        if (clearWideEdges) {
-          _clearSplitWideEdges(rowOffset, startX, endX);
-        }
-        final fillCode = _glyphCells.encodeGrapheme(char);
-        _glyphCells.fillCodeRange(
-          rowOffset + startX,
-          rowOffset + endX,
-          fillCode,
-        );
-      }
+      _fillRectChars(startX, startY, endX, endY, char);
     }
 
     if (fg == null &&
@@ -994,6 +1139,22 @@ class Buffer {
           uri: uri,
           blend: useBlend,
         );
+      }
+    }
+  }
+
+  void _fillRectChars(int startX, int startY, int endX, int endY, String char) {
+    final clearWideEdges = char.isNotEmpty;
+    final ts = _textSizing;
+    for (var y = startY; y < endY; y++) {
+      final rowOffset = y * width;
+      if (clearWideEdges) {
+        _clearSplitWideEdges(rowOffset, startX, endX);
+      }
+      final fillCode = _glyphCells.encodeGrapheme(char);
+      _glyphCells.fillCodeRange(rowOffset + startX, rowOffset + endX, fillCode);
+      if (ts != null) {
+        ts.fillRange(rowOffset + startX, rowOffset + endX, 0);
       }
     }
   }
@@ -1024,6 +1185,7 @@ class Buffer {
         attributes[attrIdx + 2] = Modifier.none;
         _setUnderlineColorAt(idx, 0);
         _setUriAt(idx, null);
+        _textSizing?[idx] = 0;
       }
     }
   }
@@ -1044,6 +1206,8 @@ class Buffer {
     Uint32List? newUl,
     List<String?>? oldUris,
     List<String?>? newUris,
+    Uint32List? oldTextSizing,
+    Uint32List? newTextSizing,
   ) {
     for (var y = 0; y < overlapHeight; y++) {
       final targetCharStart = y * newWidth;
@@ -1064,6 +1228,12 @@ class Buffer {
         targetCharStart,
         targetCharStart + overlapWidth,
         oldUris!,
+        sourceCharStart,
+      );
+      newTextSizing?.setRange(
+        targetCharStart,
+        targetCharStart + overlapWidth,
+        oldTextSizing!,
         sourceCharStart,
       );
       newAttributes.setRange(
@@ -1089,6 +1259,10 @@ class Buffer {
       final newUris = oldUris != null
           ? List<String?>.filled(newWidth * newHeight, null)
           : null;
+      final oldTextSizing = _textSizing;
+      final newTextSizing = oldTextSizing != null
+          ? Uint32List(newWidth * newHeight)
+          : null;
 
       if (_emptyModifiers != 0) {
         for (var i = 2; i < newAttributes.length; i += 3) {
@@ -1110,6 +1284,8 @@ class Buffer {
           newUl,
           oldUris,
           newUris,
+          oldTextSizing,
+          newTextSizing,
         );
       }
 
@@ -1121,6 +1297,7 @@ class Buffer {
       attributes = newAttributes;
       _underlineColors = newUl;
       _uris = newUris;
+      _textSizing = newTextSizing;
       _boundsClip = Rect(0, 0, width, height);
       final hadTransforms = hasCellTransforms;
       _cellTransforms?.resize(oldWidth, oldHeight, width, height);
@@ -1168,6 +1345,7 @@ class Buffer {
     attributes[attrIdx + 2] = modifiers;
     _setUnderlineColorAt(idx, ulColor);
     _setUriAt(idx, uri);
+    _textSizing?[idx] = 0;
   }
 
   void _writeAsciiString(int x, int y, String text, Style style) {
@@ -1319,6 +1497,208 @@ class Buffer {
       );
       currentX += charWidth;
     }
+  }
+}
+
+/// Sparse Kitty Text Sizing (`OSC 66`), rect clear/copy, and scoped Kitty
+/// registry accessors on [Buffer] (including [Viewport] wrappers).
+extension BufferTextSizing on Buffer {
+  /// Whether any cell in this buffer has non-zero `OSC 66` text sizing metadata.
+  bool get hasTextSizing => switch (this) {
+    final Viewport vp => vp.parent.hasTextSizing,
+    _ => _textSizing != null,
+  };
+
+  /// Gets the packed [KittyTextSizing] bits at ([x], [y]), or
+  /// [KittyTextSizing.none] (`0`) when unset or out of bounds.
+  int getTextSizing(int x, int y) {
+    if (this case final Viewport vp) {
+      if (x < 0 || x >= vp.bounds.width || y < 0 || y >= vp.bounds.height) {
+        return KittyTextSizing.none;
+      }
+      return vp.parent.getTextSizing(vp.bounds.x + x, vp.bounds.y + y);
+    }
+    final ts = _textSizing;
+    if (ts == null || !isCellValid(x, y)) return KittyTextSizing.none;
+    return ts[y * width + x];
+  }
+
+  /// Sets the packed [KittyTextSizing] [bits] at ([x], [y]) (`0` clears sizing).
+  void setTextSizing(int x, int y, int bits) {
+    if (this case final Viewport vp) {
+      if (x >= 0 && x < vp.bounds.width && y >= 0 && y < vp.bounds.height) {
+        vp.parent.setTextSizing(vp.bounds.x + x, vp.bounds.y + y, bits);
+      }
+      return;
+    }
+    if (!isCellValid(x, y)) return;
+    _setTextSizingAt(y * width + x, bits);
+  }
+
+  /// Gets the packed [KittyTextSizing] bits at flat index [cellIdx] (`0` when unset).
+  @pragma('vm:prefer-inline')
+  int getTextSizingAt(int cellIdx) {
+    if (this is Viewport) {
+      throw UnsupportedError(
+        'Flat cell index access not supported on Viewport',
+      );
+    }
+    return _textSizing?[cellIdx] ?? KittyTextSizing.none;
+  }
+
+  /// Sets the packed [KittyTextSizing] [bits] at flat index [cellIdx].
+  @pragma('vm:prefer-inline')
+  void setTextSizingAt(int cellIdx, int bits) {
+    if (this is Viewport) {
+      throw UnsupportedError(
+        'Flat cell index access not supported on Viewport',
+      );
+    }
+    _setTextSizingAt(cellIdx, bits);
+  }
+
+  /// Copies non-empty packed [KittyTextSizing] metadata across `[start, end)`,
+  /// or returns `null` if all cells are `0`.
+  Uint32List? sliceTextSizing(int start, int end) {
+    if (this is Viewport) {
+      throw UnsupportedError(
+        'Flat cell index access not supported on Viewport',
+      );
+    }
+    final ts = _textSizing;
+    if (ts == null || start >= end) return null;
+    for (var i = start; i < end; i++) {
+      if (ts[i] != KittyTextSizing.none) return ts.sublist(start, end);
+    }
+    return null;
+  }
+
+  /// Writes an optional packed [KittyTextSizing] [slice] into `[dstStart, dstStart + count)`.
+  void writeTextSizingSlice(int dstStart, int count, Uint32List? slice) {
+    if (this is Viewport) {
+      throw UnsupportedError(
+        'Flat cell index access not supported on Viewport',
+      );
+    }
+    if (count <= 0) return;
+    _writeTextSizingSlice(dstStart, count, slice);
+  }
+
+  /// Resets all cells within [rect] (clipped to [Buffer.activeClip]) to empty cells,
+  /// clearing underline colors, URIs, and `OSC 66` text sizing.
+  void clearRect(Rect rect) {
+    if (this case final Viewport vp) {
+      final clipped = Rect(
+        vp.bounds.x + rect.x,
+        vp.bounds.y + rect.y,
+        rect.width,
+        rect.height,
+      ).intersect(vp.bounds);
+      if (clipped.width > 0 && clipped.height > 0) {
+        vp.parent.clearRect(clipped);
+      }
+      return;
+    }
+    final clipped = _clipStack.isEmpty ? rect : activeClip.intersect(rect);
+    if (clipped.width <= 0 || clipped.height <= 0) return;
+    final startX = max(0, clipped.left);
+    final startY = max(0, clipped.top);
+    final endX = min(width, clipped.right);
+    final endY = min(height, clipped.bottom);
+    if (startX >= endX || startY >= endY) return;
+    for (var y = startY; y < endY; y++) {
+      final rowOffset = y * width;
+      _clearSplitWideEdges(rowOffset, startX, endX);
+      for (var x = startX; x < endX; x++) {
+        _resetCell(rowOffset + x);
+      }
+    }
+  }
+
+  /// Copies all cell channels (characters, attributes, underline colors, URIs,
+  /// and `OSC 66` text sizing) from [source] translated by ([dx], [dy]).
+  void copyFrom(Buffer source, {int dx = 0, int dy = 0}) {
+    if (this is Viewport || source is Viewport) {
+      _copyFromSlow(source, dx, dy);
+      return;
+    }
+    final clip = activeClip;
+    final minX = max(0, clip.left - dx);
+    final maxX = min(source.width, clip.right - dx);
+    final minY = max(0, clip.top - dy);
+    final maxY = min(source.height, clip.bottom - dy);
+    if (minX >= maxX || minY >= maxY) return;
+    final count = maxX - minX;
+    for (var y = minY; y < maxY; y++) {
+      final srcStart = y * source.width + minX;
+      final dstStart = (dy + y) * width + dx + minX;
+      _glyphCells.copyCellsFrom(source._glyphCells, dstStart, srcStart, count);
+      attributes.setRange(
+        dstStart * 3,
+        (dstStart + count) * 3,
+        source.attributes,
+        srcStart * 3,
+      );
+      copyCellAuxRangeFrom(source, dstStart, srcStart, count);
+    }
+  }
+
+  void _copyFromSlow(Buffer source, int dx, int dy) {
+    final minX = max(0, -dx);
+    final maxX = min(source.width, width - dx);
+    final minY = max(0, -dy);
+    final maxY = min(source.height, height - dy);
+    for (var y = minY; y < maxY; y++) {
+      for (var x = minX; x < maxX; x++) {
+        setCell(
+          dx + x,
+          dy + y,
+          source.getCharacter(x, y),
+          source.getForeground(x, y),
+          source.getBackground(x, y),
+          source.getModifiers(x, y),
+          blend: false,
+          underlineColor: source.getUnderlineColor(x, y),
+          uri: source.getUri(x, y),
+        );
+        final ts = source.getTextSizing(x, y);
+        if (ts != KittyTextSizing.none) {
+          setTextSizing(dx + x, dy + y, ts);
+        }
+      }
+    }
+  }
+
+  /// Read-only list of pane-scoped [KittyImageRegistry] registrations on this buffer.
+  ///
+  /// For [Viewport] wrappers, parent entries are intersected with [Viewport.bounds],
+  /// translated into viewport-local coordinates, and empty intersections are dropped.
+  List<({Rect bounds, KittyImageRegistry registry})> get scopedKittyRegistries {
+    if (this case final Viewport vp) {
+      return _viewportScopedKittyRegistries(vp);
+    }
+    return List.unmodifiable(_scopedKittyRegistries);
+  }
+
+  static List<({Rect bounds, KittyImageRegistry registry})>
+  _viewportScopedKittyRegistries(Viewport vp) {
+    final vpBounds = vp.bounds;
+    final result = <({Rect bounds, KittyImageRegistry registry})>[];
+    for (final entry in vp.parent.scopedKittyRegistries) {
+      final clipped = vpBounds.intersect(entry.bounds);
+      if (clipped.width > 0 && clipped.height > 0) {
+        result.add((
+          bounds: Rect(
+            clipped.x - vpBounds.x,
+            clipped.y - vpBounds.y,
+            clipped.width,
+            clipped.height,
+          ),
+          registry: entry.registry,
+        ));
+      }
+    }
+    return List.unmodifiable(result);
   }
 }
 
@@ -1509,6 +1889,7 @@ class Compositor {
   static void _initMasksFromTarget(Buffer target, _CompositeMasks masks) {
     final totalCells = target.width * target.height;
     final targetCodes = target.glyphCodes;
+    final targetTextSizing = target._textSizing;
     for (var i = 0; i < totalCells; i++) {
       final attrIdx = i * 3;
       if ((target.attributes[attrIdx + 2] & Modifier.transparent) != 0) {
@@ -1519,9 +1900,13 @@ class Compositor {
       final code = targetCodes[i];
       final fgAlpha = target.attributes[attrIdx].effectiveAlpha;
       final bgAlpha = target.attributes[attrIdx + 1].effectiveAlpha;
+      final hasSizing =
+          targetTextSizing != null &&
+          targetTextSizing[i] != KittyTextSizing.none;
 
       if ((code != GlyphCellList.spaceCode &&
               code != GlyphCellList.wideContinuationCode) ||
+          hasSizing ||
           bgAlpha == 255) {
         masks.charWritten[word] |= maskBit;
       }
@@ -1724,11 +2109,15 @@ class Compositor {
     bool fgOccluded,
   ) {
     final sourceCode = source.glyphCodes[sourceIdx];
-    if (sourceCode != GlyphCellList.spaceCode) {
+    final sourceTextSizing =
+        source._textSizing?[sourceIdx] ?? KittyTextSizing.none;
+    if (sourceCode != GlyphCellList.spaceCode ||
+        sourceTextSizing != KittyTextSizing.none) {
       _copyCompositeGlyph(target, targetIdx, source, sourceIdx, sourceCode);
       target.attributes[targetAttrIdx + 2] = sourceMods;
       target._setUnderlineColorAt(targetIdx, sourceUlColor);
       target._setUriAt(targetIdx, sourceUri);
+      target._setTextSizingAt(targetIdx, sourceTextSizing);
       masks.charWritten[word] |= maskBit;
       if ((sourceMods & Modifier.kittyPlaceholder) != 0) {
         target.attributes[targetAttrIdx] = sourceFg;
@@ -1742,6 +2131,7 @@ class Compositor {
       target.attributes[targetAttrIdx + 2] = sourceMods;
       target._setUnderlineColorAt(targetIdx, sourceUlColor);
       target._setUriAt(targetIdx, sourceUri);
+      target._setTextSizingAt(targetIdx, KittyTextSizing.none);
       masks.charWritten[word] |= maskBit;
       if (!fgOccluded && sourceFg == 0) {
         masks.fgWritten[word] |= maskBit;
@@ -1839,6 +2229,8 @@ class Compositor {
     if ((sourceMods & Modifier.transparent) != 0) return;
 
     final sourceCode = buf.glyphCodes[sourceIdx];
+    final sourceTextSizing =
+        buf._textSizing?[sourceIdx] ?? KittyTextSizing.none;
     final sourceFg = buf.attributes[sourceAttrIdx];
     final sourceBg = buf.attributes[sourceAttrIdx + 1];
     final targetAttrIdx = targetIdx * 3;
@@ -1849,6 +2241,7 @@ class Compositor {
 
     if (targetIsEmptyChar &&
         (sourceCode != GlyphCellList.spaceCode ||
+            sourceTextSizing != KittyTextSizing.none ||
             sourceBg.effectiveAlpha == 255)) {
       _copyCompositeGlyph(target, targetIdx, buf, sourceIdx, sourceCode);
       target.attributes[targetAttrIdx + 2] = sourceMods;
@@ -1857,6 +2250,7 @@ class Compositor {
         buf._underlineColors?[sourceIdx] ?? 0,
       );
       target._setUriAt(targetIdx, buf._uris?[sourceIdx]);
+      target._setTextSizingAt(targetIdx, sourceTextSizing);
     }
 
     if (targetIsEmptyChar || (sourceMods & Modifier.kittyPlaceholder) == 0) {

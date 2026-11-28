@@ -213,6 +213,7 @@ class Viewport implements Buffer {
     int count, {
     Uint32List? underlineColors,
     List<String?>? uris,
+    Uint32List? textSizing,
   }) => throw UnsupportedError(
     'Flat cell index access not supported on Viewport',
   );
@@ -350,7 +351,8 @@ class Viewport implements Buffer {
       getBackground(x, y) == other.getBackground(ox, oy) &&
       getModifiers(x, y) == other.getModifiers(ox, oy) &&
       getUnderlineColor(x, y) == other.getUnderlineColor(ox, oy) &&
-      getUri(x, y) == other.getUri(ox, oy);
+      getUri(x, y) == other.getUri(ox, oy) &&
+      getTextSizing(x, y) == other.getTextSizing(ox, oy);
 
   @override
   void addEffect(RegisteredEffect effect) {
