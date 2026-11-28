@@ -204,6 +204,7 @@ final class IoLocalHostDriver implements LocalHostDriver {
       colorScheme: config.colorScheme,
       allowLocalKittyMedia: config.allowLocalKittyMedia,
       allowLocalKittyShm: config.allowLocalKittyShm,
+      allowLocalKittyFiles: true,
     );
     final port = session.openPort(
       initialCols: config.initialCols,

@@ -42,7 +42,7 @@ typedef PaneAudioCallback = void Function(
 /// Callback notified when a pane's shell title updates via `OSC 0`/`OSC 2`.
 typedef PaneTitleCallback = void Function(String paneId, String title);
 
-/// Callback notified when a pane receives an `OSC 52` clipboard write.
+/// Callback notified when a pane receives an `OSC 52` or `OSC 5522` clipboard write.
 typedef PaneClipboardCallback = void Function(
   String paneId,
   String selection,
@@ -125,6 +125,7 @@ final class FtermPaneController {
   late final PaneCliShaderState _cliShaderState;
   TerminalColorResolver _colorResolver;
   tui.Buffer? _composedBuffer;
+  tui.KittyImageRegistry? _syncedLocalKittyRegistry;
   Timer? _resizeTimer;
   StreamSubscription<LocalShareSnapshot>? _shareSub;
 
@@ -843,6 +844,7 @@ final class FtermPaneController {
       final retained = _retainedScrollbackLines(sbWin);
       _scrollOffsetLines = _scrollOffsetLines.clamp(0, retained);
     }
+    _syncLocalKittyScrollOffset(src);
 
     var out = _composedBuffer;
     if (out == null || out.width != width || out.height != height) {
@@ -1058,13 +1060,18 @@ final class FtermPaneController {
       srcStartCell: 0,
     );
     out.clearCellAuxRange(dstOffset, dstOffset + out.width);
+    final underlineColors = line.underlineColors;
+    final uris = line.uris;
+    final textSizing = line.textSizing;
     for (var col = 0; col < copyCols; col++) {
-      final ul = line.underlineColors?[col] ?? 0;
+      final ul = underlineColors?[col] ?? 0;
       if (ul != 0) out.setUnderlineColorAt(dstOffset + col, ul);
-      final uri = line.uris?[col];
+      final uri = uris?[col];
       if (uri != null && uri.isNotEmpty) {
         out.setUriAt(dstOffset + col, uri);
       }
+      final ts = textSizing?[col] ?? 0;
+      if (ts != 0) out.setTextSizingAt(dstOffset + col, ts);
     }
     _fillRowTailBlank(out, dstOffset, copyCols);
   }
@@ -1159,6 +1166,26 @@ final class FtermPaneController {
     return cellIdx;
   }
 
+  tui.KittyImageRegistry? _resolveLocalKittyRegistry(tui.Buffer src) {
+    if (remotePort != null || remoteSessionId != null) return null;
+    if (src.width <= 0 || src.height <= 0) return null;
+    final registry = src.lookupKittyRegistry(0, 0);
+    return identical(registry, tui.KittyImageRegistry.global) ? null : registry;
+  }
+
+  void _syncLocalKittyScrollOffset(tui.Buffer src) {
+    final registry = _resolveLocalKittyRegistry(src);
+    final prev = _syncedLocalKittyRegistry;
+    if (prev != null && !identical(prev, registry)) {
+      prev.viewportScrollOffset = 0;
+    }
+    _syncedLocalKittyRegistry = registry;
+    if (registry == null) return;
+    registry.viewportScrollOffset = port.modes.altScreen
+        ? 0
+        : _scrollOffsetLines;
+  }
+
   void _propagateScrolledKittyMetadata(tui.Buffer out, tui.Buffer src) {
     final paneRegistry =
         remotePort?.slot.kittyRegistry ??
@@ -1198,6 +1225,8 @@ final class FtermPaneController {
   Future<void> dispose({bool disposePort = true}) async {
     if (_disposed) return;
     _disposed = true;
+    _syncedLocalKittyRegistry?.viewportScrollOffset = 0;
+    _syncedLocalKittyRegistry = null;
     _onBell = null;
     _onAudio = null;
     _onTitleChanged = null;
