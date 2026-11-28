@@ -50,13 +50,6 @@ ArgParser _buildArgParser() {
           'Wrap Kitty Graphics APC probe and control commands in tmux DCS '
           'passthrough envelopes.',
     )
-    ..addFlag(
-      'local-media',
-      negatable: false,
-      help:
-          'Create local temp-file (t=t) and shared-memory (t=s) fixtures to '
-          'probe optional Kitty graphics media.',
-    )
     ..addOption(
       'timeout-ms',
       defaultsTo: '600',
@@ -119,7 +112,6 @@ Future<int> _runSelfTest({
   required bool asJson,
   required Duration timeout,
   required bool wrapTmux,
-  required bool localMedia,
   required StringSink outSink,
   required StringSink errSink,
   required bool ansiColor,
@@ -130,7 +122,7 @@ Future<int> _runSelfTest({
     height: 30,
     defaultForeground: const Color(220, 228, 240),
     defaultBackground: const Color(18, 22, 32),
-    allowLocalKittyMedia: localMedia,
+    allowLocalKittyMedia: true,
     onReply: (reply) {
       final bytes = utf8.encode(reply);
       scheduleMicrotask(() {
@@ -141,7 +133,7 @@ Future<int> _runSelfTest({
   KttyLocalMediaProbeSession? mediaSession;
 
   try {
-    mediaSession = localMedia ? createLocalMediaProbeSession() : null;
+    mediaSession = createLocalMediaProbeSession();
     final report = await runKttyBatchProbe(
       wireInput: replies.stream,
       onWriteWire: vt.writeString,
@@ -171,7 +163,6 @@ Future<int> _runStdioBatchReport({
   required Duration timeout,
   required bool strict,
   required bool wrapTmux,
-  required bool localMedia,
   required StringSink outSink,
   required StringSink errSink,
   required bool hasStdinTerminal,
@@ -204,7 +195,7 @@ Future<int> _runStdioBatchReport({
         return 2;
       }
     }
-    mediaSession = localMedia ? createLocalMediaProbeSession() : null;
+    mediaSession = createLocalMediaProbeSession();
     ioBackend = IoTerminalBackend();
     final stopHandle = KttyProbeStopHandle();
     void abortProbe() {
@@ -275,7 +266,6 @@ void _printReport(
 Future<void> _runInteractiveStdio(
   Duration timeout, {
   required bool wrapTmux,
-  required bool localMedia,
   required StringSink errSink,
 }) async {
   final muxDiagnostics = await detectMultiplexerDiagnostics();
@@ -284,7 +274,7 @@ Future<void> _runInteractiveStdio(
   StreamSubscription<ProcessSignal>? sigintSub;
 
   try {
-    mediaSession = localMedia ? createLocalMediaProbeSession() : null;
+    mediaSession = createLocalMediaProbeSession();
     ioBackend = IoTerminalBackend();
     final rawSize = ioBackend.size;
     final initialSize = rawSize.x > 0 && rawSize.y > 0
@@ -385,14 +375,12 @@ Future<int> runKttyProbeCli(
   final asJson = results['json'] as bool;
   final strict = results['strict'] as bool;
   final wrapTmux = results['tmux-passthrough'] as bool;
-  final localMedia = results['local-media'] as bool;
 
   if (results['self-test'] as bool) {
     return _runSelfTest(
       asJson: asJson,
       timeout: timeout,
       wrapTmux: wrapTmux,
-      localMedia: localMedia,
       outSink: outSink,
       errSink: errSink,
       ansiColor: ansiColor,
@@ -405,7 +393,6 @@ Future<int> runKttyProbeCli(
       timeout: timeout,
       strict: strict,
       wrapTmux: wrapTmux,
-      localMedia: localMedia,
       outSink: outSink,
       errSink: errSink,
       hasStdinTerminal: stdinHasTerminal ?? stdin.hasTerminal,
@@ -420,12 +407,7 @@ Future<int> runKttyProbeCli(
     return 0;
   }
 
-  await _runInteractiveStdio(
-    timeout,
-    wrapTmux: wrapTmux,
-    localMedia: localMedia,
-    errSink: errSink,
-  );
+  await _runInteractiveStdio(timeout, wrapTmux: wrapTmux, errSink: errSink);
   return 0;
 }
 

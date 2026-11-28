@@ -629,12 +629,12 @@ void main() {
       return (exitCode: code, stdout: out.toString(), stderr: err.toString());
     }
 
-    test('--help prints usage including new Wave 4 flags', () async {
+    test('--help prints usage without requiring a local-media flag', () async {
       final result = await runCli(const ['--help']);
       expect(result.exitCode, equals(0));
       expect(result.stdout, contains('--strict'));
       expect(result.stdout, contains('--tmux-passthrough'));
-      expect(result.stdout, contains('--local-media'));
+      expect(result.stdout, isNot(contains('--local-media')));
     });
 
     test(
@@ -655,30 +655,28 @@ void main() {
       },
     );
 
-    test('--self-test --json --strict emits 26/26 core pass JSON', () async {
-      final result = await runCli(const ['--self-test', '--json', '--strict']);
-      expect(result.exitCode, equals(0), reason: result.stderr);
-      final decoded = jsonDecode(result.stdout) as Map<String, Object?>;
-      expect(decoded['coreSupported'], equals(26));
-      expect(decoded['coreUnsupported'], equals(0));
-    });
-
     test(
-      '--self-test --local-media --json --strict probes t=t without unlinking and cleans up',
+      '--self-test --json --strict automatically probes t=t without unlinking and cleans up',
       () async {
         final result = await runCli(const [
           '--self-test',
-          '--local-media',
           '--json',
           '--strict',
         ]);
         expect(result.exitCode, equals(0), reason: result.stderr);
         expect(result.stderr, isNot(contains('unexpectedly unlinked')));
         final decoded = jsonDecode(result.stdout) as Map<String, Object?>;
+        expect(decoded['coreSupported'], equals(26));
+        expect(decoded['coreUnsupported'], equals(0));
         final caps = (decoded['capabilities'] as List<Object?>)
             .cast<Map<String, Object?>>();
         final tempCap = caps.firstWhere((c) => c['id'] == 'apc_temp_file');
         expect(tempCap['status'], equals('supported'));
+        if (Platform.isWindows) {
+          final shmCap = caps.firstWhere((c) => c['id'] == 'apc_shm');
+          expect(shmCap['status'], equals('optionalDisabled'));
+          expect(shmCap['detail'], equals('Unavailable on this platform'));
+        }
       },
     );
 

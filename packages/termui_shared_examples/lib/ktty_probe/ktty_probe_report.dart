@@ -314,7 +314,12 @@ final class KttyProbeReport {
   }
 
   /// Resets all entries to [KttyCapabilityStatus.pending] for a fresh probe run.
-  void resetForNewProbe() {
+  ///
+  /// When [options] is provided, optional media entries whose host fixture is
+  /// unavailable on the current platform are immediately marked
+  /// [KttyCapabilityStatus.optionalDisabled] instead of remaining pending until
+  /// `DA1`.
+  void resetForNewProbe({KttyProbeOptions? options}) {
     probeRunCount++;
     isComplete = false;
     xtVersion = null;
@@ -329,6 +334,25 @@ final class KttyProbeReport {
     for (final entry in _entries.values) {
       entry.status = .pending;
       entry.detail = 'Probing...';
+    }
+    if (options != null) {
+      if (options.tempProbeFilePath == null ||
+          options.tempProbeFilePath!.isEmpty) {
+        _updateEntry(
+          'apc_temp_file',
+          .optionalDisabled,
+          'Unavailable on this platform',
+          notify: false,
+        );
+      }
+      if (options.shmProbeName == null || options.shmProbeName!.isEmpty) {
+        _updateEntry(
+          'apc_shm',
+          .optionalDisabled,
+          'Unavailable on this platform',
+          notify: false,
+        );
+      }
     }
     _notify();
   }
