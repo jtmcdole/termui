@@ -1262,8 +1262,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     // Avoid submitting concurrent background GPU frames while direct resource
     // priming (which may invoke IO-thread ui.Image.toByteData on Windows) is
     // still in flight, preventing ANGLE/D3D11 Present-vs-readback deadlocks.
-    if (_directPrepareInFlight &&
-        _directFallbackReason == _DirectFallbackReason.priming) {
+    if (_directPrepareInFlight) {
       return _backgroundOutputImage;
     }
     final physicalSize = Size(
@@ -1853,25 +1852,33 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     final kittyImages = <ui.Image>[
       for (final quad in batch.kittyQuads) quad.image,
     ];
-    unawaited(
-      backend
-          .prepareDirectResources(
-            atlasImage: atlasImage,
-            wallpaperImage: wallpaper,
-            kittyImages: kittyImages,
-          )
-          .then(
-            (ready) => _handleDirectPrepareComplete(
-              backend: backend,
-              generation: generation,
-              ready: ready,
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _directPrepareGeneration) return;
+      if (!identical(_directBackend, backend)) {
+        _directPrepareInFlight = false;
+        _syncTicker();
+        return;
+      }
+      unawaited(
+        backend
+            .prepareDirectResources(
               atlasImage: atlasImage,
-              wallpaper: wallpaper,
+              wallpaperImage: wallpaper,
               kittyImages: kittyImages,
-            ),
-          )
-          .catchError((Object _) => _handleDirectPrepareError(generation)),
-    );
+            )
+            .then(
+              (ready) => _handleDirectPrepareComplete(
+                backend: backend,
+                generation: generation,
+                ready: ready,
+                atlasImage: atlasImage,
+                wallpaper: wallpaper,
+                kittyImages: kittyImages,
+              ),
+            )
+            .catchError((Object _) => _handleDirectPrepareError(generation)),
+      );
+    });
   }
 
   void _handleDirectPrepareComplete({
