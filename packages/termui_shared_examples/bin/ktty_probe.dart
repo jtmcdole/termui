@@ -76,27 +76,33 @@ KttyProbeOptions _buildProbeOptions({
   );
 }
 
-void _warnIfLocalMediaUnlinked(KttyLocalMediaProbeSession? mediaSession) {
+void _warnIfLocalMediaUnlinked(
+  KttyLocalMediaProbeSession? mediaSession,
+  StringSink errSink,
+) {
   if (mediaSession == null) return;
   if (mediaSession.tempFilePath != null && !mediaSession.tempFileStillExists) {
-    stderr.writeln(
+    errSink.writeln(
       'Warning: Kitty a=q,t=t unexpectedly unlinked temp probe file '
       '(${mediaSession.tempFilePath}).',
     );
   }
   if (mediaSession.shmObjectName != null && !mediaSession.shmStillExists) {
-    stderr.writeln(
+    errSink.writeln(
       'Warning: Kitty a=q,t=s unexpectedly unlinked shared-memory probe '
       'object (${mediaSession.shmObjectName}).',
     );
   }
 }
 
-void _printMultiplexerHintsToStderr(KttyMultiplexerDiagnostics? diagnostics) {
+void _printMultiplexerHintsToStderr(
+  KttyMultiplexerDiagnostics? diagnostics,
+  StringSink errSink,
+) {
   if (diagnostics == null || diagnostics.hints.isEmpty) return;
-  stderr.writeln('Multiplexer diagnostics (${diagnostics.multiplexer}):');
+  errSink.writeln('Multiplexer diagnostics (${diagnostics.multiplexer}):');
   for (final hint in diagnostics.hints) {
-    stderr.writeln('  Hint: $hint');
+    errSink.writeln('  Hint: $hint');
   }
 }
 
@@ -114,6 +120,9 @@ Future<int> _runSelfTest({
   required Duration timeout,
   required bool wrapTmux,
   required bool localMedia,
+  required StringSink outSink,
+  required StringSink errSink,
+  required bool ansiColor,
 }) async {
   final replies = StreamController<List<int>>.broadcast();
   final vt = VirtualTerminal(
@@ -142,8 +151,13 @@ Future<int> _runSelfTest({
         mediaSession: mediaSession,
       ),
     );
-    _warnIfLocalMediaUnlinked(mediaSession);
-    _printReport(report, asJson: asJson);
+    _warnIfLocalMediaUnlinked(mediaSession, errSink);
+    _printReport(
+      report,
+      asJson: asJson,
+      outSink: outSink,
+      ansiColor: ansiColor,
+    );
     return report.coreUnsupportedCount == 0 ? 0 : 1;
   } finally {
     mediaSession?.dispose();
@@ -158,9 +172,13 @@ Future<int> _runStdioBatchReport({
   required bool strict,
   required bool wrapTmux,
   required bool localMedia,
+  required StringSink outSink,
+  required StringSink errSink,
+  required bool hasStdinTerminal,
+  required bool ansiColor,
 }) async {
-  if (!stdin.hasTerminal) {
-    stderr.writeln(
+  if (!hasStdinTerminal) {
+    errSink.writeln(
       'ktty_probe --report requires an interactive TTY on stdin '
       '(or pass --self-test to probe VirtualTerminal).',
     );
@@ -179,7 +197,7 @@ Future<int> _runStdioBatchReport({
     if (!Platform.isWindows) {
       ttyOut = _openControllingTtyForWrite();
       if (ttyOut == null) {
-        stderr.writeln(
+        errSink.writeln(
           'ktty_probe --report could not open /dev/tty for writing probes '
           '(or pass --self-test to probe VirtualTerminal).',
         );
@@ -221,8 +239,13 @@ Future<int> _runStdioBatchReport({
     report.multiplexerDiagnostics = muxDiagnostics;
     ioBackend.disableRawMode();
     if (aborted) return 130;
-    _warnIfLocalMediaUnlinked(mediaSession);
-    _printReport(report, asJson: asJson);
+    _warnIfLocalMediaUnlinked(mediaSession, errSink);
+    _printReport(
+      report,
+      asJson: asJson,
+      outSink: outSink,
+      ansiColor: ansiColor,
+    );
     return strict && report.coreUnsupportedCount > 0 ? 1 : 0;
   } finally {
     await ctrlCSub?.cancel();
@@ -234,15 +257,18 @@ Future<int> _runStdioBatchReport({
   }
 }
 
-void _printReport(KttyProbeReport report, {required bool asJson}) {
+void _printReport(
+  KttyProbeReport report, {
+  required bool asJson,
+  required StringSink outSink,
+  required bool ansiColor,
+}) {
   if (asJson) {
-    stdout.writeln(
+    outSink.writeln(
       const JsonEncoder.withIndent('  ').convert(report.toJsonMap()),
     );
   } else {
-    stdout.write(
-      report.formatPlainReport(ansiColor: stdout.supportsAnsiEscapes),
-    );
+    outSink.write(report.formatPlainReport(ansiColor: ansiColor));
   }
 }
 
@@ -250,6 +276,7 @@ Future<void> _runInteractiveStdio(
   Duration timeout, {
   required bool wrapTmux,
   required bool localMedia,
+  required StringSink errSink,
 }) async {
   final muxDiagnostics = await detectMultiplexerDiagnostics();
   KttyLocalMediaProbeSession? mediaSession;
@@ -290,8 +317,8 @@ Future<void> _runInteractiveStdio(
       ),
     );
     ioBackend.disableRawMode();
-    _warnIfLocalMediaUnlinked(mediaSession);
-    _printMultiplexerHintsToStderr(muxDiagnostics);
+    _warnIfLocalMediaUnlinked(mediaSession, errSink);
+    _printMultiplexerHintsToStderr(muxDiagnostics, errSink);
   } finally {
     mediaSession?.dispose();
     await sigintSub?.cancel();
@@ -308,42 +335,51 @@ int _countSelectedModes(ArgResults results) {
   return count;
 }
 
-/// CLI entrypoint for the standalone KTTY capability probe and TUI check suite.
-Future<void> main(List<String> arguments) async {
+/// Runs the standalone KTTY probe CLI and returns its process exit code.
+Future<int> runKttyProbeCli(
+  List<String> arguments, {
+  StringSink? stdoutSink,
+  StringSink? stderrSink,
+  bool? stdinHasTerminal,
+  bool? stdoutSupportsAnsi,
+}) async {
+  final outSink = stdoutSink ?? stdout;
+  final errSink = stderrSink ?? stderr;
+  final ansiColor = stdoutSupportsAnsi ?? stdout.supportsAnsiEscapes;
   final parser = _buildArgParser();
   final ArgResults results;
   try {
     results = parser.parse(arguments);
   } on FormatException catch (e) {
-    stderr.writeln(e.message);
-    stderr.writeln(parser.usage);
-    exit(64);
+    errSink.writeln(e.message);
+    errSink.writeln(parser.usage);
+    return 64;
   }
 
   if (results['help'] as bool) {
-    stdout.writeln(
+    outSink.writeln(
       'KTTY Probe: Standalone Kitty & VT capability diagnostic suite.\n',
     );
-    stdout.writeln(parser.usage);
-    exit(0);
+    outSink.writeln(parser.usage);
+    return 0;
   }
 
   if (_countSelectedModes(results) > 1) {
-    stderr.writeln(
+    errSink.writeln(
       'Specify at most one of --self-test, --report, or --virtual.',
     );
-    stderr.writeln(parser.usage);
-    exit(64);
+    errSink.writeln(parser.usage);
+    return 64;
   }
 
   final timeoutRaw = results['timeout-ms'] as String;
   final timeoutMs = int.tryParse(timeoutRaw);
   if (timeoutMs == null || timeoutMs <= 0) {
-    stderr.writeln(
+    errSink.writeln(
       'Invalid --timeout-ms value: "$timeoutRaw" (expected positive integer).',
     );
-    stderr.writeln(parser.usage);
-    exit(64);
+    errSink.writeln(parser.usage);
+    return 64;
   }
   final timeout = Duration(milliseconds: max(50, timeoutMs));
   final asJson = results['json'] as bool;
@@ -352,37 +388,48 @@ Future<void> main(List<String> arguments) async {
   final localMedia = results['local-media'] as bool;
 
   if (results['self-test'] as bool) {
-    final code = await _runSelfTest(
+    return _runSelfTest(
       asJson: asJson,
       timeout: timeout,
       wrapTmux: wrapTmux,
       localMedia: localMedia,
+      outSink: outSink,
+      errSink: errSink,
+      ansiColor: ansiColor,
     );
-    exit(code);
   }
 
   if (results['report'] as bool) {
-    final code = await _runStdioBatchReport(
+    return _runStdioBatchReport(
       asJson: asJson,
       timeout: timeout,
       strict: strict,
       wrapTmux: wrapTmux,
       localMedia: localMedia,
+      outSink: outSink,
+      errSink: errSink,
+      hasStdinTerminal: stdinHasTerminal ?? stdin.hasTerminal,
+      ansiColor: ansiColor,
     );
-    exit(code);
   }
 
   if (results['virtual'] as bool) {
     await term.Terminal.runGuarded((terminal) async {
       await runVirtualTerminalKttyProbe(terminal);
     });
-    exit(0);
+    return 0;
   }
 
   await _runInteractiveStdio(
     timeout,
     wrapTmux: wrapTmux,
     localMedia: localMedia,
+    errSink: errSink,
   );
-  exit(0);
+  return 0;
+}
+
+/// CLI entrypoint for the standalone KTTY capability probe and TUI check suite.
+Future<void> main(List<String> arguments) async {
+  exit(await runKttyProbeCli(arguments));
 }
