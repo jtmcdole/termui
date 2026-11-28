@@ -733,5 +733,46 @@ void main() {
         expect(port.modes.mouseCursorShape, isNull);
       },
     );
+
+    test(
+      'setEndpointViewport emits a single atomic DECSET 2048 notification for combined grid and cell pixel updates',
+      () async {
+        final backend = _FakeRoutedPtyBackend();
+        final router = PtyRouter();
+        final session = router.createSession(
+          id: 'sess-2048',
+          backend: backend,
+          initialCols: 80,
+          initialRows: 24,
+          cellPixelWidth: 8,
+          cellPixelHeight: 16,
+        );
+        final port = session.openPort();
+        addTearDown(() async {
+          await port.dispose();
+          await router.dispose();
+        });
+
+        backend.emitOutput('\x1b[?2048h');
+        await Future<void>.delayed(Duration.zero);
+        expect([
+          for (final w in backend.writtenChunks) utf8.decode(w),
+        ], equals(['\x1b[48;24;80;384;640t']));
+        backend.writtenChunks.clear();
+
+        // Combined grid + cell pixel resize produces exactly one CSI 48 report.
+        port.setViewportSize(100, 30, cellPixelWidth: 16, cellPixelHeight: 32);
+        expect([
+          for (final w in backend.writtenChunks) utf8.decode(w),
+        ], equals(['\x1b[48;30;100;960;1600t']));
+        backend.writtenChunks.clear();
+
+        // Cell-pixel-only change (same cols/rows, new DPR) also notifies.
+        port.setViewportSize(100, 30, cellPixelWidth: 12, cellPixelHeight: 24);
+        expect([
+          for (final w in backend.writtenChunks) utf8.decode(w),
+        ], equals(['\x1b[48;30;100;720;1200t']));
+      },
+    );
   });
 }

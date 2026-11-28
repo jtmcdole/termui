@@ -243,5 +243,74 @@ void main() {
         );
       },
     );
+
+    test(
+      'DECSET 2048 in-band window resize notifications, DECRQM, atomic resize, and reset',
+      () {
+        final replies = <String>[];
+        final vt = VirtualTerminal(
+          width: 80,
+          height: 24,
+          cellPixelWidth: 12,
+          cellPixelHeight: 24,
+          onReply: replies.add,
+        );
+
+        // Initially reset (Pm = 2) and silent on resize.
+        vt.writeString('\x1b[?2048\$p');
+        expect(replies, equals(<String>['\x1b[?2048;2\$y']));
+        expect(vt.inBandWindowResize, isFalse);
+        replies.clear();
+
+        vt.resize(100, 30);
+        vt.setCellPixelSize(16, 32);
+        expect(replies, isEmpty);
+
+        // Enabling ?2048h immediately emits the current window size report.
+        vt.writeString('\x1b[?2048h\x1b[?2048\$p');
+        expect(vt.inBandWindowResize, isTrue);
+        expect(
+          replies,
+          equals(<String>['\x1b[48;30;100;960;1600t', '\x1b[?2048;1\$y']),
+        );
+        replies.clear();
+
+        // Grid-only resize emits a single report.
+        vt.resize(120, 40);
+        expect(replies, equals(<String>['\x1b[48;40;120;1280;1920t']));
+        replies.clear();
+
+        // Cell-pixel-only change (e.g. monitor DPR change) emits a single report.
+        vt.setCellPixelSize(12, 24);
+        expect(replies, equals(<String>['\x1b[48;40;120;960;1440t']));
+        replies.clear();
+
+        // Combined grid + cell pixel resize emits a single atomic report.
+        vt.resize(90, 25, cellPixelWidth: 10, cellPixelHeight: 20);
+        expect(replies, equals(<String>['\x1b[48;25;90;500;900t']));
+        replies.clear();
+
+        // No-op resize emits nothing.
+        vt.resize(90, 25, cellPixelWidth: 10, cellPixelHeight: 20);
+        expect(replies, isEmpty);
+
+        // Disabling ?2048l suppresses further reports.
+        vt.writeString('\x1b[?2048l\x1b[?2048\$p');
+        expect(vt.inBandWindowResize, isFalse);
+        expect(replies, equals(<String>['\x1b[?2048;2\$y']));
+        replies.clear();
+
+        vt.resize(80, 24);
+        expect(replies, isEmpty);
+
+        // Re-enable and verify RIS clears mode 2048.
+        vt.writeString('\x1b[?2048h');
+        replies.clear();
+        vt.writeString('\x1bc');
+        expect(vt.inBandWindowResize, isFalse);
+        vt.resize(70, 20);
+        expect(replies, isEmpty);
+      },
+    );
   });
 }

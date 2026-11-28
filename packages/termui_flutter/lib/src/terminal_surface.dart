@@ -128,6 +128,11 @@ final class TerminalSurface extends StatefulWidget {
   final String? Function()? mouseCursorNameProvider;
 
   /// Callback invoked on initial layout or when grid/cell metrics change.
+  ///
+  /// [cellWidth] and [cellHeight] are reported in physical device pixels
+  /// (`atlas.cellWidth * devicePixelRatio`, `atlas.cellHeight * devicePixelRatio`)
+  /// to match `TIOCSWINSZ`, `XTWINOPS` (`CSI 14 t` / `16 t`), Kitty graphics,
+  /// and `DECSET 2048` in-band resize coordinates.
   final void Function(int cols, int rows, double cellWidth, double cellHeight)?
   onViewportSizeChanged;
 
@@ -2072,8 +2077,9 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       maxCol,
       maxRow,
     );
-    final pixelX = event.localPosition.dx.floor().clamp(0, 100000) + 1;
-    final pixelY = event.localPosition.dy.floor().clamp(0, 100000) + 1;
+    final dpr = _effectiveDpr(atlas);
+    final pixelX = (event.localPosition.dx * dpr).floor().clamp(0, 100000) + 1;
+    final pixelY = (event.localPosition.dy * dpr).floor().clamp(0, 100000) + 1;
     final steps = rawSteps.abs().clamp(1, _maxWheelStepsPerEvent);
     final button = rawSteps < 0
         ? term.MouseButton.wheelUp
@@ -2154,15 +2160,19 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       maxCol,
       maxRow,
     );
+    final dpr = _effectiveDpr(atlas);
     return (
       col: clampedCol,
       row: clampedRow,
       rawRow: rawRow,
       effRows: effRows,
-      pixelX: event.localPosition.dx.floor().clamp(0, 100000) + 1,
-      pixelY: event.localPosition.dy.floor().clamp(0, 100000) + 1,
+      pixelX: (event.localPosition.dx * dpr).floor().clamp(0, 100000) + 1,
+      pixelY: (event.localPosition.dy * dpr).floor().clamp(0, 100000) + 1,
     );
   }
+
+  static double _effectiveDpr(GlyphAtlas atlas) =>
+      atlas.devicePixelRatio > 0 ? atlas.devicePixelRatio : 1.0;
 
   Size? _resolveLogicalLayoutSize() {
     final cached = _lastLayoutSize;
@@ -2827,7 +2837,13 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       atlas.cellWidth,
       atlas.cellHeight,
     );
-    _syncTerminalSizeAndIme(cols, rows, atlas.cellWidth, atlas.cellHeight);
+    final dpr = _effectiveDpr(atlas);
+    _syncTerminalSizeAndIme(
+      cols,
+      rows,
+      atlas.cellWidth * dpr,
+      atlas.cellHeight * dpr,
+    );
 
     final layoutSize = Size(cols * atlas.cellWidth, rows * atlas.cellHeight);
     _lastLayoutSize = layoutSize;
