@@ -39,6 +39,37 @@ const int kttyProbeShmId = 909;
 /// Probe image ID reserved for `tmux` DCS passthrough APC verification.
 const int kttyProbeTmuxApcId = 910;
 
+/// Probe image ID for the Kitty Graphics crop, sub-cell offset, and z-layer check.
+const int kttyProbeCropLayerId = 911;
+
+/// Probe placement ID for the Kitty Graphics crop and z-layer check.
+const int kttyProbeCropPlacementId = 11;
+
+/// Probe image ID for the Kitty Graphics animation (`a=f`/`a=a`/`a=c`/`d=f`) check.
+const int kttyProbeAnimId = 912;
+
+/// Probe image ID for the optional Kitty Graphics regular-file (`t=f`) check.
+const int kttyProbeFileId = 913;
+
+/// Query correlation ID for the optional TermUI Audio APC (`a=wave`) check.
+const int kttyProbeAudioWaveRequestId = 914;
+
+/// Palette color index temporarily probed during `OSC 30001`/`30101` stack checks.
+const int kttyProbeColorStackIndex = 255;
+
+/// Distinct sentinel color (`#01FE02`) used during `OSC 30001`/`30101` verification.
+const String kttyProbeColorStackSentinelHex = '#01FE02';
+
+/// Correlation ID for the `OSC 5522` clipboard write capability probe.
+const String kttyProbeOsc5522Id = 'ktty-probe';
+
+/// Optional TermUI Shader APC capability query (`ESC _ S a=query ST`).
+const String kttyProbeShaderApcCommand = '\x1b_Sa=query\x1b\\';
+
+/// Optional TermUI Audio APC waveform capability query (`ESC _ A a=wave,q=914; ST`).
+const String kttyProbeAudioApcCommand =
+    '\x1b_Aa=wave,q=$kttyProbeAudioWaveRequestId;\x1b\\';
+
 /// Visual showcase image ID for 24-bit raw RGBA (`f=32`).
 const int kttyVisualRgbaImageId = 0x004B01;
 
@@ -50,6 +81,9 @@ const int kttyVisualPngImageId = 0x004B03;
 
 /// Visual showcase image ID for shorthand `U+10EEEE` cells (24-bit, MSB `0`).
 const int kttyVisualShorthandImageId = 0x004B04;
+
+/// Visual showcase image ID for the 2-frame animated Kitty tile preview.
+const int kttyVisualAnimatedImageId = 0x004B05;
 
 final Uint32List _crc32Table = _buildCrc32Table();
 
@@ -164,9 +198,11 @@ Uint8List encodeRgbaPng(int width, int height, Uint8List rgba) {
   return out.takeBytes();
 }
 
-/// Builds the non-visual Kitty Graphics `APC` probe commands (`q=0`),
-/// including chunked upload, `d=a`/`a=p` persistence, `I=` image numbers,
-/// cleanup deletes for temporary probes, and optional `t=t`/`t=s` queries.
+/// Builds the non-visual Kitty Graphics and TermUI extension `APC` probe
+/// commands (`q=0`), including chunked upload, `d=a`/`a=p` persistence, `I=`
+/// image numbers, crop + z-layer (`x,y,w,h,X,Y,z=-1` + `d=z`), animations
+/// (`a=f`/`a=a`/`a=c` + `d=f`), cleanup deletes for temporary probes, and
+/// optional `t=t`/`t=s`/`t=f`/Shader/Audio APC queries.
 String buildKittyApcProbeCommands({
   KttyProbeOptions options = const KttyProbeOptions(),
 }) {
@@ -174,7 +210,12 @@ String buildKittyApcProbeCommands({
     40, 210, 255, 255, 255, 110, 190, 255, //
     110, 255, 170, 255, 255, 220, 90, 255,
   ]);
+  final altRgba = Uint8List.fromList(const [
+    255, 120, 90, 255, 90, 240, 200, 255, //
+    240, 210, 80, 255, 120, 140, 255, 255,
+  ]);
   final rawB64 = base64Encode(sampleRgba);
+  final altRawB64 = base64Encode(altRgba);
   final zlibB64 = base64Encode(encodeZlibStoredBlocks(sampleRgba));
   final pngB64 = base64Encode(encodeRgbaPng(2, 2, sampleRgba));
   final splitAt = (rawB64.length ~/ 2) & ~3;
@@ -195,6 +236,17 @@ String buildKittyApcProbeCommands({
     '\x1b_Ga=d,d=I,i=$kttyProbePlaceId,q=2\x1b\\',
     '\x1b_GI=$kttyProbeImageNumber,s=2,v=2,a=t,t=d,f=32,q=0;$rawB64\x1b\\',
     '\x1b_Ga=d,d=N,I=$kttyProbeImageNumber,q=2\x1b\\',
+    '\x1b_Gi=$kttyProbeCropLayerId,s=2,v=2,a=t,t=d,f=32,q=2;$rawB64\x1b\\',
+    '\x1b_Ga=p,i=$kttyProbeCropLayerId,p=$kttyProbeCropPlacementId,'
+        'x=0,y=0,w=2,h=2,X=1,Y=1,z=-1,c=1,r=1,C=1,q=0\x1b\\',
+    '\x1b_Ga=d,d=z,z=-1,q=2\x1b\\',
+    '\x1b_Ga=d,d=I,i=$kttyProbeCropLayerId,q=2\x1b\\',
+    '\x1b_Gi=$kttyProbeAnimId,s=2,v=2,a=t,t=d,f=32,q=2;$rawB64\x1b\\',
+    '\x1b_Gi=$kttyProbeAnimId,a=f,s=2,v=2,f=32,z=40,q=0;$altRawB64\x1b\\',
+    '\x1b_Gi=$kttyProbeAnimId,a=a,s=3,v=1,q=0\x1b\\',
+    '\x1b_Gi=$kttyProbeAnimId,a=c,r=1,c=2,w=1,h=1,q=0\x1b\\',
+    '\x1b_Ga=d,d=f,i=$kttyProbeAnimId,q=2\x1b\\',
+    '\x1b_Ga=d,d=I,i=$kttyProbeAnimId,q=2\x1b\\',
   ];
 
   final tempPath = options.tempProbeFilePath;
@@ -211,6 +263,16 @@ String buildKittyApcProbeCommands({
       '\x1b_Gi=$kttyProbeShmId,s=2,v=2,a=q,t=s,f=32,q=0;$shmB64\x1b\\',
     );
   }
+  final filePath = options.fileProbeFilePath;
+  if (filePath != null && filePath.isNotEmpty) {
+    final fileB64 = base64Encode(utf8.encode(filePath));
+    commands.add(
+      '\x1b_Gi=$kttyProbeFileId,s=2,v=2,a=q,t=f,f=32,q=0;$fileB64\x1b\\',
+    );
+  }
+  commands
+    ..add(kttyProbeShaderApcCommand)
+    ..add(kttyProbeAudioApcCommand);
   if (!options.wrapTmuxPassthrough) return commands.join();
   return commands.map(wrapTmuxDcsPassthrough).join();
 }
@@ -421,4 +483,107 @@ String buildShorthandPlacementApcCommands({int cols = 12, int rows = 4}) {
   const id = kttyVisualShorthandImageId;
   return '\x1b_Ga=p,U=1,i=$id,p=1,c=$cols,r=$rows,q=2\x1b\\'
       '\x1b_Ga=p,U=1,i=$id,p=2,c=$cols,r=$rows,q=2\x1b\\';
+}
+
+(int r, int g, int b) _animatedBeaconPixel(
+  int x,
+  int y,
+  int pw,
+  int ph,
+  double phaseOffset,
+) {
+  if (x < 2 || x >= pw - 2 || y < 2 || y >= ph - 2) {
+    return phaseOffset == 0.0 ? (110, 255, 200) : (255, 190, 110);
+  }
+  final aspect = pw / ph;
+  final dx = ((x + 0.5) / pw * 2.0 - 1.0) * aspect;
+  final dy = (y + 0.5) / ph * 2.0 - 1.0;
+  final dist = math.sqrt(dx * dx + dy * dy);
+  final angle = math.atan2(dy, dx) + phaseOffset;
+  final beam = 0.5 + 0.5 * math.cos(angle * 2.0);
+  final pulse = _smoothstep(
+    0.35,
+    0.95,
+    0.5 + 0.5 * math.sin(dist * 14.0 + phaseOffset),
+  );
+  final r = (36.0 + beam * 165.0 + pulse * 45.0).round().clamp(0, 255);
+  final g = (48.0 + (1.0 - beam) * 145.0 + pulse * 55.0).round().clamp(0, 255);
+  final b = (92.0 + pulse * 140.0).round().clamp(0, 255);
+  return (r, g, b);
+}
+
+KittyImageData _buildAnimatedFrameTile({
+  required int cols,
+  required int rows,
+  required double phaseOffset,
+  required int version,
+}) {
+  const pw = 144;
+  const ph = 96;
+  final rgba = Uint8List(pw * ph * 4);
+  for (var y = 0; y < ph; y++) {
+    for (var x = 0; x < pw; x++) {
+      final (r, g, b) = _animatedBeaconPixel(x, y, pw, ph, phaseOffset);
+      final idx = (y * pw + x) * 4;
+      rgba[idx] = r;
+      rgba[idx + 1] = g;
+      rgba[idx + 2] = b;
+      rgba[idx + 3] = 255;
+    }
+  }
+  return KittyImageData(
+    imageId: kttyVisualAnimatedImageId,
+    pixelWidth: pw,
+    pixelHeight: ph,
+    rgbaPixels: rgba,
+    gridCols: cols,
+    gridRows: rows,
+    version: version,
+  );
+}
+
+/// Generates a 2-frame (`144×96` RGBA) animated Kitty showcase tile pair for
+/// [kttyVisualAnimatedImageId].
+List<KittyImageData> buildAnimatedVisualTileFrames({
+  int cols = 12,
+  int rows = 4,
+}) => List<KittyImageData>.unmodifiable([
+  _buildAnimatedFrameTile(cols: cols, rows: rows, phaseOffset: 0.0, version: 1),
+  _buildAnimatedFrameTile(
+    cols: cols,
+    rows: rows,
+    phaseOffset: math.pi,
+    version: 2,
+  ),
+]);
+
+/// Builds Kitty Graphics animation wire commands appending [frame2] as frame 2
+/// (`a=f` without `r=`) in 4096-char base64 chunks and starting looped playback (`a=a,s=3,v=1`).
+String buildAnimatedTileApcCommands(
+  KittyImageData frame2, {
+  int frameGapMs = 450,
+}) {
+  const chunkChars = 4096;
+  final id = frame2.imageId & 0xFFFFFFFF;
+  final encoded = base64Encode(encodeZlibStoredBlocks(frame2.rgbaPixels));
+  final sb = StringBuffer();
+  var offset = 0;
+  var first = true;
+  while (offset < encoded.length) {
+    final end = math.min(offset + chunkChars, encoded.length);
+    final more = end < encoded.length ? 1 : 0;
+    final slice = encoded.substring(offset, end);
+    if (first) {
+      sb.write(
+        '\x1b_Ga=f,i=$id,s=${frame2.pixelWidth},v=${frame2.pixelHeight},'
+        'f=32,o=z,z=$frameGapMs,m=$more,q=2;$slice\x1b\\',
+      );
+      first = false;
+    } else {
+      sb.write('\x1b_Ga=f,i=$id,m=$more,q=2;$slice\x1b\\');
+    }
+    offset = end;
+  }
+  sb.write('\x1b_Ga=a,i=$id,r=1,z=$frameGapMs,s=3,v=1,q=2\x1b\\');
+  return sb.toString();
 }
