@@ -3425,10 +3425,10 @@ void main() {
     );
 
     test(
-      'answers all 26 core ktty_probe capability queries and streams uploaded KittyImagePayload frames',
+      'answers all 33 core ktty_probe capability queries and streams uploaded KittyImagePayload frames',
       () {
         fakeAsync((async) {
-          const sessionId = SessionId('ktty-probe-26');
+          const sessionId = SessionId('ktty-probe-33');
           final pty = _FakePtySession();
           late StreamChannel<Uint8List> serverSide;
           final serverFrames = <CastMessage>[];
@@ -3478,14 +3478,19 @@ void main() {
             40, 210, 255, 255, 255, 110, 190, 255, //
             110, 255, 170, 255, 255, 220, 90, 255,
           ]);
+          final altRgba = Uint8List.fromList(const [
+            255, 120, 90, 255, 90, 240, 200, 255, //
+            240, 210, 80, 255, 120, 140, 255, 255,
+          ]);
           final rawB64 = base64Encode(sampleRgba);
+          final altRawB64 = base64Encode(altRgba);
           final zlibB64 = base64Encode(_zlibCompressForTest(sampleRgba));
           final pngB64 = base64Encode(_pngEncode2x2ForTest(sampleRgba));
           final splitAt = (rawB64.length ~/ 2) & ~3;
           final chunk0 = rawB64.substring(0, splitAt);
           final chunk1 = rawB64.substring(splitAt);
 
-          // Emit all 26 core ktty_probe queries in one batch, matching ktty_probe_report.dart.
+          // Emit all 33 core ktty_probe queries in one batch, matching ktty_probe_report.dart.
           final probeBatch = StringBuffer()
             ..write('\x1b_Gi=901,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\')
             ..write('\x1b_Gi=902,s=2,v=2,a=t,t=d,f=32,q=0;$rawB64\x1b\\')
@@ -3500,12 +3505,38 @@ void main() {
             ..write('\x1b_Ga=d,d=I,i=906,q=2\x1b\\')
             ..write('\x1b_GI=907,s=2,v=2,a=t,t=d,f=32,q=0;$rawB64\x1b\\')
             ..write('\x1b_Ga=d,d=N,I=907,q=2\x1b\\')
+            ..write('\x1b_Gi=911,s=2,v=2,a=t,t=d,f=32,q=2;$rawB64\x1b\\')
+            ..write(
+              '\x1b_Ga=p,i=911,p=11,x=0,y=0,w=2,h=2,X=1,Y=1,z=-1,c=1,r=1,C=1,q=0\x1b\\',
+            )
+            ..write('\x1b_Ga=d,d=z,z=-1,q=2\x1b\\')
+            ..write('\x1b_Ga=d,d=I,i=911,q=2\x1b\\')
+            ..write('\x1b_Gi=912,s=2,v=2,a=t,t=d,f=32,q=2;$rawB64\x1b\\')
+            ..write('\x1b_Gi=912,a=f,s=2,v=2,f=32,z=40,q=0;$altRawB64\x1b\\')
+            ..write('\x1b_Gi=912,a=a,s=3,v=1,q=0\x1b\\')
+            ..write('\x1b_Gi=912,a=c,r=1,c=2,w=1,h=1,q=0\x1b\\')
+            ..write('\x1b_Ga=d,d=f,i=912,q=2\x1b\\')
+            ..write('\x1b_Ga=d,d=I,i=912,q=2\x1b\\')
             ..write('\x1b[?u')
             ..write('\x1b[>0q')
+            ..write('\x1bP+q524742;536d756c78;536574756c63;53796e63\x1b\\')
+            ..write('\x1bP\$qm\x1b\\')
+            ..write('\x1bP\$q q\x1b\\')
             ..write('\x1b]10;?\x1b\\')
             ..write('\x1b]11;?\x1b\\')
+            ..write('\x1b]4;255;?\x1b\\')
+            ..write('\x1b]30001\x1b\\')
+            ..write('\x1b]4;255;#01FE02\x1b\\')
+            ..write('\x1b]4;255;?\x1b\\')
+            ..write('\x1b]30101\x1b\\')
+            ..write('\x1b]4;255;?\x1b\\')
+            ..write('\x1b]104;255\x1b\\')
+            ..write('\x1b7\r\x1b[6n\x1b]66;w=2; \x1b\\\x1b[6n\r  \r\x1b8')
             ..write('\x1b]22;?pointer,text,ktty-invalid\x1b\\')
             ..write('\x1b]99;i=ktty-probe:p=?;\x1b\\')
+            ..write('\x1b]5522;type=write:id=ktty-probe;\x1b\\')
+            ..write('\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;a3R0eQ==\x1b\\')
+            ..write('\x1b]5522;type=wdata;\x1b\\')
             ..write('\x1b[?2026\$p')
             ..write('\x1b[?1016\$p')
             ..write('\x1b[?2027\$p')
@@ -3526,7 +3557,7 @@ void main() {
             for (final bytes in pty.writtenInputs) utf8.decode(bytes),
           ].join();
 
-          // Assert all 26 core ktty_probe replies arrived!
+          // Assert all 33 core ktty_probe replies arrived!
           final expectedTokens = <String>[
             '\x1b_Gi=901;OK\x1b\\',
             '\x1b_Gi=902;OK\x1b\\',
@@ -3535,12 +3566,23 @@ void main() {
             '\x1b_Gi=905;OK\x1b\\',
             '\x1b_Gi=906,p=7;OK\x1b\\',
             ',I=907;OK\x1b\\',
+            '\x1b_Gi=911,p=11;OK\x1b\\',
+            '\x1b_Gi=912,r=2;OK\x1b\\',
+            '\x1b_Gi=912;OK\x1b\\',
             '\x1b[?0u',
             '\x1bP>|termui',
+            '\x1bP1+r524742=382f382f38\x1b\\',
+            '\x1bP1+r53796e63=31\x1b\\',
+            '\x1bP1\$r0m\x1b\\',
+            '\x1bP1\$r0 q\x1b\\',
             '\x1b]10;rgb:',
             '\x1b]11;rgb:',
+            '\x1b]4;255;rgb:0101/fefe/0202\x1b\\',
+            '\x1b[1;1R',
+            '\x1b[1;3R',
             '\x1b]22;1,1,0\x1b\\',
             '\x1b]99;i=ktty-probe:p=?;a=report:c=1:p=title,body,close,?\x1b\\',
+            '\x1b]5522;type=write:status=DONE:id=ktty-probe\x1b\\',
             '\x1b[?2026;2\$y',
             '\x1b[?1016;2\$y',
             '\x1b[?2027;2\$y',
@@ -3558,6 +3600,15 @@ void main() {
           for (final token in expectedTokens) {
             check(replyStream).contains(token);
           }
+          // Verify OSC 30101 restored palette slot 255 after the #01FE02 override.
+          final overrideIdx = replyStream.indexOf(
+            '\x1b]4;255;rgb:0101/fefe/0202\x1b\\',
+          );
+          final restoredIdx = replyStream.indexOf(
+            '\x1b]4;255;rgb:eeee/eeee/eeee\x1b\\',
+            overrideIdx,
+          );
+          check(restoredIdx).isGreaterThan(overrideIdx);
 
           async.elapse(const Duration(milliseconds: 16));
           final deltaFrames = [...serverFrames.whereType<BufferDeltaFrame>()];

@@ -282,7 +282,10 @@ void main() {
           width: 100,
           height: 16,
         );
-        expect(_bufferToText(inputBuf), contains('[D:DelMode]'));
+        final inputText = _bufferToText(inputBuf);
+        expect(inputText, contains('[D:DelMode]'));
+        expect(inputText, contains('[E:Export]'));
+        expect(inputText, contains('[P:Copy]'));
 
         final activeDelBuf = _renderDashboard(
           KttyProbeViewState(
@@ -355,6 +358,135 @@ void main() {
           ),
         );
         expect(withoutBanner, isNot(contains('[WARN] tmux:')));
+      },
+    );
+
+    test(
+      'renders OSC 66 2x scaled headline (incl. wide graphemes) and cleans up animated tile on unmount',
+      () {
+        final report = KttyProbeReport()..resetForNewProbe();
+        final widget = KttyProbeDashboard(
+          state: KttyProbeViewState(
+            report: report,
+            activeTab: .graphicsAndSgr,
+            requestedKeyboardFlags: 11,
+            sgrPixelsEnabled: true,
+            showOcclusion: false,
+            keyLog: const [],
+            lastActionMessage: 'Ready',
+          ),
+          actions: _noopActions(),
+        );
+        final element = widget.createElement()
+          ..mount(null)
+          ..layout(BoxConstraints.tight(const Size(84, 24)));
+        final buffer = Buffer(84, 24);
+        element.paint(buffer, Offset.zero);
+
+        final text = _bufferToText(buffer);
+        expect(text, contains('Anim 2-Fr'));
+        expect(buffer.hasTextSizing, isTrue);
+
+        var scaledAnchors = 0;
+        for (var y = 0; y < buffer.height; y++) {
+          for (var x = 0; x < buffer.width; x++) {
+            final bits = buffer.getTextSizing(x, y);
+            if (bits == KittyTextSizing.none) continue;
+            final ts = KittyTextSizing(bits);
+            if (!ts.isContinuation && ts.scale == 2) scaledAnchors++;
+          }
+        }
+        expect(scaledAnchors, equals('OSC66 2x'.length));
+
+        final counts = _countPlaceholderCellsByImageId(buffer);
+        expect(counts[kttyVisualAnimatedImageId], equals(48));
+        final anim = KittyImageRegistry.global.lookupAnimation(
+          kttyVisualAnimatedImageId,
+        );
+        expect(anim, isNotNull);
+        expect(anim!.frames, hasLength(2));
+        expect(anim.playback, equals(KittyAnimationPlayback.running));
+        expect(KittyImageRegistry.global.hasRunningAnimations, isTrue);
+
+        // Unmounting must stop and unregister the animated tile cleanly.
+        element.unmount();
+        expect(KittyImageRegistry.global.hasRunningAnimations, isFalse);
+        expect(
+          KittyImageRegistry.global.lookupImage(kttyVisualAnimatedImageId),
+          isNull,
+        );
+
+        // Wide grapheme headline accounts for graphemeWidth == 2 * scale.
+        const wideHeadline = KttyOsc66HeadlineWidget(text: 'A🚀', scale: 2);
+        expect(wideHeadline.getIntrinsicWidth(2), equals(6));
+        final wideEl = wideHeadline.createElement()
+          ..mount(null)
+          ..layout(BoxConstraints.tight(const Size(6, 2)));
+        final wideBuf = Buffer(6, 2);
+        wideEl.paint(wideBuf, Offset.zero);
+        wideEl.unmount();
+        expect(wideBuf.getCharacter(0, 0), equals('A'));
+        expect(wideBuf.getCharacter(2, 0), equals('🚀'));
+        expect(KittyTextSizing(wideBuf.getTextSizing(2, 0)).explicitWidth, 2);
+      },
+    );
+
+    test(
+      'KttyOsc22CursorSwatch renders all 5 pointer shapes and triggers hover callbacks',
+      () {
+        final observed = <String?>[];
+        final swatch = KttyOsc22CursorSwatch(onHoverShapeChanged: observed.add);
+        final element = swatch.createElement() as StatefulElement
+          ..mount(null)
+          ..layout(BoxConstraints.tight(const Size(64, 1)));
+        final buffer = Buffer(64, 1);
+        element.paint(buffer, Offset.zero);
+        final rendered = _bufferToText(buffer);
+        for (final shape in kttyOsc22SwatchShapes) {
+          expect(rendered, contains('[$shape]'));
+        }
+
+        final handler = element.state as MouseEventHandlerWithArea;
+        const area = Rect(0, 0, 64, 1);
+        // Hover over [pointer] (cols 7..15)
+        handler.handleMouseEvent(
+          MouseEvent(
+            x: 9,
+            y: 1,
+            button: MouseButton.none,
+            type: MouseEventType.move,
+          ),
+          8,
+          0,
+          area,
+        );
+        // Hover over [grab] (cols 24..29)
+        handler.handleMouseEvent(
+          MouseEvent(
+            x: 26,
+            y: 1,
+            button: MouseButton.none,
+            type: MouseEventType.move,
+          ),
+          25,
+          0,
+          area,
+        );
+        // Leave swatch vertically
+        handler.handleMouseEvent(
+          MouseEvent(
+            x: 26,
+            y: 2,
+            button: MouseButton.none,
+            type: MouseEventType.move,
+          ),
+          25,
+          1,
+          area,
+        );
+        element.unmount();
+
+        expect(observed, equals(['pointer', 'grab', null]));
       },
     );
   });
@@ -566,6 +698,145 @@ void main() {
         await interactiveFuture.timeout(const Duration(seconds: 3));
         interactiveBackend.dispose();
         await wireInput.close();
+      },
+    );
+
+    test(
+      'subscribes to DECSET 2031 live theme updates, emits OSC 22 hover push/pop, and copies/exports report via [P]/[E]',
+      () async {
+        final wireInput = StreamController<List<int>>.broadcast();
+        final wireOut = StringBuffer();
+        final report = KttyProbeReport();
+        final backend = KttyWireTerminalBackend(
+          wireInput: wireInput.stream,
+          onWriteWire: wireOut.write,
+          report: report,
+          initialSize: const Point<int>(100, 30),
+        );
+        final stopHandle = KttyProbeStopHandle();
+        final exportedPayloads = <String>[];
+
+        final runFuture = runKttyProbeOnWire(
+          backend,
+          probeTimeout: const Duration(milliseconds: 200),
+          stopHandle: stopHandle,
+          onExportReport: (json) {
+            exportedPayloads.add(json);
+            return 'memory://ktty_probe.json';
+          },
+        );
+
+        await _pumpEventQueue(12);
+        // 1. Subscribed to DECSET 2031 on startup.
+        expect(wireOut.toString(), contains('\x1b[?2031h'));
+
+        // Complete initial probe with dark scheme, then push live light scheme via DECSET 2031.
+        wireInput.add(ascii.encode('\x1b[?997;1n\x1b[?62;22c'));
+        await _pumpEventQueue(8);
+        expect(report.colorScheme, equals('dark'));
+
+        wireInput.add(ascii.encode('\x1b[?997;2n'));
+        await _pumpEventQueue(8);
+        expect(report.colorScheme, equals('light'));
+
+        // 2. Switch to Tab 4 (Input&OSC) where OSC 22 swatch sits at row 6 (0-based y=5 -> 1-based y=6)
+        //    Layout: row 0 header, row 1 toolbar, row 2 top border, row 3 panel title, row 4 buttons, row 5 OSC22 swatch.
+        //    Col: col 0 left border, col 1 padding, cols 2..7 'OSC22:', col 8 ' ', cols 9..17 '[pointer]'.
+        wireInput.add(utf8.encode('4'));
+        await _pumpEventQueue(12);
+        wireOut.clear();
+
+        // Move mouse onto [pointer] at 1-based (x=12, y=6) using SGR cell coords (since ?1016 is not marked supported).
+        wireInput.add(ascii.encode('\x1b[<35;12;6M'));
+        await _pumpEventQueue(8);
+        expect(wireOut.toString(), contains('\x1b]22;>pointer\x1b\\'));
+
+        // Move mouse onto [grab] at 1-based (x=28, y=6) -> pops previous, pushes grab.
+        wireOut.clear();
+        wireInput.add(ascii.encode('\x1b[<35;28;6M'));
+        await _pumpEventQueue(8);
+        expect(wireOut.toString(), contains('\x1b]22;<\x1b\\'));
+        expect(wireOut.toString(), contains('\x1b]22;>grab\x1b\\'));
+
+        // Move mouse off swatch row -> pops grab.
+        wireOut.clear();
+        wireInput.add(ascii.encode('\x1b[<35;28;10M'));
+        await _pumpEventQueue(8);
+        expect(wireOut.toString(), contains('\x1b]22;<\x1b\\'));
+
+        // 3. Press [P] to copy report JSON via OSC 52.
+        wireOut.clear();
+        wireInput.add(utf8.encode('p'));
+        await _pumpEventQueue(8);
+        final osc52Match = RegExp(
+          r'\x1b\]52;c;([A-Za-z0-9+/=]+)\x1b\\',
+        ).firstMatch(wireOut.toString());
+        expect(osc52Match, isNotNull);
+        final copiedJson = utf8.decode(base64Decode(osc52Match!.group(1)!));
+        final parsedCopy = jsonDecode(copiedJson) as Map<String, Object?>;
+        expect(parsedCopy['coreTotal'], equals(33));
+        expect(parsedCopy['colorScheme'], equals('light'));
+
+        // 4. Press [E] to invoke Web-safe export callback.
+        wireInput.add(utf8.encode('e'));
+        await _pumpEventQueue(8);
+        expect(exportedPayloads, hasLength(1));
+        final parsedExport =
+            jsonDecode(exportedPayloads.single) as Map<String, Object?>;
+        expect(parsedExport['coreTotal'], equals(33));
+
+        // 5. Exit disables DECSET 2031 and deletes the animated showcase image cleanly.
+        wireOut.clear();
+        stopHandle.stop();
+        await runFuture.timeout(const Duration(seconds: 3));
+        expect(wireOut.toString(), contains('\x1b[?2031l'));
+        expect(
+          wireOut.toString(),
+          contains('\x1b_Ga=d,d=I,i=$kttyVisualAnimatedImageId,q=2\x1b\\'),
+        );
+
+        backend.dispose();
+        await wireInput.close();
+      },
+    );
+
+    test(
+      'catches synchronous exception in [E:Export] callback without crashing TUI',
+      () async {
+        final wireInput = StreamController<List<int>>.broadcast();
+        final vt = VirtualTerminal(width: 100, height: 30);
+        final report = KttyProbeReport();
+        final backend = KttyWireTerminalBackend(
+          wireInput: wireInput.stream,
+          onWriteWire: vt.writeString,
+          report: report,
+          initialSize: const Point<int>(100, 30),
+        );
+        final stopHandle = KttyProbeStopHandle();
+
+        final runFuture = runKttyProbeOnWire(
+          backend,
+          probeTimeout: const Duration(milliseconds: 200),
+          stopHandle: stopHandle,
+          onExportReport: (_) => throw StateError('read-only fs'),
+        );
+
+        await _pumpEventQueue(12);
+        wireInput.add(utf8.encode('4e'));
+        await _pumpEventQueue(12);
+        expect(_bufferToText(vt.buffer), contains('Export failed:'));
+        expect(_bufferToText(vt.buffer), contains('read-only fs'));
+
+        // Interactive [R] re-probe restores top-left header cells without leaving a 2-cell hole.
+        wireInput.add(utf8.encode('r'));
+        await _pumpEventQueue(12);
+        expect(_bufferToText(vt.buffer), contains('KTTY PROBE'));
+
+        stopHandle.stop();
+        await runFuture.timeout(const Duration(seconds: 3));
+        backend.dispose();
+        await wireInput.close();
+        vt.dispose();
       },
     );
   });
