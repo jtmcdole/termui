@@ -1476,7 +1476,13 @@ final class WebGl2ShaderBackend
         !_isWallpaperTextureReady(wallpaperImage)) {
       return false;
     }
-    for (final quad in batch.kittyQuads) {
+    return _areKittyQuadsPrimed(batch.underBgKittyQuads) &&
+        _areKittyQuadsPrimed(batch.bgKittyQuads) &&
+        _areKittyQuadsPrimed(batch.kittyQuads);
+  }
+
+  bool _areKittyQuadsPrimed(List<GpuKittyQuad> quads) {
+    for (final quad in quads) {
       if (!_kittyTextures.containsKey(quad.image)) return false;
     }
     return true;
@@ -1758,7 +1764,7 @@ final class WebGl2ShaderBackend
       );
     }
     if (batch.instanceCount <= 0 &&
-        batch.kittyQuads.isEmpty &&
+        !batch.hasAnyKittyQuads &&
         batch.transformedInstanceCount <= 0 &&
         batch.regionPasses.isEmpty) {
       return;
@@ -1806,6 +1812,15 @@ final class WebGl2ShaderBackend
     }
   }
 
+  static int _resolveNonDefaultBgStart(GpuAtlasQuadBatch batch, int bgEnd) {
+    if (batch.underBgKittyQuads.isEmpty || bgEnd <= 0) return 0;
+    if ((batch.defaultBackgroundArgb >>> 24) == 0) return 0;
+    if (batch.instanceData.length < GpuAtlasQuadBatch.floatsPerInstance) {
+      return 0;
+    }
+    return batch.instanceData[14] == GpuAtlasQuadBatch.modeSolid ? 1 : 0;
+  }
+
   void _drawDirectTerminalSlices({
     required GpuAtlasQuadBatch batch,
     required web.WebGLFramebuffer? sceneFbo,
@@ -1817,6 +1832,7 @@ final class WebGl2ShaderBackend
       0,
       batch.italicStartInstanceIndex,
     );
+    final bgStart = _resolveNonDefaultBgStart(batch, bgEnd);
     final italicStart = batch.italicStartInstanceIndex;
     final kittySplit = batch.kittyInsertInstanceIndex;
     final total = batch.instanceCount;
@@ -1825,8 +1841,21 @@ final class WebGl2ShaderBackend
       batch.transformedInstanceCount,
     );
 
-    if (bgEnd > 0) {
-      _drawAtlasSlice(0, bgEnd, filter: web.WebGL2RenderingContext.NEAREST);
+    if (bgStart > 0) {
+      _drawAtlasSlice(0, bgStart, filter: web.WebGL2RenderingContext.NEAREST);
+    }
+    if (batch.underBgKittyQuads.isNotEmpty) {
+      _drawKittyQuads(batch.underBgKittyQuads);
+    }
+    if (bgEnd > bgStart) {
+      _drawAtlasSlice(
+        bgStart,
+        bgEnd - bgStart,
+        filter: web.WebGL2RenderingContext.NEAREST,
+      );
+    }
+    if (batch.bgKittyQuads.isNotEmpty) {
+      _drawKittyQuads(batch.bgKittyQuads);
     }
     _renderDirectRegionStage(
       batch: batch,
