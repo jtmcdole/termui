@@ -6,6 +6,7 @@ import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui_pty/termui_pty.dart';
 
+import 'ktty_local_media_probe.dart';
 import 'ktty_probe_app.dart';
 import 'ktty_probe_report.dart';
 import 'ktty_wire_backend.dart';
@@ -45,6 +46,7 @@ VirtualTerminal _createConfiguredVirtualTerminal({
     maxScrollbackLines: 500,
     defaultForeground: const Color(220, 228, 240),
     defaultBackground: const Color(18, 22, 32),
+    allowLocalKittyMedia: true,
     onReply: (reply) => _enqueueReply(probeInput, reply),
     onNotification: (title, message) {
       telemetry.lastNotification = title.isEmpty ? message : '$title: $message';
@@ -144,9 +146,18 @@ Future<KttyProbeReport> runVirtualTerminalKttyProbe(
     return true;
   };
 
+  final mediaSession = createLocalMediaProbeSession();
   try {
-    return await runKttyProbeOnWire(wireBackend, stopHandle: stopHandle);
+    return await runKttyProbeOnWire(
+      wireBackend,
+      stopHandle: stopHandle,
+      options: KttyProbeOptions(
+        tempProbeFilePath: mediaSession.tempFilePath,
+        shmProbeName: mediaSession.shmObjectName,
+      ),
+    );
   } finally {
+    mediaSession.dispose();
     if (cellPxSub != null) unawaited(cellPxSub.cancel());
     unawaited(sizeSub.cancel());
     if (!probeInput.isClosed) unawaited(probeInput.close());

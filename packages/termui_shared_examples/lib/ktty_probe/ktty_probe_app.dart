@@ -20,7 +20,7 @@ Future<KttyProbeReport> runKttyBatchProbe({
   KttyProbeOptions options = const KttyProbeOptions(),
   KttyProbeStopHandle? stopHandle,
 }) async {
-  final report = KttyProbeReport()..resetForNewProbe();
+  final report = KttyProbeReport()..resetForNewProbe(options: options);
   final interceptor = KttyReplyInterceptor(report);
   final done = Completer<void>();
 
@@ -295,7 +295,7 @@ final class _KttyProbeStatefulRootState extends State<KttyProbeStatefulRoot> {
 
   void _triggerProbe() {
     _probeFallbackTimer?.cancel();
-    widget.backend.report.resetForNewProbe();
+    widget.backend.report.resetForNewProbe(options: widget.options);
     widget.backend.write(
       KttyProbeReport.buildWireProbeSequence(options: widget.options),
     );
