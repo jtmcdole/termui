@@ -114,19 +114,16 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
     final writer = _core.takeWriter();
     final writerReadyPort = ReceivePort();
     final writerExitPort = ReceivePort();
-    unawaited(
-      writerReadyPort.first.then((msg) {
-        writerReadyPort.close();
-        _onWriterReady(msg as SendPort);
-      }),
-    );
-    unawaited(
-      writerExitPort.first.then((_) {
-        writerExitPort.close();
-        _closeWriter();
-        _keepAlive(_core);
-      }),
-    );
+    writerReadyPort.listen((msg) {
+      writerReadyPort.close();
+      _onWriterReady(msg as SendPort);
+    });
+    writerExitPort.listen((_) {
+      writerReadyPort.close();
+      writerExitPort.close();
+      _closeWriter();
+      _keepAlive(_core);
+    });
     unawaited(
       Isolate.spawn(
         _writeUntilClosed,
@@ -277,9 +274,14 @@ void _writeUntilClosed(_WriterIsolateArgs ctx) {
       return;
     }
     if (message is! TransferableTypedData) return;
-    final bytes = message.materialize().asUint8List();
-    if (ctx.writer.write(bytes) == PtyWriteStatus.closed) {
+    try {
+      final bytes = message.materialize().asUint8List();
+      if (ctx.writer.write(bytes) == PtyWriteStatus.closed) {
+        shutdown();
+      }
+    } on Object {
       shutdown();
+      rethrow;
     }
   });
 }

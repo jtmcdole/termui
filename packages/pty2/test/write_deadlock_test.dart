@@ -88,6 +88,23 @@ final class _FakeWorker implements PtyCoreWorker {
   void free() {}
 }
 
+final class _UnsendableWriter implements PtyCoreWriter {
+  _UnsendableWriter(this._unsendablePort, this._onFreed);
+
+  // Holding a ReceivePort causes Isolate.spawn to fail with an ArgumentError.
+  final ReceivePort _unsendablePort;
+  final void Function() _onFreed;
+
+  @override
+  PtyWriteStatus write(Uint8List data) => PtyWriteStatus.closed;
+
+  @override
+  void free() {
+    _unsendablePort.close();
+    _onFreed();
+  }
+}
+
 final class _FakeWriter implements PtyCoreWriter {
   _FakeWriter(this.eventsPort, {this.failAfterWrites = -1});
 
@@ -456,11 +473,6 @@ Future<void> main() async {
         addTearDown(sub.cancel);
 
         final stopFlag = calloc<Int32>();
-        addTearDown(() {
-          stopFlag.value = 1;
-          calloc.free(stopFlag);
-        });
-
         final pty = BlockingPseudoTerminal(
           _FakePtyCore(
             _FakeWorker(stopFlagAddress: stopFlag.address),
@@ -468,6 +480,16 @@ Future<void> main() async {
           ),
           false,
         )..init();
+        final outDone = pty.out.drain<void>();
+        addTearDown(() async {
+          stopFlag.value = 1;
+          await pty.exitCode.timeout(
+            const Duration(seconds: 5),
+            onTimeout: () => -1,
+          );
+          await outDone.timeout(const Duration(seconds: 5), onTimeout: () {});
+          calloc.free(stopFlag);
+        });
 
         pty
           ..write('')
@@ -478,7 +500,7 @@ Future<void> main() async {
         await freed.future.timeout(const Duration(seconds: 5));
         stopFlag.value = 1;
         await pty.exitCode.timeout(const Duration(seconds: 5));
-        await pty.out.drain<void>().timeout(const Duration(seconds: 5));
+        await outDone.timeout(const Duration(seconds: 5));
 
         expect(events, equals(['write:first-🚀', 'write:second-世界', 'free']));
       },
@@ -543,6 +565,42 @@ Future<void> main() async {
         const closed = ClosedPtyCoreWriter();
         expect(closed.write(Uint8List(0)), equals(PtyWriteStatus.closed));
         closed.free();
+      },
+    );
+
+    test(
+      'Isolate.spawn failure closes ports and frees writer without unhandled zone errors',
+      () async {
+        final zoneErrors = <Object>[];
+        final unsendablePort = ReceivePort();
+        addTearDown(unsendablePort.close);
+        final freed = Completer<void>();
+
+        await runZonedGuarded(
+          () async {
+            final pty = BlockingPseudoTerminal(
+              _FakePtyCore(
+                const _FakeWorker(),
+                _UnsendableWriter(unsendablePort, () {
+                  if (!freed.isCompleted) freed.complete();
+                }),
+              ),
+              false,
+            )..init();
+
+            await freed.future.timeout(const Duration(seconds: 5));
+            await pty.exitCode.timeout(const Duration(seconds: 5));
+            await pty.out.drain<void>().timeout(const Duration(seconds: 5));
+            // Allow any pending microtasks/zone errors to surface.
+            await Future<void>.delayed(Duration.zero);
+          },
+          (error, stack) {
+            zoneErrors.add(error);
+          },
+        );
+
+        expect(freed.isCompleted, isTrue);
+        expect(zoneErrors, isEmpty);
       },
     );
   });
