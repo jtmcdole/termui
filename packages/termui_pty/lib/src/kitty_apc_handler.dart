@@ -62,6 +62,54 @@ final class _CountingByteSink extends ByteConversionSinkBase {
   void close() {}
 }
 
+final class _PlacementParams {
+  final int srcX;
+  final int srcY;
+  final int srcWidth;
+  final int srcHeight;
+  final int cellOffsetX;
+  final int cellOffsetY;
+  final int zIndex;
+  final int parentImageId;
+  final int parentPlacementId;
+  final int relCols;
+  final int relRows;
+
+  const _PlacementParams({
+    this.srcX = 0,
+    this.srcY = 0,
+    this.srcWidth = 0,
+    this.srcHeight = 0,
+    this.cellOffsetX = 0,
+    this.cellOffsetY = 0,
+    this.zIndex = 0,
+    this.parentImageId = 0,
+    this.parentPlacementId = 0,
+    this.relCols = 0,
+    this.relRows = 0,
+  });
+}
+
+final class _FrameUploadParams {
+  final int targetFrame;
+  final int baseFrame;
+  final int dstX;
+  final int dstY;
+  final bool replace;
+  final int bgColor;
+  final int? gapMs;
+
+  const _FrameUploadParams({
+    required this.targetFrame,
+    required this.baseFrame,
+    required this.dstX,
+    required this.dstY,
+    required this.replace,
+    required this.bgColor,
+    required this.gapMs,
+  });
+}
+
 final class _PendingUpload {
   final int imageId;
   final int explicitNumber;
@@ -82,6 +130,8 @@ final class _PendingUpload {
   final bool hasAddressableId;
   final String? replyPrefix;
   final String? validationError;
+  final _PlacementParams? placementParams;
+  final _FrameUploadParams? frameParams;
   final StringBuffer base64Data = StringBuffer();
   int byteCount = 0;
   bool overflowed = false;
@@ -106,6 +156,8 @@ final class _PendingUpload {
     required this.hasAddressableId,
     required this.replyPrefix,
     required this.validationError,
+    this.placementParams,
+    this.frameParams,
   });
 }
 
@@ -117,6 +169,9 @@ final class KittyApcHandler {
   static const int _maxInflatedBytes = 16 * 1024 * 1024;
   static const int _maxDimension = 8192;
   static const int _maxTotalPixels = 16_777_216;
+  static const int _maxRelativeChainDepth = 64;
+  static const int _minInt32 = -0x80000000;
+  static const int _maxInt32 = 0x7FFFFFFF;
   static const List<int> _pngSignature = [
     0x89,
     0x50,
@@ -185,11 +240,11 @@ final class KittyApcHandler {
   final bool allowLocalFiles;
 
   final Map<int, _PendingUpload> _pendingUploads = {};
-  final Set<(int imageId, int placementId, bool isVirtual)> _placements = {};
   final Map<int, int> _imageNumberToId = {};
   int _totalPendingBase64 = 0;
   int? _lastActiveUploadId;
   int _nextAutoId = 0x80000001;
+  int _frameVersionCounter = 1;
 
   /// Creates a [KittyApcHandler] bound to a scoped [registry].
   KittyApcHandler({
@@ -211,7 +266,6 @@ final class KittyApcHandler {
   /// Clears all pending chunked uploads, placements, and wipes [registry].
   void reset() {
     _pendingUploads.clear();
-    _placements.clear();
     _imageNumberToId.clear();
     _totalPendingBase64 = 0;
     _lastActiveUploadId = null;
@@ -256,6 +310,12 @@ final class KittyApcHandler {
         _handlePlace(control, quiet);
       case 'd':
         _handleDelete(control);
+      case 'f':
+        _handleAnimationFrame(control, dataPart, quiet);
+      case 'a':
+        _handleAnimationControl(control, quiet);
+      case 'c':
+        _handleAnimationCompose(control, quiet);
       default:
         final prefix = _resolveReplyPrefix(
           explicitId,
@@ -302,6 +362,59 @@ final class KittyApcHandler {
     final parsed = int.tryParse(raw);
     return parsed == null || parsed < 0 || parsed > 0xFFFFFFFF;
   }
+
+  static int _parseSignedInt32(String? raw) {
+    if (raw == null) return 0;
+    final parsed = int.tryParse(raw);
+    if (parsed == null) return 0;
+    return parsed.clamp(_minInt32, _maxInt32);
+  }
+
+  static int _parseNonNegativeInt(String? raw) {
+    if (raw == null) return 0;
+    final parsed = int.tryParse(raw);
+    if (parsed == null || parsed < 0) return 0;
+    return parsed;
+  }
+
+  static int _parseUint32(String? raw) {
+    if (raw == null) return 0;
+    final parsed = int.tryParse(raw);
+    if (parsed == null || parsed < 0) return 0;
+    return parsed > 0xFFFFFFFF ? 0xFFFFFFFF : parsed;
+  }
+
+  static int _parseOneBasedCoord(String? raw) {
+    final parsed = int.tryParse(raw ?? '1') ?? 1;
+    return math.max(1, parsed) - 1;
+  }
+
+  static _PlacementParams _parsePlacementParams(Map<String, String> control) =>
+      _PlacementParams(
+        srcX: _parseNonNegativeInt(control['x']),
+        srcY: _parseNonNegativeInt(control['y']),
+        srcWidth: _parseNonNegativeInt(control['w']),
+        srcHeight: _parseNonNegativeInt(control['h']),
+        cellOffsetX: _parseNonNegativeInt(control['X']),
+        cellOffsetY: _parseNonNegativeInt(control['Y']),
+        zIndex: _parseSignedInt32(control['z']),
+        parentImageId: _parsePositiveId(control['P']),
+        parentPlacementId: _parsePositiveId(control['Q']),
+        relCols: _parseSignedInt32(control['H']),
+        relRows: _parseSignedInt32(control['V']),
+      );
+
+  static _FrameUploadParams _parseFrameUploadParams(
+    Map<String, String> control,
+  ) => _FrameUploadParams(
+    targetFrame: _parsePositiveId(control['r']),
+    baseFrame: _parsePositiveId(control['c']),
+    dstX: _parseNonNegativeInt(control['x']),
+    dstY: _parseNonNegativeInt(control['y']),
+    replace: (int.tryParse(control['X'] ?? '0') ?? 0) == 1,
+    bgColor: _parseUint32(control['Y']),
+    gapMs: control.containsKey('z') ? _parseSignedInt32(control['z']) : null,
+  );
 
   static String? _resolveReplyPrefix(
     int imageId,
@@ -350,6 +463,7 @@ final class KittyApcHandler {
         'd' => true,
         't' => allowLocalMedia && platformSupportsKittyMedium('t'),
         's' => allowLocalShm && platformSupportsKittyMedium('s'),
+        'f' => allowLocalFiles && platformSupportsKittyMedium('f'),
         _ => false,
       };
 
@@ -373,7 +487,11 @@ final class KittyApcHandler {
     return int.tryParse(raw) ?? -1;
   }
 
-  String? _resolveValidationError(Map<String, String> control, int format) {
+  String? _resolveValidationError(
+    Map<String, String> control,
+    int format, {
+    String action = 't',
+  }) {
     if (_isOutOfRangeUint32(control['i']) ||
         _isOutOfRangeUint32(control['I'])) {
       return 'EINVAL:invalid id';
@@ -391,7 +509,36 @@ final class KittyApcHandler {
     if (!_isSupportedCompression(control['o'])) {
       return 'EINVAL:unsupported compression';
     }
+    if (action == 'T' &&
+        (_isOutOfRangeUint32(control['P']) ||
+            _isOutOfRangeUint32(control['Q']))) {
+      return 'EINVAL:invalid parent id';
+    }
+    if (action == 'f') {
+      return _resolveFrameValidationError(control);
+    }
     return null;
+  }
+
+  static String? _resolveFrameValidationError(Map<String, String> control) {
+    final compRaw = control['X'];
+    if (compRaw != null && compRaw != '0' && compRaw != '1') {
+      return 'EINVAL:invalid composition mode';
+    }
+    if (_isNegativeInt(control['x']) || _isNegativeInt(control['y'])) {
+      return 'EINVAL:invalid frame geometry';
+    }
+    if (_isOutOfRangeUint32(control['r']) ||
+        _isOutOfRangeUint32(control['c'])) {
+      return 'EINVAL:invalid frame number';
+    }
+    return null;
+  }
+
+  static bool _isNegativeInt(String? raw) {
+    if (raw == null) return false;
+    final parsed = int.tryParse(raw);
+    return parsed == null || parsed < 0;
   }
 
   static bool _hasNewUploadMetadata(Map<String, String> control) =>
@@ -405,7 +552,18 @@ final class KittyApcHandler {
       control.containsKey('c') ||
       control.containsKey('r') ||
       control.containsKey('U') ||
-      control.containsKey('p');
+      control.containsKey('p') ||
+      control.containsKey('x') ||
+      control.containsKey('y') ||
+      control.containsKey('w') ||
+      control.containsKey('h') ||
+      control.containsKey('X') ||
+      control.containsKey('Y') ||
+      control.containsKey('z') ||
+      control.containsKey('P') ||
+      control.containsKey('Q') ||
+      control.containsKey('H') ||
+      control.containsKey('V');
 
   static int? _parseDataSize(String? raw) {
     if (raw == null) return null;
@@ -581,18 +739,62 @@ final class KittyApcHandler {
   }
 
   bool _hasRemainingPlacements(int imageId) {
-    for (final entry in _placements) {
-      if (entry.$1 == imageId) return true;
+    final masked = imageId & 0xFFFFFFFF;
+    for (final p in registry.allPlacements) {
+      if ((p.imageId & 0xFFFFFFFF) == masked) return true;
     }
     return false;
   }
 
   bool _hasOtherPlacement(int imageId, int placementId, bool isVirtual) {
-    for (final entry in _placements) {
-      if (entry.$1 != imageId) continue;
-      if (entry.$2 != placementId || entry.$3 != isVirtual) return true;
+    final maskedImg = imageId & 0xFFFFFFFF;
+    final maskedPlc = placementId & 0xFFFFFFFF;
+    for (final p in registry.allPlacements) {
+      if ((p.imageId & 0xFFFFFFFF) != maskedImg) continue;
+      if ((p.placementId & 0xFFFFFFFF) != maskedPlc ||
+          p.isVirtual != isVirtual) {
+        return true;
+      }
     }
     return false;
+  }
+
+  Set<int> _cascadeRemoveRelativePlacements(Set<(int, int)> initialRemoved) {
+    final affectedImages = <int>{for (final key in initialRemoved) key.$1};
+    var frontier = initialRemoved;
+    while (frontier.isNotEmpty) {
+      final children = <KittyPlacement>[
+        for (final p in registry.allPlacements)
+          if (p.isRelative &&
+              frontier.contains((
+                p.parentImageId & 0xFFFFFFFF,
+                p.parentPlacementId & 0xFFFFFFFF,
+              )))
+            p,
+      ];
+      if (children.isEmpty) break;
+      final nextFrontier = <(int, int)>{};
+      for (final child in children) {
+        registry.removePlacement(child.imageId, child.placementId);
+        final key = (
+          child.imageId & 0xFFFFFFFF,
+          child.placementId & 0xFFFFFFFF,
+        );
+        nextFrontier.add(key);
+        affectedImages.add(key.$1);
+      }
+      frontier = nextFrontier;
+    }
+    return affectedImages;
+  }
+
+  void _evictImagesWithoutPlacements(Iterable<int> imageIds) {
+    for (final id in imageIds) {
+      if (_hasRemainingPlacements(id)) continue;
+      registry.unregisterImage(id);
+      _removePendingUpload(id);
+      _imageNumberToId.removeWhere((_, mapped) => mapped == id);
+    }
   }
 
   void _deleteImagePlacements(
@@ -600,18 +802,24 @@ final class KittyApcHandler {
     required int placementId,
     required bool freeData,
   }) {
+    final maskedImg = imageId & 0xFFFFFFFF;
+    final maskedPlc = placementId & 0xFFFFFFFF;
     var clearedDirect = false;
-    final toRemove = <(int, int, bool)>[];
-    for (final entry in _placements) {
-      if (entry.$1 != imageId) continue;
-      if (placementId > 0 && entry.$2 != placementId) continue;
-      toRemove.add(entry);
-      if (!entry.$3) clearedDirect = true;
+    final removedKeys = <(int, int)>{};
+    for (final p in registry.allPlacements) {
+      if ((p.imageId & 0xFFFFFFFF) != maskedImg) continue;
+      if (placementId > 0 && (p.placementId & 0xFFFFFFFF) != maskedPlc) {
+        continue;
+      }
+      removedKeys.add((p.imageId & 0xFFFFFFFF, p.placementId & 0xFFFFFFFF));
+      if (!p.isVirtual) clearedDirect = true;
     }
-    _placements.removeAll(toRemove);
+    registry.removePlacement(imageId, placementId > 0 ? placementId : null);
+    final affected = _cascadeRemoveRelativePlacements(removedKeys)
+      ..add(maskedImg);
     final clearLegacyUntracked =
         placementId == 0 &&
-        toRemove.isEmpty &&
+        removedKeys.isEmpty &&
         !_hasRemainingPlacements(imageId);
     if (clearedDirect || clearLegacyUntracked) {
       onClearPlacements?.call(
@@ -619,15 +827,13 @@ final class KittyApcHandler {
         placementId: placementId > 0 ? placementId : null,
       );
     }
-    if (freeData && !_hasRemainingPlacements(imageId)) {
-      registry.unregisterImage(imageId);
-      _removePendingUpload(imageId);
-      _imageNumberToId.removeWhere((_, id) => id == imageId);
+    if (freeData) {
+      _evictImagesWithoutPlacements(affected);
     }
   }
 
   void _evictUnreferencedImages({required bool hasVirtual}) {
-    if (!hasVirtual) {
+    if (!hasVirtual && !registry.hasPlacements) {
       registry.clearImages();
       _imageNumberToId.clear();
       return;
@@ -643,17 +849,21 @@ final class KittyApcHandler {
   }
 
   void _deleteAllDirectPlacements({required bool freeData}) {
+    final activeAlt = isAltScreen?.call() ?? false;
     var hasVirtual = false;
-    final toRemove = <(int, int, bool)>[];
-    for (final entry in _placements) {
-      if (entry.$3) {
+    final removedKeys = <(int, int)>{};
+    for (final p in registry.allPlacements) {
+      if (p.isVirtual) {
         hasVirtual = true;
-      } else {
-        toRemove.add(entry);
+      } else if (p.isAltScreen == activeAlt) {
+        removedKeys.add((p.imageId & 0xFFFFFFFF, p.placementId & 0xFFFFFFFF));
       }
     }
-    _placements.removeAll(toRemove);
-    onClearPlacements?.call(null, directOnly: hasVirtual);
+    registry.removePlacementsWhere(
+      (p) => !p.isVirtual && p.isAltScreen == activeAlt,
+    );
+    _cascadeRemoveRelativePlacements(removedKeys);
+    onClearPlacements?.call(null, directOnly: true);
     if (freeData) {
       _evictUnreferencedImages(hasVirtual: hasVirtual);
     }
@@ -670,19 +880,110 @@ final class KittyApcHandler {
     }
   }
 
+  (int col, int row)? _resolvePlacementOrigin(KittyPlacement placement) {
+    var col = placement.isRelative ? placement.relCols : placement.gridCol;
+    var row = placement.isRelative ? placement.relRows : placement.gridRow;
+    var current = placement;
+    for (
+      var depth = 0;
+      depth < _maxRelativeChainDepth && current.isRelative;
+      depth++
+    ) {
+      final parent = registry.lookupPlacement(
+        current.parentImageId,
+        current.parentPlacementId,
+      );
+      if (parent == null) return null;
+      col += parent.isRelative ? parent.relCols : parent.gridCol;
+      row += parent.isRelative ? parent.relRows : parent.gridRow;
+      current = parent;
+    }
+    return current.isRelative ? null : (col, row);
+  }
+
+  bool _placementContainsPoint(KittyPlacement placement, int col, int row) {
+    final origin = _resolvePlacementOrigin(placement);
+    if (origin == null) return false;
+    return col >= origin.$1 &&
+        col < origin.$1 + placement.cols &&
+        row >= origin.$2 &&
+        row < origin.$2 + placement.rows;
+  }
+
+  bool _placementContainsCol(KittyPlacement placement, int col) {
+    final origin = _resolvePlacementOrigin(placement);
+    if (origin == null) return false;
+    return col >= origin.$1 && col < origin.$1 + placement.cols;
+  }
+
+  bool _placementContainsRow(KittyPlacement placement, int row) {
+    final origin = _resolvePlacementOrigin(placement);
+    if (origin == null) return false;
+    return row >= origin.$2 && row < origin.$2 + placement.rows;
+  }
+
+  void _deleteByFilter(
+    bool Function(KittyPlacement placement) predicate, {
+    required bool freeData,
+    int? clearCol,
+    int? clearRow,
+    int? clearZIndex,
+  }) {
+    final activeAlt = isAltScreen?.call() ?? false;
+    final matched = [
+      for (final p in registry.allPlacements)
+        if (!p.isVirtual && p.isAltScreen == activeAlt && predicate(p)) p,
+    ];
+    final removedKeys = <(int, int)>{};
+    for (final p in matched) {
+      registry.removePlacement(p.imageId, p.placementId);
+      removedKeys.add((p.imageId & 0xFFFFFFFF, p.placementId & 0xFFFFFFFF));
+      if (p.zIndex == 0 && !p.isRelative) {
+        onClearPlacements?.call(
+          p.imageId,
+          placementId: p.placementId,
+          directOnly: true,
+        );
+      }
+    }
+    final affected = _cascadeRemoveRelativePlacements(removedKeys);
+    onClearPlacementsAt?.call(
+      col: clearCol,
+      row: clearRow,
+      zIndex: clearZIndex,
+    );
+    if (freeData && affected.isNotEmpty) {
+      _evictImagesWithoutPlacements(affected);
+    }
+  }
+
+  void _deleteAnimationFrames(Map<String, String> control) {
+    final explicitId = _parsePositiveId(control['i']);
+    final explicitNumber = _parsePositiveId(control['I']);
+    if (!control.containsKey('i') && !control.containsKey('I')) {
+      registry.clearAnimations();
+      return;
+    }
+    final targetId = _resolveTargetImageId(explicitId, explicitNumber);
+    if (targetId > 0) {
+      registry.removeAnimationFrames(targetId);
+    }
+  }
+
   void _handleDelete(Map<String, String> control) {
-    final deleteTarget = control['d'] ?? 'a';
+    final target = control['d'] ?? 'a';
+    final freeData = target == target.toUpperCase();
     final imageId = _parsePositiveId(control['i']);
     final placementId = _parsePositiveId(control['p']);
-    switch (deleteTarget) {
+    switch (target) {
       case 'a' || 'A':
-        _deleteAllDirectPlacements(freeData: deleteTarget == 'A');
+        _deleteAllDirectPlacements(freeData: freeData);
       case 'i' || 'I':
         if (imageId > 0) {
           _deleteImagePlacements(
             imageId,
             placementId: placementId,
-            freeData: deleteTarget == 'I',
+            freeData: freeData,
           );
         }
       case 'n' || 'N':
@@ -692,15 +993,66 @@ final class KittyApcHandler {
           _deleteImagePlacements(
             mappedId,
             placementId: placementId,
-            freeData: deleteTarget == 'N',
+            freeData: freeData,
           );
         }
       case 'r' || 'R':
         _deleteImageRange(
           _parsePositiveId(control['x']),
           _parsePositiveId(control['y']),
-          freeData: deleteTarget == 'R',
+          freeData: freeData,
         );
+      case 'c' || 'C':
+        final (col, row) = cursorPosition?.call() ?? (0, 0);
+        _deleteByFilter(
+          (p) => _placementContainsPoint(p, col, row),
+          freeData: freeData,
+          clearCol: col,
+          clearRow: row,
+        );
+      case 'p' || 'P':
+        final col = _parseOneBasedCoord(control['x']);
+        final row = _parseOneBasedCoord(control['y']);
+        _deleteByFilter(
+          (p) => _placementContainsPoint(p, col, row),
+          freeData: freeData,
+          clearCol: col,
+          clearRow: row,
+        );
+      case 'q' || 'Q':
+        final col = _parseOneBasedCoord(control['x']);
+        final row = _parseOneBasedCoord(control['y']);
+        final z = _parseSignedInt32(control['z']);
+        _deleteByFilter(
+          (p) => p.zIndex == z && _placementContainsPoint(p, col, row),
+          freeData: freeData,
+          clearCol: col,
+          clearRow: row,
+          clearZIndex: z,
+        );
+      case 'x' || 'X':
+        final col = _parseOneBasedCoord(control['x']);
+        _deleteByFilter(
+          (p) => _placementContainsCol(p, col),
+          freeData: freeData,
+          clearCol: col,
+        );
+      case 'y' || 'Y':
+        final row = _parseOneBasedCoord(control['y']);
+        _deleteByFilter(
+          (p) => _placementContainsRow(p, row),
+          freeData: freeData,
+          clearRow: row,
+        );
+      case 'z' || 'Z':
+        final z = _parseSignedInt32(control['z']);
+        _deleteByFilter(
+          (p) => p.zIndex == z,
+          freeData: freeData,
+          clearZIndex: z,
+        );
+      case 'f' || 'F':
+        _deleteAnimationFrames(control);
       default:
         break;
     }
@@ -754,6 +1106,12 @@ final class KittyApcHandler {
     }
     if (control.containsKey('o') &&
         (control['o'] == 'z') != existing.compressed) {
+      return true;
+    }
+    if (existing.action == 'f' &&
+        control.containsKey('r') &&
+        _parsePositiveId(control['r']) !=
+            (existing.frameParams?.targetFrame ?? 0)) {
       return true;
     }
     return false;
@@ -819,12 +1177,29 @@ final class KittyApcHandler {
 
     final explicitNumber = _parsePositiveId(control['I']);
     final placementId = _parsePositiveId(control['p']);
+    final mappedFrameId = action == 'f' && explicitId == 0 && explicitNumber > 0
+        ? (_imageNumberToId[explicitNumber] ?? 0)
+        : 0;
     final hasAddressableId = explicitId > 0;
-    final imageId = hasAddressableId ? explicitId : _allocateAutoId();
+    final imageId = hasAddressableId
+        ? explicitId
+        : (mappedFrameId > 0 ? mappedFrameId : _allocateAutoId());
     _removePendingUpload(imageId);
     _evictOldestUploadIfNeeded();
 
     final format = _parseFormat(control);
+    var validationError = _resolveValidationError(
+      control,
+      format,
+      action: action,
+    );
+    if (action == 'f' &&
+        validationError == null &&
+        explicitId == 0 &&
+        explicitNumber > 0 &&
+        mappedFrameId == 0) {
+      validationError = 'ENOENT:image not found';
+    }
     final created = _PendingUpload(
       imageId: imageId,
       explicitNumber: explicitNumber,
@@ -844,12 +1219,17 @@ final class KittyApcHandler {
       placementId: placementId,
       hasAddressableId: hasAddressableId,
       replyPrefix: _resolveReplyPrefix(
-        hasAddressableId || explicitNumber > 0 ? imageId : 0,
+        hasAddressableId ||
+                explicitNumber > 0 && (action != 'f' || mappedFrameId > 0)
+            ? imageId
+            : 0,
         explicitNumber,
-        placementId: placementId,
+        placementId: action == 'f' ? 0 : placementId,
         isQuery: action == 'q',
       ),
-      validationError: _resolveValidationError(control, format),
+      validationError: validationError,
+      placementParams: action == 'T' ? _parsePlacementParams(control) : null,
+      frameParams: action == 'f' ? _parseFrameUploadParams(control) : null,
     );
     _pendingUploads[imageId] = created;
     return created;
@@ -909,6 +1289,58 @@ final class KittyApcHandler {
     _finalizeUpload(pending, chunk.effectiveQuiet);
   }
 
+  String? _commitUploadedImage(
+    _PendingUpload pending,
+    KittyImageData imageData,
+  ) {
+    if (pending.action == 'T') {
+      final built = _validateAndBuildPlacement(
+        data: imageData,
+        placementId: pending.placementId,
+        isVirtual: pending.virtual,
+        advanceCursor: pending.advanceCursor,
+        reqCols: pending.cols,
+        reqRows: pending.rows,
+        params: pending.placementParams ?? const _PlacementParams(),
+      );
+      if (built.error != null) return built.error;
+      final placement = built.placement!;
+      final finalImage =
+          (placement.cols != imageData.gridCols ||
+              placement.rows != imageData.gridRows)
+          ? imageData.copyWith(
+              gridCols: placement.cols,
+              gridRows: placement.rows,
+            )
+          : imageData;
+      registry.registerImage(finalImage);
+      if (pending.explicitNumber > 0) {
+        _imageNumberToId[pending.explicitNumber] = pending.imageId;
+      }
+      _applyPlacement(placement, advanceCursor: pending.advanceCursor);
+      return null;
+    }
+
+    registry.registerImage(imageData);
+    if (pending.explicitNumber > 0) {
+      _imageNumberToId[pending.explicitNumber] = pending.imageId;
+    }
+    if (pending.virtual) {
+      _applyPlacement(
+        KittyPlacement(
+          imageId: pending.imageId,
+          placementId: pending.placementId,
+          isVirtual: true,
+          isAltScreen: isAltScreen?.call() ?? false,
+          cols: imageData.gridCols,
+          rows: imageData.gridRows,
+        ),
+        advanceCursor: false,
+      );
+    }
+    return null;
+  }
+
   void _finalizeUpload(_PendingUpload pending, int quiet) {
     if (pending.validationError != null) {
       _replyError(pending.replyPrefix, quiet, pending.validationError!);
@@ -925,25 +1357,10 @@ final class KittyApcHandler {
       final imageData = existing != null
           ? rawData.copyWith(version: existing.version + 1)
           : rawData;
-      registry.registerImage(imageData);
-      if (pending.explicitNumber > 0) {
-        _imageNumberToId[pending.explicitNumber] = pending.imageId;
-      }
-      if (pending.action == 'T' || pending.virtual) {
-        _placements.add((
-          pending.imageId,
-          pending.placementId,
-          pending.virtual,
-        ));
-      }
-      if (pending.action == 'T' && !pending.virtual) {
-        onPlaceVirtual(
-          imageData.gridCols,
-          imageData.gridRows,
-          pending.imageId,
-          pending.advanceCursor,
-          pending.placementId,
-        );
+      final commitError = _commitUploadedImage(pending, imageData);
+      if (commitError != null) {
+        _replyError(pending.replyPrefix, quiet, commitError);
+        return;
       }
       _replyOk(pending.replyPrefix, quiet);
     } on Exception catch (e) {
@@ -957,6 +1374,19 @@ final class KittyApcHandler {
       final rawBytes = pending.compressed
           ? _inflateZlibBytes(decoded)
           : decoded;
+      return _buildImageData(pending, rawBytes);
+    }
+    if (pending.medium == 'f') {
+      final payloadBytes = _readMediumBytes(
+        pending.medium,
+        decoded,
+        dataOffset: pending.dataOffset,
+        dataSize: pending.dataSize,
+        unlink: false,
+      );
+      final rawBytes = pending.compressed
+          ? _inflateZlibBytes(payloadBytes)
+          : payloadBytes;
       return _buildImageData(pending, rawBytes);
     }
     late final KittyImageData built;
@@ -1159,6 +1589,189 @@ final class KittyApcHandler {
     return 0;
   }
 
+  bool _createsRelativeCycle(
+    int imageId,
+    int placementId,
+    int parentImageId,
+    int parentPlacementId,
+  ) {
+    final visited = <(int, int)>{
+      (imageId & 0xFFFFFFFF, placementId & 0xFFFFFFFF),
+    };
+    var curImage = parentImageId & 0xFFFFFFFF;
+    var curPlacement = parentPlacementId & 0xFFFFFFFF;
+    for (var depth = 0; depth < _maxRelativeChainDepth; depth++) {
+      final curKey = (curImage, curPlacement);
+      if (visited.contains(curKey)) return true;
+      visited.add(curKey);
+      final parent = registry.lookupPlacement(curImage, curPlacement);
+      if (parent == null || !parent.isRelative) return false;
+      curImage = parent.parentImageId & 0xFFFFFFFF;
+      curPlacement = parent.parentPlacementId & 0xFFFFFFFF;
+    }
+    return true;
+  }
+
+  ({int col, int row, String? error}) _resolveRelativeAnchor({
+    required int imageId,
+    required int placementId,
+    required _PlacementParams params,
+    required bool currentAlt,
+  }) {
+    if (_createsRelativeCycle(
+      imageId,
+      placementId,
+      params.parentImageId,
+      params.parentPlacementId,
+    )) {
+      return (col: 0, row: 0, error: 'EINVAL:relative placement cycle');
+    }
+    final parent = registry.lookupPlacement(
+      params.parentImageId,
+      params.parentPlacementId,
+    );
+    if (parent == null || parent.isAltScreen != currentAlt) {
+      return (col: 0, row: 0, error: 'ENOENT:parent placement not found');
+    }
+    if (parent.isVirtual) {
+      return (
+        col: 0,
+        row: 0,
+        error: 'EINVAL:cannot place relative to virtual placement',
+      );
+    }
+    final origin = _resolvePlacementOrigin(parent);
+    return (
+      col: (origin?.$1 ?? parent.gridCol) + params.relCols,
+      row: (origin?.$2 ?? parent.gridRow) + params.relRows,
+      error: null,
+    );
+  }
+
+  (int col, int row) _resolveDirectAnchor({required bool advanceCursor}) {
+    final (curCol, curRow) = cursorPosition?.call() ?? (0, 0);
+    final vpCols = viewportSize?.call().$1;
+    if (vpCols != null && vpCols > 0 && curCol >= vpCols) {
+      return advanceCursor ? (0, curRow + 1) : (vpCols - 1, curRow);
+    }
+    return (curCol, curRow);
+  }
+
+  ({KittyPlacement? placement, String? error}) _validateAndBuildPlacement({
+    required KittyImageData data,
+    required int placementId,
+    required bool isVirtual,
+    required bool advanceCursor,
+    required int? reqCols,
+    required int? reqRows,
+    required _PlacementParams params,
+  }) {
+    final currentAlt = isAltScreen?.call() ?? false;
+    var gridCol = 0;
+    var gridRow = 0;
+    if (params.parentImageId > 0) {
+      final anchor = _resolveRelativeAnchor(
+        imageId: data.imageId,
+        placementId: placementId,
+        params: params,
+        currentAlt: currentAlt,
+      );
+      if (anchor.error != null) {
+        return (placement: null, error: anchor.error);
+      }
+      gridCol = anchor.col;
+      gridRow = anchor.row;
+    } else if (!isVirtual) {
+      (gridCol, gridRow) = _resolveDirectAnchor(advanceCursor: advanceCursor);
+    }
+
+    final srcX = params.srcX.clamp(0, data.pixelWidth);
+    final srcY = params.srcY.clamp(0, data.pixelHeight);
+    final remW = math.max(0, data.pixelWidth - srcX);
+    final remH = math.max(0, data.pixelHeight - srcY);
+    final srcWidth = params.srcWidth > 0 ? math.min(params.srcWidth, remW) : 0;
+    final srcHeight = params.srcHeight > 0
+        ? math.min(params.srcHeight, remH)
+        : 0;
+
+    final (rawCellW, rawCellH) = cellPixelSize();
+    final cellW = math.max(1, rawCellW);
+    final cellH = math.max(1, rawCellH);
+    final cellOffsetX = params.cellOffsetX.clamp(0, cellW - 1);
+    final cellOffsetY = params.cellOffsetY.clamp(0, cellH - 1);
+
+    final effW = srcWidth > 0 ? srcWidth : math.max(1, remW);
+    final effH = srcHeight > 0 ? srcHeight : math.max(1, remH);
+    final hasCrop = srcX > 0 || srcY > 0 || srcWidth > 0 || srcHeight > 0;
+    final (cols, rows) = (reqCols != null || reqRows != null || hasCrop)
+        ? _resolvePlacementGrid(reqCols, reqRows, effW, effH)
+        : (data.gridCols, data.gridRows);
+
+    return (
+      placement: KittyPlacement(
+        imageId: data.imageId,
+        placementId: placementId,
+        isVirtual: isVirtual,
+        isAltScreen: currentAlt,
+        gridCol: gridCol,
+        gridRow: gridRow,
+        cols: cols,
+        rows: rows,
+        srcX: srcX,
+        srcY: srcY,
+        srcWidth: srcWidth,
+        srcHeight: srcHeight,
+        cellOffsetX: cellOffsetX,
+        cellOffsetY: cellOffsetY,
+        zIndex: params.zIndex,
+        parentImageId: params.parentImageId,
+        parentPlacementId: params.parentPlacementId,
+        relCols: params.relCols,
+        relRows: params.relRows,
+      ),
+      error: null,
+    );
+  }
+
+  void _applyPlacement(
+    KittyPlacement placement, {
+    required bool advanceCursor,
+  }) {
+    final existing = registry.lookupPlacement(
+      placement.imageId,
+      placement.placementId,
+    );
+    final hadDirectPlaceholder =
+        existing != null &&
+        !existing.isVirtual &&
+        !existing.isRelative &&
+        existing.zIndex == 0;
+    final becomesNonPlaceholder =
+        placement.isVirtual || placement.isRelative || placement.zIndex != 0;
+    if (hadDirectPlaceholder && becomesNonPlaceholder) {
+      onClearPlacements?.call(
+        existing.imageId,
+        placementId: existing.placementId,
+        directOnly: true,
+      );
+    }
+    registry.registerPlacement(placement);
+    if (placement.isVirtual) return;
+    if (placement.zIndex != 0 || placement.isRelative) {
+      if (advanceCursor) {
+        onAdvanceCursor?.call(placement.cols, placement.rows);
+      }
+      return;
+    }
+    onPlaceVirtual(
+      placement.cols,
+      placement.rows,
+      placement.imageId,
+      advanceCursor,
+      placement.placementId,
+    );
+  }
+
   void _handlePlace(Map<String, String> control, int quiet) {
     final explicitId = _parsePositiveId(control['i']);
     final explicitNumber = _parsePositiveId(control['I']);
@@ -1178,31 +1791,610 @@ final class KittyApcHandler {
       explicitNumber,
       placementId: placementId,
     );
+    if (_isOutOfRangeUint32(control['P']) ||
+        _isOutOfRangeUint32(control['Q'])) {
+      _replyError(replyPrefix, quiet, 'EINVAL:invalid parent id');
+      return;
+    }
     final data = imageId > 0 ? registry.lookupImage(imageId) : null;
     if (data == null) {
       _replyError(replyPrefix, quiet, 'ENOENT:image not found');
       return;
     }
 
-    final reqCols = _parseOptionalPositiveInt(control['c']);
-    final reqRows = _parseOptionalPositiveInt(control['r']);
-    final (cols, rows) = (reqCols != null || reqRows != null)
-        ? _resolvePlacementGrid(
-            reqCols,
-            reqRows,
-            data.pixelWidth,
-            data.pixelHeight,
-          )
-        : (data.gridCols, data.gridRows);
     final isVirtual = (int.tryParse(control['U'] ?? '0') ?? 0) == 1;
-    if ((cols != data.gridCols || rows != data.gridRows) &&
-        !_hasOtherPlacement(imageId, placementId, isVirtual)) {
-      registry.registerImage(data.copyWith(gridCols: cols, gridRows: rows));
+    final advanceCursor = (int.tryParse(control['C'] ?? '0') ?? 0) != 1;
+    final built = _validateAndBuildPlacement(
+      data: data,
+      placementId: placementId,
+      isVirtual: isVirtual,
+      advanceCursor: advanceCursor,
+      reqCols: _parseOptionalPositiveInt(control['c']),
+      reqRows: _parseOptionalPositiveInt(control['r']),
+      params: _parsePlacementParams(control),
+    );
+    if (built.error != null) {
+      _replyError(replyPrefix, quiet, built.error!);
+      return;
     }
-    _placements.add((imageId, placementId, isVirtual));
-    if (!isVirtual) {
-      final advanceCursor = (int.tryParse(control['C'] ?? '0') ?? 0) != 1;
-      onPlaceVirtual(cols, rows, imageId, advanceCursor, placementId);
+    final placement = built.placement!;
+    if ((placement.cols != data.gridCols || placement.rows != data.gridRows) &&
+        !_hasOtherPlacement(imageId, placementId, isVirtual)) {
+      registry.registerImage(
+        data.copyWith(gridCols: placement.cols, gridRows: placement.rows),
+      );
+    }
+    _applyPlacement(placement, advanceCursor: advanceCursor);
+    _replyOk(replyPrefix, quiet);
+  }
+
+  KittyAnimationFrame? _lookupAnimationFrame(int imageId, int frameNumber) {
+    final anim = registry.lookupAnimation(imageId);
+    if (anim != null) {
+      final idx = anim.indexOfFrame(frameNumber);
+      return idx >= 0 ? anim.frames[idx] : null;
+    }
+    if (frameNumber == 1) {
+      final root = registry.lookupImage(imageId);
+      if (root != null) {
+        return KittyAnimationFrame(frameNumber: 1, imageData: root);
+      }
+    }
+    return null;
+  }
+
+  int _resolveNextFrameNumber(int imageId) {
+    final anim = registry.lookupAnimation(imageId);
+    if (anim == null || anim.frames.isEmpty) return 2;
+    return anim.frames.last.frameNumber + 1;
+  }
+
+  void _handleAnimationFrame(
+    Map<String, String> control,
+    String dataPart,
+    int quiet,
+  ) {
+    final pending = _obtainPendingUpload('f', control, quiet);
+    final chunk = _bufferUploadChunk(pending, control, dataPart, quiet);
+    if (chunk.isMore) return;
+    _finalizeAnimationFrame(pending, chunk.effectiveQuiet);
+  }
+
+  Uint8List _decodeFrameRawBytes(_PendingUpload pending) {
+    final decoded = _decodeBase64Payload(pending.base64Data.toString());
+    if (pending.medium == 'd') {
+      return pending.compressed ? _inflateZlibBytes(decoded) : decoded;
+    }
+    if (pending.medium == 'f') {
+      final payloadBytes = _readMediumBytes(
+        pending.medium,
+        decoded,
+        dataOffset: pending.dataOffset,
+        dataSize: pending.dataSize,
+        unlink: false,
+      );
+      return pending.compressed
+          ? _inflateZlibBytes(payloadBytes)
+          : payloadBytes;
+    }
+    late final Uint8List raw;
+    _readMediumBytes(
+      pending.medium,
+      decoded,
+      dataOffset: pending.dataOffset,
+      dataSize: pending.dataSize,
+      unlink: true,
+      shouldUnlink: (payloadBytes) {
+        raw = pending.compressed
+            ? _inflateZlibBytes(payloadBytes)
+            : payloadBytes;
+        return true;
+      },
+    );
+    return raw;
+  }
+
+  static Uint8List _initFrameCanvas(
+    KittyImageData root,
+    KittyAnimationFrame? existingTarget,
+    KittyAnimationFrame? baseFrame,
+    int bgColor,
+  ) {
+    final template = baseFrame ?? existingTarget;
+    if (template != null) {
+      final data = template.imageData;
+      if (data.format != KittyImageData.formatRgba32 ||
+          data.rgbaPixels.length < root.pixelWidth * root.pixelHeight * 4) {
+        throw const _InvalidPayloadException();
+      }
+      return Uint8List.fromList(
+        data.rgbaPixels.sublist(0, root.pixelWidth * root.pixelHeight * 4),
+      );
+    }
+    final canvas = Uint8List(root.pixelWidth * root.pixelHeight * 4);
+    if (bgColor != 0) {
+      final r = (bgColor >>> 24) & 0xFF;
+      final g = (bgColor >>> 16) & 0xFF;
+      final b = (bgColor >>> 8) & 0xFF;
+      final a = bgColor & 0xFF;
+      for (var i = 0; i < canvas.length; i += 4) {
+        canvas[i] = r;
+        canvas[i + 1] = g;
+        canvas[i + 2] = b;
+        canvas[i + 3] = a;
+      }
+    }
+    return canvas;
+  }
+
+  static void _alphaBlendPixel(
+    Uint8List src,
+    int sOff,
+    Uint8List dst,
+    int dOff,
+  ) {
+    final sA = src[sOff + 3];
+    if (sA == 0) return;
+    if (sA == 255) {
+      dst[dOff] = src[sOff];
+      dst[dOff + 1] = src[sOff + 1];
+      dst[dOff + 2] = src[sOff + 2];
+      dst[dOff + 3] = 255;
+      return;
+    }
+    final invA = 255 - sA;
+    final effDstA = (dst[dOff + 3] * invA) ~/ 255;
+    final outA = sA + effDstA;
+    if (outA == 0) return;
+    dst[dOff] = (src[sOff] * sA + dst[dOff] * effDstA) ~/ outA;
+    dst[dOff + 1] = (src[sOff + 1] * sA + dst[dOff + 1] * effDstA) ~/ outA;
+    dst[dOff + 2] = (src[sOff + 2] * sA + dst[dOff + 2] * effDstA) ~/ outA;
+    dst[dOff + 3] = outA;
+  }
+
+  static void _blitFramePatch({
+    required Uint8List canvas,
+    required int canvasW,
+    required int canvasH,
+    required Uint8List patchRgba,
+    required int patchW,
+    required int patchH,
+    required int dstX,
+    required int dstY,
+    required bool replace,
+  }) {
+    if (dstX < 0 || dstY < 0 || dstX >= canvasW || dstY >= canvasH) {
+      throw const _InvalidPayloadException();
+    }
+    final copyW = math.min(patchW, canvasW - dstX);
+    final copyH = math.min(patchH, canvasH - dstY);
+    for (var row = 0; row < copyH; row++) {
+      var sOff = row * patchW * 4;
+      var dOff = ((dstY + row) * canvasW + dstX) * 4;
+      for (var col = 0; col < copyW; col++, sOff += 4, dOff += 4) {
+        if (replace) {
+          canvas[dOff] = patchRgba[sOff];
+          canvas[dOff + 1] = patchRgba[sOff + 1];
+          canvas[dOff + 2] = patchRgba[sOff + 2];
+          canvas[dOff + 3] = patchRgba[sOff + 3];
+        } else {
+          _alphaBlendPixel(patchRgba, sOff, canvas, dOff);
+        }
+      }
+    }
+  }
+
+  KittyImageData _buildPngAnimationFrame(
+    KittyImageData root,
+    _PendingUpload pending,
+    Uint8List rawBytes,
+  ) {
+    final (ihdrW, ihdrH) = _extractPngDimensions(rawBytes);
+    if (!_isValidDimensions(ihdrW, ihdrH) ||
+        ihdrW != root.pixelWidth ||
+        ihdrH != root.pixelHeight) {
+      throw const _InvalidPayloadException();
+    }
+    if ((pending.width > 0 && pending.width != ihdrW) ||
+        (pending.height > 0 && pending.height != ihdrH)) {
+      throw const _InvalidPayloadException();
+    }
+    return KittyImageData.fromPng(
+      imageId: root.imageId,
+      pixelWidth: ihdrW,
+      pixelHeight: ihdrH,
+      pngBytes: rawBytes,
+      gridCols: root.gridCols,
+      gridRows: root.gridRows,
+      version: ++_frameVersionCounter,
+    );
+  }
+
+  static Uint8List _decodeFramePatchRgba(
+    int format,
+    Uint8List rawBytes,
+    int patchW,
+    int patchH,
+  ) {
+    if (!_isValidDimensions(patchW, patchH)) {
+      throw const _InvalidPayloadException();
+    }
+    if (format == KittyImageData.formatRgb24) {
+      if (rawBytes.length < patchW * patchH * 3) {
+        throw const _InvalidPayloadException();
+      }
+      return _convertRgb24ToRgba32(rawBytes, patchW * patchH);
+    }
+    if (format == KittyImageData.formatRgba32) {
+      if (rawBytes.length < patchW * patchH * 4) {
+        throw const _InvalidPayloadException();
+      }
+      return rawBytes;
+    }
+    throw const _InvalidPayloadException();
+  }
+
+  KittyImageData _buildAnimationFrameData({
+    required KittyImageData root,
+    required KittyAnimationFrame? existingTarget,
+    required KittyAnimationFrame? baseFrame,
+    required _PendingUpload pending,
+    required _FrameUploadParams params,
+    required Uint8List rawBytes,
+  }) {
+    final isFullPngFrame =
+        pending.format == KittyImageData.formatPng &&
+        rawBytes.isNotEmpty &&
+        baseFrame == null &&
+        (existingTarget == null || params.replace) &&
+        params.dstX == 0 &&
+        params.dstY == 0;
+    if (isFullPngFrame) {
+      return _buildPngAnimationFrame(root, pending, rawBytes);
+    }
+
+    final canvas = _initFrameCanvas(
+      root,
+      existingTarget,
+      baseFrame,
+      params.bgColor,
+    );
+    if (rawBytes.isNotEmpty) {
+      final patchW = pending.width > 0 ? pending.width : root.pixelWidth;
+      final patchH = pending.height > 0 ? pending.height : root.pixelHeight;
+      final patchRgba = _decodeFramePatchRgba(
+        pending.format,
+        rawBytes,
+        patchW,
+        patchH,
+      );
+      _blitFramePatch(
+        canvas: canvas,
+        canvasW: root.pixelWidth,
+        canvasH: root.pixelHeight,
+        patchRgba: patchRgba,
+        patchW: patchW,
+        patchH: patchH,
+        dstX: params.dstX,
+        dstY: params.dstY,
+        replace: params.replace,
+      );
+    }
+    return KittyImageData(
+      imageId: root.imageId,
+      pixelWidth: root.pixelWidth,
+      pixelHeight: root.pixelHeight,
+      rgbaPixels: canvas,
+      gridCols: root.gridCols,
+      gridRows: root.gridRows,
+      version: ++_frameVersionCounter,
+      format: KittyImageData.formatRgba32,
+    );
+  }
+
+  void _finalizeAnimationFrame(_PendingUpload pending, int quiet) {
+    if (pending.validationError != null) {
+      _replyError(pending.replyPrefix, quiet, pending.validationError!);
+      return;
+    }
+    if (pending.overflowed) {
+      _replyError(pending.replyPrefix, quiet, 'EFBIG:payload too large');
+      return;
+    }
+    final root = registry.lookupImage(pending.imageId);
+    if (root == null) {
+      _replyError(pending.replyPrefix, quiet, 'ENOENT:image not found');
+      return;
+    }
+    final params =
+        pending.frameParams ??
+        const _FrameUploadParams(
+          targetFrame: 0,
+          baseFrame: 0,
+          dstX: 0,
+          dstY: 0,
+          replace: false,
+          bgColor: 0,
+          gapMs: null,
+        );
+    final baseFrame = params.baseFrame > 0
+        ? _lookupAnimationFrame(pending.imageId, params.baseFrame)
+        : null;
+    if (params.baseFrame > 0 && baseFrame == null) {
+      _replyError(pending.replyPrefix, quiet, 'ENOENT:base frame not found');
+      return;
+    }
+    final targetNum = params.targetFrame > 0
+        ? params.targetFrame
+        : _resolveNextFrameNumber(pending.imageId);
+    final existingTarget = _lookupAnimationFrame(pending.imageId, targetNum);
+
+    try {
+      final rawBytes = _decodeFrameRawBytes(pending);
+      final frameData = _buildAnimationFrameData(
+        root: root,
+        existingTarget: existingTarget,
+        baseFrame: baseFrame,
+        pending: pending,
+        params: params,
+        rawBytes: rawBytes,
+      );
+      final frame = KittyAnimationFrame(
+        frameNumber: targetNum,
+        imageData: frameData,
+        gapMs: params.gapMs ?? existingTarget?.gapMs ?? 0,
+      );
+      if (!registry.registerAnimationFrame(pending.imageId, frame)) {
+        _replyError(
+          pending.replyPrefix,
+          quiet,
+          'EFBIG:animation frame limit exceeded',
+        );
+        return;
+      }
+      final okPrefix = pending.replyPrefix != null
+          ? '${pending.replyPrefix},r=$targetNum'
+          : null;
+      _replyOk(okPrefix, quiet);
+    } on Exception catch (e) {
+      _replyPayloadError(pending.replyPrefix, quiet, e);
+    }
+  }
+
+  static ({KittyAnimationPlayback? playback, String? error})
+  _parseAnimationState(String? raw) => switch (raw) {
+    null || '0' => (playback: null, error: null),
+    '1' => (playback: KittyAnimationPlayback.stopped, error: null),
+    '2' => (playback: KittyAnimationPlayback.loading, error: null),
+    '3' => (playback: KittyAnimationPlayback.running, error: null),
+    _ => (playback: null, error: 'EINVAL:invalid animation state'),
+  };
+
+  static ({int? loopCount, String? error}) _parseAnimationLoops(String? raw) {
+    if (raw == null) return (loopCount: null, error: null);
+    final parsed = int.tryParse(raw);
+    if (parsed == null || parsed < 0) {
+      return (loopCount: null, error: 'EINVAL:invalid loop count');
+    }
+    if (parsed == 0) return (loopCount: null, error: null);
+    return (loopCount: parsed - 1, error: null);
+  }
+
+  String? _validateControlFrameRefs(
+    int imageId,
+    int? currentFrameNumber,
+    int? frameGapNumber,
+  ) {
+    if (currentFrameNumber != null &&
+        _lookupAnimationFrame(imageId, currentFrameNumber) == null) {
+      return 'ENOENT:frame not found';
+    }
+    if (frameGapNumber != null &&
+        _lookupAnimationFrame(imageId, frameGapNumber) == null) {
+      return 'ENOENT:frame not found';
+    }
+    return null;
+  }
+
+  void _handleAnimationControl(Map<String, String> control, int quiet) {
+    final explicitId = _parsePositiveId(control['i']);
+    final explicitNumber = _parsePositiveId(control['I']);
+    if (explicitId > 0 && explicitNumber > 0) {
+      _replyError(
+        _resolveReplyPrefix(explicitId, 0),
+        quiet,
+        'EINVAL:cannot specify both i and I',
+      );
+      return;
+    }
+    final imageId = _resolveTargetImageId(explicitId, explicitNumber);
+    final replyPrefix = _resolveReplyPrefix(imageId, explicitNumber);
+    if (imageId <= 0 || registry.lookupImage(imageId) == null) {
+      _replyError(replyPrefix, quiet, 'ENOENT:image not found');
+      return;
+    }
+    final stateResult = _parseAnimationState(control['s']);
+    if (stateResult.error != null) {
+      _replyError(replyPrefix, quiet, stateResult.error!);
+      return;
+    }
+    final loopResult = _parseAnimationLoops(control['v']);
+    if (loopResult.error != null) {
+      _replyError(replyPrefix, quiet, loopResult.error!);
+      return;
+    }
+    final frameGapMs = control.containsKey('z')
+        ? _parseSignedInt32(control['z'])
+        : null;
+    final frameGapNumber =
+        _parseOptionalPositiveInt(control['r']) ??
+        (frameGapMs != null ? 1 : null);
+    final currentFrameNumber = _parseOptionalPositiveInt(control['c']);
+    final frameErr = _validateControlFrameRefs(
+      imageId,
+      currentFrameNumber,
+      frameGapNumber,
+    );
+    if (frameErr != null) {
+      _replyError(replyPrefix, quiet, frameErr);
+      return;
+    }
+    registry.setAnimationPlayback(
+      imageId,
+      playback: stateResult.playback,
+      loopCount: loopResult.loopCount,
+      currentFrameNumber: currentFrameNumber,
+      frameGapNumber: frameGapNumber,
+      frameGapMs: frameGapMs,
+    );
+    _replyOk(replyPrefix, quiet);
+  }
+
+  static bool _isValidRgbaFrameData(KittyImageData data) =>
+      data.format == KittyImageData.formatRgba32 &&
+      data.pixelWidth > 0 &&
+      data.pixelHeight > 0 &&
+      data.rgbaPixels.length >= data.pixelWidth * data.pixelHeight * 4;
+
+  static ({
+    int srcX,
+    int srcY,
+    int dstX,
+    int dstY,
+    int? width,
+    int? height,
+    bool replace,
+    String? error,
+  })
+  _validateComposeParams(
+    Map<String, String> control,
+    KittyImageData srcData,
+    KittyImageData dstData,
+  ) {
+    final compRaw = control['C'];
+    if (compRaw != null && compRaw != '0' && compRaw != '1') {
+      return (
+        srcX: 0,
+        srcY: 0,
+        dstX: 0,
+        dstY: 0,
+        width: null,
+        height: null,
+        replace: false,
+        error: 'EINVAL:invalid composition mode',
+      );
+    }
+    if (_isNegativeInt(control['x']) ||
+        _isNegativeInt(control['y']) ||
+        _isNegativeInt(control['X']) ||
+        _isNegativeInt(control['Y']) ||
+        _isNegativeInt(control['w']) ||
+        _isNegativeInt(control['h'])) {
+      return (
+        srcX: 0,
+        srcY: 0,
+        dstX: 0,
+        dstY: 0,
+        width: null,
+        height: null,
+        replace: false,
+        error: 'EINVAL:invalid composition geometry',
+      );
+    }
+    final srcX = _parseNonNegativeInt(control['X']);
+    final srcY = _parseNonNegativeInt(control['Y']);
+    final dstX = _parseNonNegativeInt(control['x']);
+    final dstY = _parseNonNegativeInt(control['y']);
+    final width = _parseOptionalPositiveInt(control['w']);
+    final height = _parseOptionalPositiveInt(control['h']);
+    final copyW = math.min(
+      width ?? srcData.pixelWidth,
+      math.min(srcData.pixelWidth - srcX, dstData.pixelWidth - dstX),
+    );
+    final copyH = math.min(
+      height ?? srcData.pixelHeight,
+      math.min(srcData.pixelHeight - srcY, dstData.pixelHeight - dstY),
+    );
+    if (!_isValidRgbaFrameData(srcData) ||
+        !_isValidRgbaFrameData(dstData) ||
+        copyW <= 0 ||
+        copyH <= 0) {
+      return (
+        srcX: 0,
+        srcY: 0,
+        dstX: 0,
+        dstY: 0,
+        width: null,
+        height: null,
+        replace: false,
+        error: 'EINVAL:invalid composition geometry',
+      );
+    }
+    return (
+      srcX: srcX,
+      srcY: srcY,
+      dstX: dstX,
+      dstY: dstY,
+      width: width,
+      height: height,
+      replace: compRaw == '1',
+      error: null,
+    );
+  }
+
+  void _handleAnimationCompose(Map<String, String> control, int quiet) {
+    final explicitId = _parsePositiveId(control['i']);
+    final explicitNumber = _parsePositiveId(control['I']);
+    if (explicitId > 0 && explicitNumber > 0) {
+      _replyError(
+        _resolveReplyPrefix(explicitId, 0),
+        quiet,
+        'EINVAL:cannot specify both i and I',
+      );
+      return;
+    }
+    final imageId = _resolveTargetImageId(explicitId, explicitNumber);
+    final replyPrefix = _resolveReplyPrefix(imageId, explicitNumber);
+    if (imageId <= 0 || registry.lookupImage(imageId) == null) {
+      _replyError(replyPrefix, quiet, 'ENOENT:image not found');
+      return;
+    }
+    final srcFrameNum = _parsePositiveId(control['r']);
+    final dstFrameNum = _parsePositiveId(control['c']);
+    if (srcFrameNum == 0 || dstFrameNum == 0) {
+      _replyError(replyPrefix, quiet, 'EINVAL:invalid frame number');
+      return;
+    }
+    final srcFrame = _lookupAnimationFrame(imageId, srcFrameNum);
+    final dstFrame = _lookupAnimationFrame(imageId, dstFrameNum);
+    if (srcFrame == null || dstFrame == null) {
+      _replyError(replyPrefix, quiet, 'ENOENT:frame not found');
+      return;
+    }
+    final validated = _validateComposeParams(
+      control,
+      srcFrame.imageData,
+      dstFrame.imageData,
+    );
+    if (validated.error != null) {
+      _replyError(replyPrefix, quiet, validated.error!);
+      return;
+    }
+    final ok = registry.composeAnimationFrame(
+      imageId,
+      sourceFrameNumber: srcFrameNum,
+      destFrameNumber: dstFrameNum,
+      srcX: validated.srcX,
+      srcY: validated.srcY,
+      dstX: validated.dstX,
+      dstY: validated.dstY,
+      width: validated.width,
+      height: validated.height,
+      replace: validated.replace,
+    );
+    if (!ok) {
+      _replyError(replyPrefix, quiet, 'EFBIG:animation frame limit exceeded');
+      return;
     }
     _replyOk(replyPrefix, quiet);
   }
