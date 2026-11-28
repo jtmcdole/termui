@@ -822,7 +822,7 @@ void main() {
         expect(osc52Match, isNotNull);
         final copiedJson = utf8.decode(base64Decode(osc52Match!.group(1)!));
         final parsedCopy = jsonDecode(copiedJson) as Map<String, Object?>;
-        expect(parsedCopy['coreTotal'], equals(33));
+        expect(parsedCopy['coreTotal'], equals(36));
         expect(parsedCopy['colorScheme'], equals('light'));
 
         // 4. Press [E] to invoke Web-safe export callback.
@@ -831,7 +831,7 @@ void main() {
         expect(exportedPayloads, hasLength(1));
         final parsedExport =
             jsonDecode(exportedPayloads.single) as Map<String, Object?>;
-        expect(parsedExport['coreTotal'], equals(33));
+        expect(parsedExport['coreTotal'], equals(36));
 
         // 5. Exit disables DECSET 2031 and deletes the animated showcase image cleanly.
         wireOut.clear();

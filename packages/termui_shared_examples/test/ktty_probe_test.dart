@@ -165,8 +165,8 @@ void main() {
 
       expect(report.isComplete, isTrue);
       expect(report.supportedCount, equals(18));
-      expect(report.coreUnsupportedCount, equals(15));
-      expect(report.optionalDisabledCount, equals(5));
+      expect(report.coreUnsupportedCount, equals(18));
+      expect(report.optionalDisabledCount, equals(7));
       expect(report.xtVersion, equals('kitty(0.37.0)'));
       expect(report.kittyKeyboardFlags, equals(11));
       expect(report.defaultForegroundHex, equals('#EFF1F5'));
@@ -594,7 +594,7 @@ void main() {
 
   group('VirtualTerminal end-to-end KTTY probe', () {
     test(
-      'runKttyBatchProbe passes all 33 core capabilities and cleans up temporary probe images, placements, and animations',
+      'runKttyBatchProbe passes all 36 core capabilities and cleans up temporary probe images, placements, and animations',
       () async {
         final replies = StreamController<List<int>>.broadcast();
         final vt = VirtualTerminal(
@@ -613,30 +613,96 @@ void main() {
         final report = await runKttyBatchProbe(
           wireInput: replies.stream,
           onWriteWire: vt.writeString,
-          options: const KttyProbeOptions(probeClipboardWrite: true),
         );
 
         expect(report.isComplete, isTrue);
-        expect(report.coreSupportedCount, equals(33));
-        expect(report.coreTotalCount, equals(33));
+        expect(report.coreSupportedCount, equals(36));
+        expect(report.coreTotalCount, equals(36));
         expect(report.coreUnsupportedCount, equals(0));
+        expect(report['decrqm_2048']?.detail, contains('48t: 96x28'));
+        expect(
+          report['csi_xtpushcolors']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(
+          report['apc_rel_place']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(
+          report['osc_5522_clip']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(
+          report['osc_5522_read']?.status,
+          equals(KttyCapabilityStatus.optionalDisabled),
+        );
+        expect(report['osc_5522_read']?.detail, contains('EPERM'));
+        expect(
+          report['osc_52_read']?.status,
+          equals(KttyCapabilityStatus.optionalDisabled),
+        );
         expect(
           report['termui_shader_apc']?.status,
           equals(KttyCapabilityStatus.supported),
         );
-        expect(report.optionalDisabledCount, equals(4));
+        expect(report.optionalDisabledCount, equals(6));
         expect(
           report.formatPlainReport(ansiColor: false),
-          contains('33/33 core supported'),
+          contains('36/36 core supported'),
         );
-        expect(report.toJsonMap()['coreSupported'], equals(33));
-        // Temporary probes (905, 906, I=907, 911 crop/layer, 912 animation) must be cleaned up before DA1.
+        expect(report.toJsonMap()['coreSupported'], equals(36));
+        // Temporary probes (905, 906, I=907, 911 crop/layer, 912 animation, 915/916 relative) must be cleaned up before DA1.
         expect(
           vt.imageRegistry.registeredImageIds.toSet(),
           equals({kttyProbeRgbaId, kttyProbeZlibId, kttyProbePngId}),
         );
         expect(vt.imageRegistry.allPlacements, isEmpty);
         expect(vt.imageRegistry.lookupAnimation(kttyProbeAnimId), isNull);
+
+        await replies.close();
+        vt.dispose();
+      },
+    );
+
+    test(
+      'runKttyBatchProbe reflects clipboard read/write host policies live (EPERM vs allowed)',
+      () async {
+        final replies = StreamController<List<int>>.broadcast();
+        final vt = VirtualTerminal(
+          width: 80,
+          height: 24,
+          allowClipboardWrite: false,
+          allowClipboardRead: true,
+          onClipboardRead: (_) => 'live-clip',
+          onReply: (reply) {
+            final bytes = utf8.encode(reply);
+            scheduleMicrotask(() {
+              if (!replies.isClosed) replies.add(bytes);
+            });
+          },
+        );
+
+        final report = await runKttyBatchProbe(
+          wireInput: replies.stream,
+          onWriteWire: vt.writeString,
+        );
+
+        expect(
+          report['osc_5522_clip']?.status,
+          equals(KttyCapabilityStatus.optionalDisabled),
+        );
+        expect(report['osc_5522_clip']?.detail, contains('EPERM'));
+        expect(
+          report['osc_5522_read']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(report['osc_5522_read']?.detail, contains('allowed'));
+        expect(
+          report['osc_52_read']?.status,
+          equals(KttyCapabilityStatus.supported),
+        );
+        expect(report.osc52ClipboardReply, equals('live-clip'));
+        expect(report.coreUnsupportedCount, equals(0));
 
         await replies.close();
         vt.dispose();
@@ -664,13 +730,7 @@ void main() {
         expect(initialScreen, contains('Scheme:dark'));
         expect(initialScreen, contains('Ptr:default'));
         expect(initialScreen, contains('KTTY PROBE'));
-        expect(initialScreen, contains('32/33 PASS'));
-        expect(
-          hostBackend.output.toString(),
-          isNot(contains('\x1b]52;c;a3R0eQ==')),
-          reason:
-              'Interactive virtual probe must not overwrite host clipboard on startup',
-        );
+        expect(initialScreen, contains('36/36 PASS'));
 
         // Verify U+10EEEE Kitty placeholder cells, SGR 58 underline colors, and OSC 8 URIs
         // all made it across the VirtualTerminal -> TerminalView wire!
@@ -722,10 +782,10 @@ void main() {
         final finalReport = await probeFuture.timeout(
           const Duration(seconds: 3),
         );
-        expect(finalReport.coreSupportedCount, equals(32));
+        expect(finalReport.coreSupportedCount, equals(36));
         expect(
           finalReport['osc_5522_clip']?.status,
-          equals(KttyCapabilityStatus.optionalDisabled),
+          equals(KttyCapabilityStatus.supported),
         );
         expect(finalReport.hasOsc99Ack, isTrue);
         expect(
@@ -863,8 +923,8 @@ void main() {
           timeout: const Duration(milliseconds: 25),
         );
         expect(timedOut.isComplete, isTrue);
-        expect(timedOut.coreUnsupportedCount, equals(32));
-        expect(timedOut.optionalDisabledCount, equals(6));
+        expect(timedOut.coreUnsupportedCount, equals(36));
+        expect(timedOut.optionalDisabledCount, equals(7));
         expect(timedOut['da1']?.detail, equals('Timed out waiting for DA1'));
 
         final stopHandle = KttyProbeStopHandle();
@@ -901,7 +961,7 @@ void main() {
       return (exitCode: code, stdout: out.toString(), stderr: err.toString());
     }
 
-    test('--help prints usage without requiring a local-media flag', () async {
+    test('--help prints usage without removed flags', () async {
       final result = await runCli(const ['--help']);
       expect(result.exitCode, equals(0));
       expect(result.stdout, contains('--strict'));
@@ -909,13 +969,21 @@ void main() {
       expect(result.stdout, contains('--compare'));
       expect(result.stdout, contains('--tmux-passthrough'));
       expect(result.stdout, isNot(contains('--local-media')));
+      expect(result.stdout, isNot(contains('--virtual')));
+      expect(result.stdout, isNot(contains('--probe-clipboard')));
     });
 
     test(
-      'rejects unknown flags, invalid --timeout-ms, and conflicting modes with exit 64',
+      'rejects unknown/removed flags, invalid --timeout-ms, and conflicting modes with exit 64',
       () async {
         final badFlag = await runCli(const ['--does-not-exist']);
         expect(badFlag.exitCode, equals(64));
+
+        final removedVirtual = await runCli(const ['--virtual']);
+        expect(removedVirtual.exitCode, equals(64));
+
+        final removedClipboard = await runCli(const ['--probe-clipboard']);
+        expect(removedClipboard.exitCode, equals(64));
 
         final badTimeout = await runCli(const [
           '--self-test',
@@ -940,7 +1008,7 @@ void main() {
         expect(result.exitCode, equals(0), reason: result.stderr);
         expect(result.stderr, isNot(contains('unexpectedly unlinked')));
         final decoded = jsonDecode(result.stdout) as Map<String, Object?>;
-        expect(decoded['coreSupported'], equals(33));
+        expect(decoded['coreSupported'], equals(36));
         expect(decoded['coreUnsupported'], equals(0));
         final caps = (decoded['capabilities'] as List<Object?>)
             .cast<Map<String, Object?>>();
@@ -1112,19 +1180,20 @@ void main() {
     );
 
     test(
-      'PR #504 M2: default buildWireProbeSequence is non-destructive and does not overwrite clipboard via OSC 5522',
+      'buildWireProbeSequence always probes OSC 5522 write/read, OSC 52 read, CSI #P/Q, relative placement, and DECSET 2048',
       () {
-        final defaultWire = KttyProbeReport.buildWireProbeSequence();
+        final wire = KttyProbeReport.buildWireProbeSequence();
+        expect(wire, contains('\x1b]5522;type=write:id=ktty-probe;'));
+        expect(wire, contains('\x1b]5522;type=read:id=ktty-probe-read;'));
+        expect(wire, contains('\x1b]52;c;?\x1b\\'));
+        expect(wire, contains('\x1b[#P'));
+        expect(wire, contains('\x1b[#Q'));
+        expect(wire, contains('\x1b[?2048\$p'));
+        expect(wire, contains('\x1b[?2048h\x1b[?2048l'));
         expect(
-          defaultWire,
-          isNot(contains('\x1b]5522;type=write')),
-          reason:
-              'Default wire probe must not overwrite the user clipboard unless opted in',
+          wire,
+          contains('P=$kttyProbeRelParentId,Q=$kttyProbeRelParentPlacementId'),
         );
-        final optInWire = KttyProbeReport.buildWireProbeSequence(
-          options: const KttyProbeOptions(probeClipboardWrite: true),
-        );
-        expect(optInWire, contains('\x1b]5522;type=write:id=ktty-probe;'));
       },
     );
   });

@@ -6,7 +6,6 @@ import 'dart:math';
 import 'package:args/args.dart';
 import 'package:clock/clock.dart';
 import 'package:termui/terminal/backend/io_backend.dart';
-import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/ui/color.dart';
 import 'package:termui_pty/termui_pty.dart';
 import 'package:termui_shared_examples/ktty_probe/ktty_probe.dart';
@@ -24,12 +23,6 @@ ArgParser _buildArgParser() {
       negatable: false,
       help:
           'Run the batch capability probe against an in-memory VirtualTerminal.',
-    )
-    ..addFlag(
-      'virtual',
-      abbr: 'v',
-      negatable: false,
-      help: 'Run the interactive TUI wrapped inside a VirtualTerminal.',
     )
     ..addFlag(
       'json',
@@ -65,13 +58,6 @@ ArgParser _buildArgParser() {
           'Wrap Kitty Graphics APC probe and control commands in tmux DCS '
           'passthrough envelopes.',
     )
-    ..addFlag(
-      'probe-clipboard',
-      negatable: false,
-      help:
-          'Include the opt-in OSC 5522 clipboard write probe in live --report '
-          'or interactive runs (overwrites clipboard with "ktty").',
-    )
     ..addOption(
       'timeout-ms',
       defaultsTo: '600',
@@ -83,14 +69,12 @@ ArgParser _buildArgParser() {
 KttyProbeOptions _buildProbeOptions({
   required bool wrapTmux,
   KttyLocalMediaProbeSession? mediaSession,
-  bool probeClipboardWrite = false,
 }) {
   return KttyProbeOptions(
     wrapTmuxPassthrough: wrapTmux,
     tempProbeFilePath: mediaSession?.tempFilePath,
     shmProbeName: mediaSession?.shmObjectName,
     fileProbeFilePath: mediaSession?.tempFilePath,
-    probeClipboardWrite: probeClipboardWrite,
   );
 }
 
@@ -221,7 +205,6 @@ Future<int> _runSelfTest({
     final options = _buildProbeOptions(
       wrapTmux: wrapTmux,
       mediaSession: mediaSession,
-      probeClipboardWrite: true,
     );
     final report = probeOverride != null
         ? await probeOverride(options)
@@ -257,7 +240,6 @@ Future<int> _runStdioBatchReport({
   required bool diagnose,
   required Map<String, Object?>? baselineJson,
   required bool wrapTmux,
-  required bool probeClipboardWrite,
   required Map<String, String> environment,
   required StringSink outSink,
   required StringSink errSink,
@@ -266,12 +248,7 @@ Future<int> _runStdioBatchReport({
   Future<KttyProbeReport> Function(KttyProbeOptions options)? probeOverride,
 }) async {
   if (probeOverride != null) {
-    final report = await probeOverride(
-      _buildProbeOptions(
-        wrapTmux: wrapTmux,
-        probeClipboardWrite: probeClipboardWrite,
-      ),
-    );
+    final report = await probeOverride(_buildProbeOptions(wrapTmux: wrapTmux));
     return _emitBatchOutput(
       report,
       asJson: asJson,
@@ -342,7 +319,6 @@ Future<int> _runStdioBatchReport({
       options: _buildProbeOptions(
         wrapTmux: wrapTmux,
         mediaSession: mediaSession,
-        probeClipboardWrite: probeClipboardWrite,
       ),
       stopHandle: stopHandle,
     );
@@ -422,7 +398,6 @@ String _exportInteractiveReportToFile(String reportJson) {
 Future<void> _runInteractiveStdio(
   Duration timeout, {
   required bool wrapTmux,
-  required bool probeClipboardWrite,
   required Map<String, String> environment,
   required StringSink errSink,
 }) async {
@@ -464,7 +439,6 @@ Future<void> _runInteractiveStdio(
       options: _buildProbeOptions(
         wrapTmux: wrapTmux,
         mediaSession: mediaSession,
-        probeClipboardWrite: probeClipboardWrite,
       ),
       onExportReport: _exportInteractiveReportToFile,
     );
@@ -483,7 +457,6 @@ int _countSelectedModes(ArgResults results) {
   var count = 0;
   if (results['self-test'] as bool) count++;
   if (results['report'] as bool) count++;
-  if (results['virtual'] as bool) count++;
   return count;
 }
 
@@ -520,9 +493,7 @@ Future<int> runKttyProbeCli(
   }
 
   if (_countSelectedModes(results) > 1) {
-    errSink.writeln(
-      'Specify at most one of --self-test, --report, or --virtual.',
-    );
+    errSink.writeln('Specify at most one of --self-test or --report.');
     errSink.writeln(parser.usage);
     return 64;
   }
@@ -559,7 +530,6 @@ Future<int> runKttyProbeCli(
   final asJson = results['json'] as bool;
   final strict = results['strict'] as bool;
   final wrapTmux = results['tmux-passthrough'] as bool;
-  final probeClipboard = results['probe-clipboard'] as bool;
 
   if (results['self-test'] as bool) {
     return _runSelfTest(
@@ -585,7 +555,6 @@ Future<int> runKttyProbeCli(
       diagnose: diagnose,
       baselineJson: baselineJson,
       wrapTmux: wrapTmux,
-      probeClipboardWrite: probeClipboard,
       environment: env,
       outSink: outSink,
       errSink: errSink,
@@ -595,17 +564,9 @@ Future<int> runKttyProbeCli(
     );
   }
 
-  if (results['virtual'] as bool) {
-    await term.Terminal.runGuarded((terminal) async {
-      await runVirtualTerminalKttyProbe(terminal);
-    });
-    return 0;
-  }
-
   await _runInteractiveStdio(
     timeout,
     wrapTmux: wrapTmux,
-    probeClipboardWrite: probeClipboard,
     environment: env,
     errSink: errSink,
   );

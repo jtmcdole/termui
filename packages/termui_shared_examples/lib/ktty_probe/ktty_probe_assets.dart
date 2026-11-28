@@ -54,14 +54,35 @@ const int kttyProbeFileId = 913;
 /// Query correlation ID for the optional TermUI Audio APC (`a=wave`) check.
 const int kttyProbeAudioWaveRequestId = 914;
 
+/// Probe parent image ID for the Kitty Graphics relative placement (`P,Q,H,V`) check.
+const int kttyProbeRelParentId = 915;
+
+/// Probe parent placement ID for the Kitty Graphics relative placement check.
+const int kttyProbeRelParentPlacementId = 12;
+
+/// Probe child image ID for the Kitty Graphics relative placement (`P,Q,H,V`) check.
+const int kttyProbeRelChildId = 916;
+
+/// Probe child placement ID for the Kitty Graphics relative placement check.
+const int kttyProbeRelChildPlacementId = 13;
+
 /// Palette color index temporarily probed during `OSC 30001`/`30101` stack checks.
 const int kttyProbeColorStackIndex = 255;
 
 /// Distinct sentinel color (`#01FE02`) used during `OSC 30001`/`30101` verification.
 const String kttyProbeColorStackSentinelHex = '#01FE02';
 
+/// Palette color index temporarily probed during `CSI #P`/`CSI #Q` stack checks.
+const int kttyProbeCsiColorStackIndex = 254;
+
+/// Distinct sentinel color (`#02FE01`) used during `CSI #P`/`CSI #Q` verification.
+const String kttyProbeCsiColorStackSentinelHex = '#02FE01';
+
 /// Correlation ID for the `OSC 5522` clipboard write capability probe.
 const String kttyProbeOsc5522Id = 'ktty-probe';
+
+/// Correlation ID for the `OSC 5522` clipboard read capability probe.
+const String kttyProbeOsc5522ReadId = 'ktty-probe-read';
 
 /// Optional TermUI Shader APC capability query (`ESC _ S a=query ST`).
 const String kttyProbeShaderApcCommand = '\x1b_Sa=query\x1b\\';
@@ -247,6 +268,15 @@ String buildKittyApcProbeCommands({
     '\x1b_Gi=$kttyProbeAnimId,a=c,r=1,c=2,w=1,h=1,q=0\x1b\\',
     '\x1b_Ga=d,d=f,i=$kttyProbeAnimId,q=2\x1b\\',
     '\x1b_Ga=d,d=I,i=$kttyProbeAnimId,q=2\x1b\\',
+    '\x1b_Gi=$kttyProbeRelParentId,s=2,v=2,a=t,t=d,f=32,q=2;$rawB64\x1b\\',
+    '\x1b_Ga=p,i=$kttyProbeRelParentId,p=$kttyProbeRelParentPlacementId,'
+        'z=-1,c=1,r=1,C=1,q=2\x1b\\',
+    '\x1b_Gi=$kttyProbeRelChildId,s=2,v=2,a=t,t=d,f=32,q=2;$altRawB64\x1b\\',
+    '\x1b_Ga=p,i=$kttyProbeRelChildId,p=$kttyProbeRelChildPlacementId,'
+        'P=$kttyProbeRelParentId,Q=$kttyProbeRelParentPlacementId,'
+        'H=1,V=0,c=1,r=1,C=1,q=0\x1b\\',
+    '\x1b_Ga=d,d=I,i=$kttyProbeRelParentId,q=2\x1b\\',
+    '\x1b_Ga=d,d=I,i=$kttyProbeRelChildId,q=2\x1b\\',
   ];
 
   final tempPath = options.tempProbeFilePath;
