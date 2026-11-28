@@ -204,7 +204,9 @@ final class IoLocalHostDriver implements LocalHostDriver {
       colorScheme: config.colorScheme,
       allowLocalKittyMedia: config.allowLocalKittyMedia,
       allowLocalKittyShm: config.allowLocalKittyShm,
-      allowLocalKittyFiles: true,
+      allowLocalKittyFiles: config.allowLocalKittyFiles,
+      allowClipboardWrite: config.allowClipboardWrite,
+      allowClipboardRead: config.allowClipboardRead,
     );
     final port = session.openPort(
       initialCols: config.initialCols,
@@ -396,7 +398,10 @@ final class IoLocalHostDriver implements LocalHostDriver {
 }
 
 final class _IoLocalPaneHost
-    implements PromptIndexedPaneHost, KittyMediaConfigurablePaneHost {
+    implements
+        PromptIndexedPaneHost,
+        KittyMediaConfigurablePaneHost,
+        ClipboardConfigurablePaneHost {
   @override
   final String id;
   final String _executableName;
@@ -582,11 +587,34 @@ final class _IoLocalPaneHost
   void setKittyLocalMediaPolicy({
     required bool allowTempFiles,
     required bool allowSharedMemory,
+    bool? allowFiles,
   }) {
     if (_disposed) return;
     _session.terminal
       ..allowLocalKittyMedia = allowTempFiles
       ..allowLocalKittyShm = allowSharedMemory;
+    if (allowFiles != null) {
+      _session.terminal.allowLocalKittyFiles = allowFiles;
+    }
+  }
+
+  @override
+  void setClipboardPolicy({required bool allowWrite, required bool allowRead}) {
+    if (_disposed) return;
+    _session.terminal
+      ..allowClipboardWrite = allowWrite
+      ..allowClipboardRead = allowRead;
+  }
+
+  @override
+  void setClipboardReadHandler({
+    required FutureOr<String?> Function(String selection)? onRead,
+    required bool Function()? canRead,
+  }) {
+    if (_disposed) return;
+    _session.terminal
+      ..onClipboardRead = onRead
+      ..canReadClipboard = canRead;
   }
 
   @override

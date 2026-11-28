@@ -46,9 +46,21 @@ final class LocalShellConfig {
   /// permitted on the spawned local shell.
   final bool allowLocalKittyMedia;
 
+  /// Whether Kitty Graphics Protocol regular-file transfers (`APC t=f`) are
+  /// permitted on the spawned local shell.
+  final bool allowLocalKittyFiles;
+
   /// Whether Kitty Graphics Protocol POSIX shared-memory transfers (`APC t=s`)
   /// are permitted on the spawned local shell.
   final bool allowLocalKittyShm;
+
+  /// Whether `OSC 52` / `OSC 5522` clipboard writes are permitted on the
+  /// spawned local shell.
+  final bool allowClipboardWrite;
+
+  /// Whether `OSC 52 ; ?` / `OSC 5522 ; type=read` clipboard reads are
+  /// permitted on the spawned local shell.
+  final bool allowClipboardRead;
 
   /// Creates a local shell spawn configuration.
   const LocalShellConfig({
@@ -63,7 +75,10 @@ final class LocalShellConfig {
     this.colorScheme = .dark,
     this.maxScrollbackLines = 5000,
     this.allowLocalKittyMedia = true,
+    this.allowLocalKittyFiles = true,
     this.allowLocalKittyShm = true,
+    this.allowClipboardWrite = true,
+    this.allowClipboardRead = false,
   });
 }
 
@@ -172,15 +187,33 @@ abstract interface class PromptIndexedPaneHost implements LocalPaneHost {
 }
 
 /// Opt-in [LocalPaneHost] capability allowing live runtime updates to Kitty
-/// Graphics Protocol local transmission media (`t=t` temp files and `t=s`
-/// POSIX shared memory).
+/// Graphics Protocol local transmission media (`t=t` temp files, `t=f`
+/// regular files, and `t=s` POSIX shared memory).
 abstract interface class KittyMediaConfigurablePaneHost
     implements LocalPaneHost {
-  /// Updates whether local temp-file (`t=t`) and POSIX shared-memory (`t=s`)
-  /// Kitty Graphics transfers are permitted on this local shell pane.
+  /// Updates whether local temp-file (`t=t`), regular-file (`t=f`), and POSIX
+  /// shared-memory (`t=s`) Kitty Graphics transfers are permitted on this local
+  /// shell pane.
   void setKittyLocalMediaPolicy({
     required bool allowTempFiles,
     required bool allowSharedMemory,
+    bool? allowFiles,
+  });
+}
+
+/// Opt-in [LocalPaneHost] capability allowing live runtime updates to local
+/// `OSC 52` / `OSC 5522` clipboard write and read policies.
+abstract interface class ClipboardConfigurablePaneHost
+    implements LocalPaneHost {
+  /// Updates whether clipboard writes and reads are permitted on this local
+  /// shell pane.
+  void setClipboardPolicy({required bool allowWrite, required bool allowRead});
+
+  /// Binds the host clipboard reader callback and focus gate checked before
+  /// serving clipboard reads.
+  void setClipboardReadHandler({
+    required FutureOr<String?> Function(String selection)? onRead,
+    required bool Function()? canRead,
   });
 }
 

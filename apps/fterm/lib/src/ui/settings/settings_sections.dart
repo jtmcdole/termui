@@ -169,6 +169,22 @@ final class _InterfaceClipboardPanel extends StatelessWidget {
             palette: palette,
             capabilities: capabilities,
           ),
+        if (capabilities.hasLocalDesktopShell &&
+            filter.showItem('interface-local-clipboard-write'))
+          _renderSettingRow(
+            'interface-local-clipboard-write',
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
+        if (capabilities.hasLocalDesktopShell &&
+            filter.showItem('interface-local-clipboard-read'))
+          _renderSettingRow(
+            'interface-local-clipboard-read',
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
         if (filter.showItem('interface-osc52'))
           _renderSettingRow(
             'interface-osc52',
@@ -949,6 +965,9 @@ final class SettingsSystemSection extends StatelessWidget {
     final showKittyTempFile =
         resolvedCapabilities.hasLocalDesktopShell &&
         filter.showItem('system-kitty-temp-file');
+    final showKittyFileMedium =
+        resolvedCapabilities.hasLocalDesktopShell &&
+        filter.showItem('system-kitty-file-medium');
     final showKittySharedMemory =
         resolvedCapabilities.hasLocalDesktopShell &&
         (resolvedCapabilities.isLinuxDesktop ||
@@ -968,13 +987,14 @@ final class SettingsSystemSection extends StatelessWidget {
             showGpuDriver: showGpuDriver,
           ),
         if (filter.showPanel('system-kitty-media') &&
-            (showKittyTempFile || showKittySharedMemory))
+            (showKittyTempFile || showKittyFileMedium || showKittySharedMemory))
           _SystemKittyMediaPanel(
             workspace: workspace,
             palette: palette,
             capabilities: resolvedCapabilities,
             filter: filter,
             showTempFile: showKittyTempFile,
+            showFileMedium: showKittyFileMedium,
             showSharedMemory: showKittySharedMemory,
           ),
         if (filter.showPanel('system-sound'))
@@ -1040,6 +1060,7 @@ final class _SystemKittyMediaPanel extends StatelessWidget {
   final FtermCapabilityContext capabilities;
   final SettingsPanelFilter filter;
   final bool showTempFile;
+  final bool showFileMedium;
   final bool showSharedMemory;
 
   const _SystemKittyMediaPanel({
@@ -1048,6 +1069,7 @@ final class _SystemKittyMediaPanel extends StatelessWidget {
     required this.capabilities,
     required this.filter,
     required this.showTempFile,
+    required this.showFileMedium,
     required this.showSharedMemory,
   });
 
@@ -1065,6 +1087,13 @@ final class _SystemKittyMediaPanel extends StatelessWidget {
         if (showTempFile)
           _renderSettingRow(
             'system-kitty-temp-file',
+            workspace: workspace,
+            palette: palette,
+            capabilities: capabilities,
+          ),
+        if (showFileMedium)
+          _renderSettingRow(
+            'system-kitty-file-medium',
             workspace: workspace,
             palette: palette,
             capabilities: capabilities,

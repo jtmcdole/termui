@@ -845,7 +845,10 @@ final class AutomationRouter {
       workingDirectory: req.cwd,
       colorScheme: _workspace.activeTerminalTheme.brightness,
       allowLocalKittyMedia: prefs.kittyTempFileMedium,
+      allowLocalKittyFiles: prefs.kittyFileMedium,
       allowLocalKittyShm: prefs.kittySharedMemoryMedium,
+      allowClipboardWrite: prefs.localClipboardWrite,
+      allowClipboardRead: prefs.localClipboardRead,
     );
   }
 

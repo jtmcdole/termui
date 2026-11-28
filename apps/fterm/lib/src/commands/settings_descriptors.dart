@@ -420,6 +420,52 @@ final FtermToggleSettingDescriptor _interfaceCopyOnSelect =
       write: (ws, value) => ws.setCopyOnSelect(value),
     );
 
+final FtermToggleSettingDescriptor _interfaceLocalClipboardWrite =
+    FtermToggleSettingDescriptor(
+      id: 'interface-local-clipboard-write',
+      paletteId: 'settings.toggle.local_clipboard_write',
+      section: .interface,
+      panelId: 'interface-clipboard',
+      panelTitle: 'Clipboard & Selection',
+      controlKey: const ValueKey('settings-local-clipboard-write'),
+      settingsLabel: 'Local Clipboard Writes',
+      settingsCaption:
+          'Allow focused local shells to write clipboard (OSC 52 / OSC 5522)',
+      searchTitle: 'Allow local OSC 52 / OSC 5522 clipboard writes',
+      paletteCategory: 'Settings',
+      paletteTitle: 'Toggle Local Clipboard Writes',
+      keywords: 'osc52 osc5522 osc 52 5522 local clipboard write copy security',
+      icon: Icons.content_paste,
+      visibility: .localDesktopShell,
+      read: (ws) => ws.preferences.localClipboardWrite,
+      write: (ws, enabled) => ws.updatePreferences(
+        ws.preferences.copyWith(localClipboardWrite: enabled),
+      ),
+    );
+
+final FtermToggleSettingDescriptor _interfaceLocalClipboardRead =
+    FtermToggleSettingDescriptor(
+      id: 'interface-local-clipboard-read',
+      paletteId: 'settings.toggle.local_clipboard_read',
+      section: .interface,
+      panelId: 'interface-clipboard',
+      panelTitle: 'Clipboard & Selection',
+      controlKey: const ValueKey('settings-local-clipboard-read'),
+      settingsLabel: 'Local Clipboard Reads',
+      settingsCaption:
+          'Allow focused local shells to read clipboard (OSC 52 / OSC 5522)',
+      searchTitle: 'Allow local OSC 52 / OSC 5522 clipboard reads',
+      paletteCategory: 'Settings',
+      paletteTitle: 'Toggle Local Clipboard Reads',
+      keywords: 'osc52 osc5522 osc 52 5522 local clipboard read paste security',
+      icon: Icons.content_paste_go,
+      visibility: .localDesktopShell,
+      read: (ws) => ws.preferences.localClipboardRead,
+      write: (ws, enabled) => ws.updatePreferences(
+        ws.preferences.copyWith(localClipboardRead: enabled),
+      ),
+    );
+
 final FtermToggleSettingDescriptor _interfaceOsc52 =
     FtermToggleSettingDescriptor(
       id: 'interface-osc52',
@@ -975,6 +1021,28 @@ final FtermToggleSettingDescriptor _systemKittyTempFile =
       ),
     );
 
+final FtermToggleSettingDescriptor _systemKittyFileMedium =
+    FtermToggleSettingDescriptor(
+      id: 'system-kitty-file-medium',
+      paletteId: 'settings.toggle.kitty_file_medium',
+      section: .system,
+      panelId: 'system-kitty-media',
+      panelTitle: 'Kitty Graphics Media',
+      controlKey: const ValueKey('settings-kitty-file-medium'),
+      settingsLabel: 'Regular File Medium (t=f)',
+      settingsCaption:
+          'Allow local CLI apps to read Kitty images from regular files',
+      searchTitle: 'Kitty Regular File Medium (APC t=f)',
+      paletteCategory: 'System',
+      paletteTitle: 'Toggle Kitty Regular File Medium (t=f)',
+      keywords: 'kitty graphics image local media file t=f apc icat filesystem',
+      icon: Icons.insert_drive_file_outlined,
+      visibility: .localDesktopShell,
+      read: (ws) => ws.preferences.kittyFileMedium,
+      write: (ws, value) =>
+          ws.updatePreferences(ws.preferences.copyWith(kittyFileMedium: value)),
+    );
+
 final FtermToggleSettingDescriptor _systemKittySharedMemory =
     FtermToggleSettingDescriptor(
       id: 'system-kitty-shared-memory',
@@ -1185,6 +1253,8 @@ final List<FtermDescriptor> allSettingDescriptors =
       _interfaceDockPosition,
       _interfaceAutoHideTab,
       _interfaceCopyOnSelect,
+      _interfaceLocalClipboardWrite,
+      _interfaceLocalClipboardRead,
       _interfaceOsc52,
       // Themes
       _themesAppearanceMode,
@@ -1220,6 +1290,7 @@ final List<FtermDescriptor> allSettingDescriptors =
       _systemPerfHud,
       _systemGpuDriver,
       _systemKittyTempFile,
+      _systemKittyFileMedium,
       _systemKittySharedMemory,
       _systemAudioMute,
       _systemAudioVolume,
@@ -1268,11 +1339,14 @@ final List<FtermDescriptor> paletteSettingsToggleDescriptors =
     List<FtermDescriptor>.unmodifiable(<FtermDescriptor>[
       _interfaceAutoHideTab,
       _interfaceCopyOnSelect,
+      _interfaceLocalClipboardWrite,
+      _interfaceLocalClipboardRead,
       _interfaceOsc52,
       _systemAudioMute,
       _systemAudioVolume,
       _systemPerfHud,
       _systemKittyTempFile,
+      _systemKittyFileMedium,
       _systemKittySharedMemory,
       _keyboardMacosOption,
       _keyboardF12Shortcuts,

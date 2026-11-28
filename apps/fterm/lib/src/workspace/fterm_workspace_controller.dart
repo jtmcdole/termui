@@ -284,6 +284,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
   final void Function(tui.Buffer buffer)? _onFrameRedrawn;
   final DesktopIapProviderBuilder _iapProviderBuilder;
   final String? Function() _gcloudPathProber;
+  final Future<String?> Function() _clipboardReader;
   final Map<String, IapTokenProvider?> _iapProviderCache =
       <String, IapTokenProvider?>{};
 
@@ -424,6 +425,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     AutomationHttpServerBackend? automationServerBackend,
     AutomationPointerDispatcher? automationPointerDispatcher,
     Future<void> Function()? automationFrameSettle,
+    Future<String?> Function()? clipboardReader,
     Set<String> enabledFeatures = const <String>{},
   }) => FtermWorkspaceController._(
     launchConfig: launchConfig,
@@ -463,6 +465,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     automationServerBackend: automationServerBackend,
     automationPointerDispatcher: automationPointerDispatcher,
     automationFrameSettle: automationFrameSettle,
+    clipboardReader: clipboardReader,
   );
 
   FtermWorkspaceController._({
@@ -498,6 +501,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     required AutomationHttpServerBackend? automationServerBackend,
     required AutomationPointerDispatcher? automationPointerDispatcher,
     required Future<void> Function()? automationFrameSettle,
+    required Future<String?> Function()? clipboardReader,
   }) : enabledFeatures = enabledFeatures.isEmpty
            ? const <String>{}
            : Set<String>.unmodifiable(enabledFeatures),
@@ -509,6 +513,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
            localHostDriver.isSupported || initialWebResumeSnapshot.isEmpty,
        _iapProviderBuilder = iapProviderBuilder ?? buildDesktopIapTokenProvider,
        _gcloudPathProber = gcloudPathProber ?? probeDesktopGcloudExecutable,
+       _clipboardReader = clipboardReader ?? _defaultReadHostClipboard,
        _ownsTraceRecorder = traceRecorder == null,
        _onRequestExit = onRequestExit ?? _defaultRequestExit,
        _onRelaunchApp = onRelaunchApp ?? _defaultRelaunchApp,
@@ -3755,6 +3760,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     audioController
       ..setMuted(next.audioMuted)
       ..setVolume(next.audioVolume);
+    _syncClipboardPolicies();
     _syncKittyLocalMediaPolicies();
     _settingsSaver.savePreferences(next);
     updateViewModel.onPreferencesChanged();
@@ -3835,7 +3841,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         workingDirectory: workingDirectory,
         colorScheme: _platformBrightness,
         allowLocalKittyMedia: _preferences.kittyTempFileMedium,
+        allowLocalKittyFiles: _preferences.kittyFileMedium,
         allowLocalKittyShm: _preferences.kittySharedMemoryMedium,
+        allowClipboardWrite: _preferences.localClipboardWrite,
+        allowClipboardRead: _preferences.localClipboardRead,
       );
 
   /// Reloads stored settings and preferences synchronously from disk/localStorage.
@@ -3935,19 +3944,29 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   }
 
   void _syncClipboardPolicies() {
+    final allowLocalWrite = _preferences.localClipboardWrite;
+    final allowLocalRead = _preferences.localClipboardRead;
     for (final pane in _panes.values) {
       pane.remotePort?.clipboardPolicy = _workspaceSettings.osc52Policy;
+      if (pane.localHost case final ClipboardConfigurablePaneHost host) {
+        host.setClipboardPolicy(
+          allowWrite: allowLocalWrite,
+          allowRead: allowLocalRead,
+        );
+      }
     }
   }
 
   void _syncKittyLocalMediaPolicies() {
     final allowTempFiles = _preferences.kittyTempFileMedium;
+    final allowFiles = _preferences.kittyFileMedium;
     final allowSharedMemory = _preferences.kittySharedMemoryMedium;
     for (final pane in _panes.values) {
       if (pane.localHost case final KittyMediaConfigurablePaneHost host) {
         host.setKittyLocalMediaPolicy(
           allowTempFiles: allowTempFiles,
           allowSharedMemory: allowSharedMemory,
+          allowFiles: allowFiles,
         );
       }
     }
@@ -4016,6 +4035,17 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   }) {
     if (port is RemoteTerminalPort) {
       port.clipboardPolicy = _workspaceSettings.osc52Policy;
+    }
+    if (localHost case final ClipboardConfigurablePaneHost clipHost) {
+      clipHost
+        ..setClipboardPolicy(
+          allowWrite: _preferences.localClipboardWrite,
+          allowRead: _preferences.localClipboardRead,
+        )
+        ..setClipboardReadHandler(
+          onRead: (_) => _clipboardReader(),
+          canRead: () => _canPaneReadClipboard(paneId),
+        );
     }
     final isLocalPane = localHost != null;
     final pane = FtermPaneController(
@@ -4142,9 +4172,29 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     return _tabs[tabIdx].splitTree.panOf(paneId);
   }
 
+  static Future<String?> _defaultReadHostClipboard() async {
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      return data?.text;
+    } on Object {
+      return null;
+    }
+  }
+
+  bool _canPaneReadClipboard(String paneId) {
+    if (_disposed || !_preferences.localClipboardRead) return false;
+    if (!_workspaceVisible || !_windowFocused) return false;
+    return focusedPane?.paneId == paneId;
+  }
+
   void _handlePaneClipboard(String paneId, String selection, String text) {
     if (_disposed || text.isEmpty) return;
-    if (_workspaceSettings.osc52Policy == Osc52ClipboardPolicy.deny) return;
+    final pane = _panes[paneId];
+    if (pane == null) return;
+    final allowed = pane.isLocal
+        ? _preferences.localClipboardWrite
+        : _workspaceSettings.osc52Policy != Osc52ClipboardPolicy.deny;
+    if (!allowed) return;
     if (!_workspaceVisible || !_windowFocused) return;
     if (focusedPane?.paneId != paneId) return;
     const maxBytes = CastWorkspaceSettings.defaultMaxOsc52ClipboardBytes;
