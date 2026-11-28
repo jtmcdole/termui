@@ -546,13 +546,17 @@ final class VirtualTerminal implements TerminalHandler {
   /// Height of a single character cell in pixels (reported via `CSI 16 t` and `CSI 14 t`).
   int get cellPixelHeight => _cellPixelHeight;
 
-  /// Updates the cell pixel dimensions (`>= 1`) used for `XTWINOPS` (`14t`/`16t`) and `?1016` mouse scaling.
+  /// Updates the cell pixel dimensions (`>= 1`) used for `XTWINOPS` (`14t`/`16t`),
+  /// Kitty graphics sizing, `DECSET 2048` in-band resize reports, and `?1016` mouse scaling.
   void setCellPixelSize(int pixelWidth, int pixelHeight) {
     final nextW = math.max(1, pixelWidth);
     final nextH = math.max(1, pixelHeight);
     if (_cellPixelWidth == nextW && _cellPixelHeight == nextH) return;
     _cellPixelWidth = nextW;
     _cellPixelHeight = nextH;
+    if (_inBandWindowResize) {
+      _replyWindowResize();
+    }
     _notifyListeners();
   }
 
@@ -753,6 +757,10 @@ final class VirtualTerminal implements TerminalHandler {
   Color? _osc12Override;
   TerminalBrightness _colorScheme;
   bool _colorSchemeReporting = false;
+  bool _inBandWindowResize = false;
+
+  /// Whether in-band window resize notifications (`DECSET 2048`) are enabled.
+  bool get inBandWindowResize => _inBandWindowResize;
 
   /// Callback invoked when an `OSC 9` or `OSC 99` desktop notification is received.
   void Function(String title, String message)? onNotification;
@@ -1189,6 +1197,7 @@ final class VirtualTerminal implements TerminalHandler {
     sgrMouseMode = false;
     sgrPixelsMouseMode = false;
     _focusReporting = false;
+    _inBandWindowResize = false;
     _cursorShape = .defaultShape;
     bracketedPasteMode = false;
     _applicationCursorKeys = false;
@@ -1279,12 +1288,33 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   /// Resizes the virtual terminal (both primary and active alternate buffers)
-  /// to [newWidth] by [newHeight].
-  void resize(int newWidth, int newHeight) {
-    _clearLastPrintedCell();
+  /// to [newWidth] by [newHeight], optionally updating cell pixel dimensions
+  /// atomically so `DECSET 2048` emits a single resize notification.
+  void resize(
+    int newWidth,
+    int newHeight, {
+    int? cellPixelWidth,
+    int? cellPixelHeight,
+  }) {
     final clampedWidth = math.max(1, newWidth);
     final clampedHeight = math.max(1, newHeight);
-    if (clampedWidth == width && clampedHeight == height) return;
+    final nextCellW = cellPixelWidth != null
+        ? math.max(1, cellPixelWidth)
+        : _cellPixelWidth;
+    final nextCellH = cellPixelHeight != null
+        ? math.max(1, cellPixelHeight)
+        : _cellPixelHeight;
+    final gridChanged = clampedWidth != width || clampedHeight != height;
+    final cellChanged =
+        nextCellW != _cellPixelWidth || nextCellH != _cellPixelHeight;
+    if (!gridChanged && !cellChanged) return;
+    _cellPixelWidth = nextCellW;
+    _cellPixelHeight = nextCellH;
+    if (!gridChanged) {
+      if (_inBandWindowResize) _replyWindowResize();
+      return;
+    }
+    _clearLastPrintedCell();
     final oldWidth = width;
     final oldHeight = height;
     _evictOverflowBeforeShrink(clampedHeight);
@@ -1327,6 +1357,9 @@ final class VirtualTerminal implements TerminalHandler {
     );
     if (alt != null && _altShaderState != null) {
       _syncBufferShaderMetadata(alt, _altShaderState!, hideOverlays: false);
+    }
+    if (_inBandWindowResize) {
+      _replyWindowResize();
     }
   }
 
@@ -2240,7 +2273,18 @@ final class VirtualTerminal implements TerminalHandler {
         _graphemeClusterMode = enable;
       case 2031:
         _colorSchemeReporting = enable;
+      case 2048:
+        _inBandWindowResize = enable;
+        if (enable) {
+          _replyWindowResize();
+        }
     }
+  }
+
+  void _replyWindowResize() {
+    onReply?.call(
+      '\x1b[48;$height;$width;${height * _cellPixelHeight};${width * _cellPixelWidth}t',
+    );
   }
 
   void _switchAlternateScreen(bool enable, {required bool saveRestoreCursor}) {
@@ -2547,6 +2591,7 @@ final class VirtualTerminal implements TerminalHandler {
       2026 => synchronizedOutput,
       2027 => _graphemeClusterMode,
       2031 => _colorSchemeReporting,
+      2048 => _inBandWindowResize,
       _ => null,
     };
     if (enabled == null) return 0;

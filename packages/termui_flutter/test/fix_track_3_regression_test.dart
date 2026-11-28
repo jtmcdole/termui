@@ -375,9 +375,12 @@ void main() {
       },
     );
 
-    testWidgets('populates 1-based pixelX and pixelY on MouseEvent', (
+    testWidgets('populates 1-based physical pixelX and pixelY on MouseEvent', (
       tester,
     ) async {
+      tester.view.devicePixelRatio = 1.5;
+      addTearDown(tester.view.resetDevicePixelRatio);
+
       final terminal = FlutterTerminal();
       addTearDown(terminal.dispose);
       final mouseEvents = <term.MouseEvent>[];
@@ -419,9 +422,50 @@ void main() {
       await tester.pump();
 
       expect(mouseEvents, isNotEmpty);
-      expect(mouseEvents.first.pixelX, equals(24));
-      expect(mouseEvents.first.pixelY, equals(42));
+      // 23.7 * 1.5 = 35.55 -> floor 35 + 1 = 36; 41.2 * 1.5 = 61.8 -> floor 61 + 1 = 62
+      expect(mouseEvents.first.pixelX, equals(36));
+      expect(mouseEvents.first.pixelY, equals(62));
     });
+
+    testWidgets(
+      'onViewportSizeChanged reports physical cell pixels scaled by devicePixelRatio and updates on DPR change',
+      (tester) async {
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final reports = <(int cols, int rows, double cellW, double cellH)>[];
+        final buffer = Buffer(40, 20);
+
+        Widget buildSurface() => _testApp(
+          home: Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: 400,
+              height: 300,
+              child: TerminalSurface(
+                buffer: buffer,
+                onViewportSizeChanged: (cols, rows, cellW, cellH) =>
+                    reports.add((cols, rows, cellW, cellH)),
+              ),
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(buildSurface());
+        await tester.pumpAndSettle();
+        expect(reports, isNotEmpty);
+        final dpr1 = reports.last;
+
+        // Switching to 2.0x DPR doubles reported physical cell pixel dimensions.
+        tester.view.devicePixelRatio = 2.0;
+        await tester.pumpWidget(buildSurface());
+        await tester.pumpAndSettle();
+        final dpr2 = reports.last;
+
+        expect(dpr2.$3, greaterThan(dpr1.$3 * 1.5));
+        expect(dpr2.$4, greaterThan(dpr1.$4 * 1.5));
+      },
+    );
   });
 
   group('[M7] & Phase 4: GlyphStyleVariant, pre-baked ligatures, lazy variants', () {
@@ -1149,9 +1193,10 @@ void main() {
         final dragEventsPx = mouseEvents
             .where((e) => e.type == term.MouseEventType.drag)
             .toList();
+        final dpr = tester.view.devicePixelRatio;
         expect(dragEventsPx.length, equals(2));
-        expect(dragEventsPx[0].pixelX, equals(3));
-        expect(dragEventsPx[1].pixelX, equals(4));
+        expect(dragEventsPx[0].pixelX, equals((2.0 * dpr).floor() + 1));
+        expect(dragEventsPx[1].pixelX, equals((3.0 * dpr).floor() + 1));
 
         terminal.backend.write('\x1b[?1016l');
         expect(terminal.reportPixelMouseEvents, isFalse);

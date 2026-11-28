@@ -779,8 +779,16 @@ final class PtyRouterSession {
         pixelWidth != _lastPixelWidth || pixelHeight != _lastPixelHeight;
     if (!gridChanged && !cellChanged && !pixelChanged) return;
 
-    if (gridChanged) terminal.resize(minCols, minRows);
-    if (cellChanged) terminal.setCellPixelSize(cellW, cellH);
+    if (gridChanged) {
+      terminal.resize(
+        minCols,
+        minRows,
+        cellPixelWidth: cellChanged ? cellW : null,
+        cellPixelHeight: cellChanged ? cellH : null,
+      );
+    } else if (cellChanged) {
+      terminal.setCellPixelSize(cellW, cellH);
+    }
     _lastPixelWidth = pixelWidth;
     _lastPixelHeight = pixelHeight;
     backend.resize(
@@ -789,7 +797,7 @@ final class PtyRouterSession {
       pixelWidth: pixelWidth,
       pixelHeight: pixelHeight,
     );
-    if (gridChanged && !cellChanged) _dispatchChange();
+    if (gridChanged) _dispatchChange();
   }
 
   /// Reads up to [count] primary-screen scrollback lines starting at [startLine].
