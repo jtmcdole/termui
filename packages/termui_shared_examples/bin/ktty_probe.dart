@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:args/args.dart';
+import 'package:clock/clock.dart';
 import 'package:termui/terminal/backend/io_backend.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/ui/color.dart';
@@ -44,6 +45,20 @@ ArgParser _buildArgParser() {
           '(with --report or --self-test).',
     )
     ..addFlag(
+      'diagnose',
+      negatable: false,
+      help:
+          'Append terminfo, environment, XTGETTCAP, and multiplexer '
+          'diagnostics to --report or --self-test output.',
+    )
+    ..addOption(
+      'compare',
+      valueHelp: 'baseline.json',
+      help:
+          'Compare probe results against a JSON baseline file and exit 1 on '
+          'any capability regression (PASS -> MISS).',
+    )
+    ..addFlag(
       'tmux-passthrough',
       negatable: false,
       help:
@@ -66,6 +81,7 @@ KttyProbeOptions _buildProbeOptions({
     wrapTmuxPassthrough: wrapTmux,
     tempProbeFilePath: mediaSession?.tempFilePath,
     shmProbeName: mediaSession?.shmObjectName,
+    fileProbeFilePath: mediaSession?.tempFilePath,
   );
 }
 
@@ -76,7 +92,7 @@ void _warnIfLocalMediaUnlinked(
   if (mediaSession == null) return;
   if (mediaSession.tempFilePath != null && !mediaSession.tempFileStillExists) {
     errSink.writeln(
-      'Warning: Kitty a=q,t=t unexpectedly unlinked temp probe file '
+      'Warning: Kitty a=q,t=t/t=f unexpectedly unlinked local probe file '
       '(${mediaSession.tempFilePath}).',
     );
   }
@@ -108,13 +124,71 @@ RandomAccessFile? _openControllingTtyForWrite() {
   }
 }
 
+Map<String, Object?>? _loadBaselineJson(String path, StringSink errSink) {
+  final file = File(path);
+  if (!file.existsSync()) {
+    errSink.writeln('Baseline file not found: $path');
+    return null;
+  }
+  try {
+    final decoded = jsonDecode(file.readAsStringSync());
+    if (decoded is! Map<String, Object?> ||
+        decoded['capabilities'] is! List<Object?>) {
+      errSink.writeln(
+        'Invalid baseline JSON in "$path": expected object with "capabilities" list.',
+      );
+      return null;
+    }
+    return decoded;
+  } on Object catch (e) {
+    errSink.writeln('Failed to read baseline JSON "$path": $e');
+    return null;
+  }
+}
+
+int _emitBatchOutput(
+  KttyProbeReport report, {
+  required bool asJson,
+  required bool diagnose,
+  required bool strict,
+  required bool requireZeroCoreUnsupported,
+  required Map<String, Object?>? baselineJson,
+  required Map<String, String> environment,
+  required StringSink outSink,
+  required bool ansiColor,
+}) {
+  final diff = baselineJson != null
+      ? report.diffAgainstBaseline(baselineJson)
+      : null;
+  _printReport(
+    report,
+    asJson: asJson,
+    diagnose: diagnose,
+    diff: diff,
+    environment: environment,
+    outSink: outSink,
+    ansiColor: ansiColor,
+  );
+  if (diff != null && diff.hasRegressions) return 1;
+  if ((strict || requireZeroCoreUnsupported) &&
+      report.coreUnsupportedCount > 0) {
+    return 1;
+  }
+  return 0;
+}
+
 Future<int> _runSelfTest({
   required bool asJson,
   required Duration timeout,
+  required bool strict,
+  required bool diagnose,
+  required Map<String, Object?>? baselineJson,
   required bool wrapTmux,
+  required Map<String, String> environment,
   required StringSink outSink,
   required StringSink errSink,
   required bool ansiColor,
+  Future<KttyProbeReport> Function(KttyProbeOptions options)? probeOverride,
 }) async {
   final replies = StreamController<List<int>>.broadcast();
   final vt = VirtualTerminal(
@@ -123,6 +197,7 @@ Future<int> _runSelfTest({
     defaultForeground: const Color(220, 228, 240),
     defaultBackground: const Color(18, 22, 32),
     allowLocalKittyMedia: true,
+    allowLocalKittyFiles: true,
     onReply: (reply) {
       final bytes = utf8.encode(reply);
       scheduleMicrotask(() {
@@ -134,23 +209,30 @@ Future<int> _runSelfTest({
 
   try {
     mediaSession = createLocalMediaProbeSession();
-    final report = await runKttyBatchProbe(
-      wireInput: replies.stream,
-      onWriteWire: vt.writeString,
-      timeout: timeout,
-      options: _buildProbeOptions(
-        wrapTmux: wrapTmux,
-        mediaSession: mediaSession,
-      ),
+    final options = _buildProbeOptions(
+      wrapTmux: wrapTmux,
+      mediaSession: mediaSession,
     );
+    final report = probeOverride != null
+        ? await probeOverride(options)
+        : await runKttyBatchProbe(
+            wireInput: replies.stream,
+            onWriteWire: vt.writeString,
+            timeout: timeout,
+            options: options,
+          );
     _warnIfLocalMediaUnlinked(mediaSession, errSink);
-    _printReport(
+    return _emitBatchOutput(
       report,
       asJson: asJson,
+      diagnose: diagnose,
+      strict: strict,
+      requireZeroCoreUnsupported: baselineJson == null,
+      baselineJson: baselineJson,
+      environment: environment,
       outSink: outSink,
       ansiColor: ansiColor,
     );
-    return report.coreUnsupportedCount == 0 ? 0 : 1;
   } finally {
     mediaSession?.dispose();
     await replies.close();
@@ -162,12 +244,30 @@ Future<int> _runStdioBatchReport({
   required bool asJson,
   required Duration timeout,
   required bool strict,
+  required bool diagnose,
+  required Map<String, Object?>? baselineJson,
   required bool wrapTmux,
+  required Map<String, String> environment,
   required StringSink outSink,
   required StringSink errSink,
   required bool hasStdinTerminal,
   required bool ansiColor,
+  Future<KttyProbeReport> Function(KttyProbeOptions options)? probeOverride,
 }) async {
+  if (probeOverride != null) {
+    final report = await probeOverride(_buildProbeOptions(wrapTmux: wrapTmux));
+    return _emitBatchOutput(
+      report,
+      asJson: asJson,
+      diagnose: diagnose,
+      strict: strict,
+      requireZeroCoreUnsupported: false,
+      baselineJson: baselineJson,
+      environment: environment,
+      outSink: outSink,
+      ansiColor: ansiColor,
+    );
+  }
   if (!hasStdinTerminal) {
     errSink.writeln(
       'ktty_probe --report requires an interactive TTY on stdin '
@@ -176,7 +276,9 @@ Future<int> _runStdioBatchReport({
     return 2;
   }
 
-  final muxDiagnostics = await detectMultiplexerDiagnostics();
+  final muxDiagnostics = await detectMultiplexerDiagnostics(
+    environment: environment,
+  );
   KttyLocalMediaProbeSession? mediaSession;
   IoTerminalBackend? ioBackend;
   RandomAccessFile? ttyOut;
@@ -231,13 +333,17 @@ Future<int> _runStdioBatchReport({
     ioBackend.disableRawMode();
     if (aborted) return 130;
     _warnIfLocalMediaUnlinked(mediaSession, errSink);
-    _printReport(
+    return _emitBatchOutput(
       report,
       asJson: asJson,
+      diagnose: diagnose,
+      strict: strict,
+      requireZeroCoreUnsupported: false,
+      baselineJson: baselineJson,
+      environment: environment,
       outSink: outSink,
       ansiColor: ansiColor,
     );
-    return strict && report.coreUnsupportedCount > 0 ? 1 : 0;
   } finally {
     await ctrlCSub?.cancel();
     await sigintSub?.cancel();
@@ -251,24 +357,60 @@ Future<int> _runStdioBatchReport({
 void _printReport(
   KttyProbeReport report, {
   required bool asJson,
+  required bool diagnose,
+  required KttyProbeDiff? diff,
+  required Map<String, String> environment,
   required StringSink outSink,
   required bool ansiColor,
 }) {
   if (asJson) {
-    outSink.writeln(
-      const JsonEncoder.withIndent('  ').convert(report.toJsonMap()),
-    );
-  } else {
-    outSink.write(report.formatPlainReport(ansiColor: ansiColor));
+    final jsonMap = <String, Object?>{
+      ...report.toJsonMap(),
+      if (diff != null) 'comparison': diff.toJsonMap(),
+      if (diagnose)
+        'diagnostics': {
+          'term': environment['TERM'],
+          'colorterm': environment['COLORTERM'],
+          'hints': report.buildDiagnosticHints(environment: environment),
+          'summary': report.buildDiagnosticSummary(
+            environment: environment,
+            ansiColor: false,
+          ),
+        },
+    };
+    outSink.writeln(const JsonEncoder.withIndent('  ').convert(jsonMap));
+    return;
   }
+  outSink.write(report.formatPlainReport(ansiColor: ansiColor));
+  if (diff != null) {
+    outSink.write(diff.formatPlainSummary(ansiColor: ansiColor));
+  }
+  if (diagnose) {
+    outSink.write(
+      report.buildDiagnosticSummary(
+        environment: environment,
+        ansiColor: ansiColor,
+      ),
+    );
+  }
+}
+
+String _exportInteractiveReportToFile(String reportJson) {
+  final ts = clock.now().toUtc().millisecondsSinceEpoch;
+  final path = 'ktty_probe_report_$ts.json';
+  File(path).writeAsStringSync('$reportJson\n');
+  return path;
 }
 
 Future<void> _runInteractiveStdio(
   Duration timeout, {
   required bool wrapTmux,
+  required Map<String, String> environment,
   required StringSink errSink,
 }) async {
-  final muxDiagnostics = await detectMultiplexerDiagnostics();
+  final muxDiagnostics = await detectMultiplexerDiagnostics(
+    environment: environment,
+  );
   KttyLocalMediaProbeSession? mediaSession;
   IoTerminalBackend? ioBackend;
   StreamSubscription<ProcessSignal>? sigintSub;
@@ -305,6 +447,7 @@ Future<void> _runInteractiveStdio(
         wrapTmux: wrapTmux,
         mediaSession: mediaSession,
       ),
+      onExportReport: _exportInteractiveReportToFile,
     );
     ioBackend.disableRawMode();
     _warnIfLocalMediaUnlinked(mediaSession, errSink);
@@ -332,10 +475,13 @@ Future<int> runKttyProbeCli(
   StringSink? stderrSink,
   bool? stdinHasTerminal,
   bool? stdoutSupportsAnsi,
+  Map<String, String>? environment,
+  Future<KttyProbeReport> Function(KttyProbeOptions options)? probeOverride,
 }) async {
   final outSink = stdoutSink ?? stdout;
   final errSink = stderrSink ?? stderr;
   final ansiColor = stdoutSupportsAnsi ?? stdout.supportsAnsiEscapes;
+  final env = environment ?? Platform.environment;
   final parser = _buildArgParser();
   final ArgResults results;
   try {
@@ -371,6 +517,25 @@ Future<int> runKttyProbeCli(
     errSink.writeln(parser.usage);
     return 64;
   }
+
+  final comparePath = results['compare'] as String?;
+  final diagnose = results['diagnose'] as bool;
+  final isBatchMode =
+      (results['self-test'] as bool) || (results['report'] as bool);
+  if (!isBatchMode && (comparePath != null || diagnose)) {
+    errSink.writeln(
+      '--compare and --diagnose require --report or --self-test.',
+    );
+    errSink.writeln(parser.usage);
+    return 64;
+  }
+
+  Map<String, Object?>? baselineJson;
+  if (comparePath != null) {
+    baselineJson = _loadBaselineJson(comparePath, errSink);
+    if (baselineJson == null) return 64;
+  }
+
   final timeout = Duration(milliseconds: max(50, timeoutMs));
   final asJson = results['json'] as bool;
   final strict = results['strict'] as bool;
@@ -380,10 +545,15 @@ Future<int> runKttyProbeCli(
     return _runSelfTest(
       asJson: asJson,
       timeout: timeout,
+      strict: strict,
+      diagnose: diagnose,
+      baselineJson: baselineJson,
       wrapTmux: wrapTmux,
+      environment: env,
       outSink: outSink,
       errSink: errSink,
       ansiColor: ansiColor,
+      probeOverride: probeOverride,
     );
   }
 
@@ -392,11 +562,15 @@ Future<int> runKttyProbeCli(
       asJson: asJson,
       timeout: timeout,
       strict: strict,
+      diagnose: diagnose,
+      baselineJson: baselineJson,
       wrapTmux: wrapTmux,
+      environment: env,
       outSink: outSink,
       errSink: errSink,
       hasStdinTerminal: stdinHasTerminal ?? stdin.hasTerminal,
       ansiColor: ansiColor,
+      probeOverride: probeOverride,
     );
   }
 
@@ -407,7 +581,12 @@ Future<int> runKttyProbeCli(
     return 0;
   }
 
-  await _runInteractiveStdio(timeout, wrapTmux: wrapTmux, errSink: errSink);
+  await _runInteractiveStdio(
+    timeout,
+    wrapTmux: wrapTmux,
+    environment: env,
+    errSink: errSink,
+  );
   return 0;
 }
 
