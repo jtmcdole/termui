@@ -232,28 +232,14 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
   }
 
   static const _pipeBufferSize = 65536;
+  static int _pipeSequence = 0;
 
-  static void _markWriteStopped(
-    Pointer<IntPtr> pLock,
-    Pointer<IntPtr> pWriteStopped,
-  ) {
-    if (pWriteStopped.address == 0) return;
-    _withLock(pLock, () {
-      pWriteStopped.value = 1;
-    });
-  }
-
-  static void _cancelPendingInputWrites(
-    Pointer<IntPtr> pLock,
-    Pointer<IntPtr> pInputWriteSide,
-  ) {
-    if (pInputWriteSide.address == 0) return;
-    _withLock(pLock, () {
-      final handle = pInputWriteSide.value;
-      if (handle != 0) {
-        _cancelIoEx(Pointer.fromAddress(handle), nullptr);
-      }
-    });
+  static void _signalWriteStop(Pointer<IntPtr> pStopEvent) {
+    if (pStopEvent.address == 0) return;
+    final handle = pStopEvent.value;
+    if (handle != 0) {
+      win32.SetEvent(win32.HANDLE(Pointer.fromAddress(handle)));
+    }
   }
 
   static void _closeInputWriteOnce(
@@ -268,6 +254,50 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
         win32.CloseHandle(win32.HANDLE(Pointer.fromAddress(handle)));
       }
     });
+  }
+
+  /// Creates an input pipe whose write end supports overlapped I/O (allowing
+  /// race-free stop-event cancellation via `WaitForMultipleObjects`) while the
+  /// read end remains synchronous as required by ConPTY and legacy child stdin.
+  static ({int readHandle, int writeHandle})? _createOverlappedInputPipe(
+    Arena arena, {
+    Pointer<win32.SECURITY_ATTRIBUTES>? readSecurityAttributes,
+  }) {
+    final seq = ++_pipeSequence;
+    final name =
+        r'\\.\pipe\pty2_in_'
+        '${pid}_${seq}_${DateTime.now().microsecondsSinceEpoch}';
+    final lpName = name.toPcwstr(allocator: arena);
+    final hWrite = win32.CreateNamedPipe(
+      lpName,
+      win32.FILE_FLAGS_AND_ATTRIBUTES(
+        win32.PIPE_ACCESS_OUTBOUND |
+            win32.FILE_FLAG_OVERLAPPED |
+            win32.FILE_FLAG_FIRST_PIPE_INSTANCE,
+      ),
+      win32.NAMED_PIPE_MODE(win32.PIPE_TYPE_BYTE | win32.PIPE_WAIT),
+      1,
+      _pipeBufferSize,
+      _pipeBufferSize,
+      0,
+      null,
+    );
+    if (!hWrite.isValid) return null;
+
+    final hReadResult = win32.CreateFile(
+      lpName,
+      win32.GENERIC_READ,
+      win32.FILE_SHARE_MODE(0),
+      readSecurityAttributes,
+      win32.FILE_CREATION_DISPOSITION(win32.OPEN_EXISTING),
+      win32.FILE_FLAGS_AND_ATTRIBUTES(win32.FILE_ATTRIBUTE_NORMAL),
+      null,
+    );
+    if (!hReadResult.value.isValid) {
+      win32.CloseHandle(hWrite);
+      return null;
+    }
+    return (readHandle: hReadResult.value.address, writeHandle: hWrite.address);
   }
 
   static void _closeRawHandle(int address) {
@@ -358,14 +388,10 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     win32.PCWSTR? pwstrCurrentDirectory,
     Pointer<Utf16>? pEnvironment,
   ) {
-    final hInputReadPipe = arena<IntPtr>();
-    final hInputWritePipe = arena<IntPtr>();
-    final pipe1 = win32.CreatePipe(
-      hInputReadPipe.cast<win32.HANDLE>(),
-      hInputWritePipe.cast<win32.HANDLE>(),
-      nullptr,
-      _pipeBufferSize,
-    );
+    final inputPipe = _createOverlappedInputPipe(arena);
+    if (inputPipe == null) return null;
+    final hInputReadPipe = inputPipe.readHandle;
+    final hInputWritePipe = inputPipe.writeHandle;
 
     final hOutReadPipe = arena<IntPtr>();
     final hOutWritePipe = arena<IntPtr>();
@@ -377,20 +403,20 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     );
 
     void closeConPtyPipes() {
-      _closeRawHandle(hInputReadPipe.value);
-      _closeRawHandle(hInputWritePipe.value);
+      _closeRawHandle(hInputReadPipe);
+      _closeRawHandle(hInputWritePipe);
       _closeRawHandle(hOutReadPipe.value);
       _closeRawHandle(hOutWritePipe.value);
     }
 
-    if (!pipe1.value || !pipe2.value) {
+    if (!pipe2.value) {
       closeConPtyPipes();
       return null;
     }
 
     final created = _createConPtyHandle(
       arena,
-      hInputReadPipe.value,
+      hInputReadPipe,
       hOutWritePipe.value,
     );
     if (created == null) {
@@ -438,11 +464,11 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
 
     final hProcess = win32.HANDLE(Pointer.fromAddress(pi.ref.hProcess.address));
     win32.CloseHandle(pi.ref.hThread);
-    _closeRawHandle(hInputReadPipe.value);
+    _closeRawHandle(hInputReadPipe);
     _closeRawHandle(hOutWritePipe.value);
 
     return PtyCoreWindows._(
-      win32.HANDLE(Pointer.fromAddress(hInputWritePipe.value)),
+      win32.HANDLE(Pointer.fromAddress(hInputWritePipe)),
       win32.HANDLE(Pointer.fromAddress(hOutReadPipe.value)),
       win32.HANDLE(nullptr),
       win32.HANDLE(nullptr),
@@ -464,30 +490,31 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       ..lpSecurityDescriptor = nullptr
       ..bInheritHandle = true;
 
-    final hInputReadPipe = arena<IntPtr>();
-    final hInputWritePipe = arena<IntPtr>();
-    win32.CreatePipe(
-      hInputReadPipe.cast<win32.HANDLE>(),
-      hInputWritePipe.cast<win32.HANDLE>(),
-      saLegacy,
-      _pipeBufferSize,
+    final inputPipe = _createOverlappedInputPipe(
+      arena,
+      readSecurityAttributes: saLegacy,
     );
+    if (inputPipe == null) {
+      return PtyCoreWindows._failed();
+    }
+    final hInputReadPipe = inputPipe.readHandle;
+    final hInputWritePipe = inputPipe.writeHandle;
 
     final hOutReadPipe = arena<IntPtr>();
     final hOutWritePipe = arena<IntPtr>();
-    win32.CreatePipe(
+    final outPipeOk = win32.CreatePipe(
       hOutReadPipe.cast<win32.HANDLE>(),
       hOutWritePipe.cast<win32.HANDLE>(),
       saLegacy,
       _pipeBufferSize,
     );
+    if (!outPipeOk.value) {
+      _closeRawHandle(hInputReadPipe);
+      _closeRawHandle(hInputWritePipe);
+      return PtyCoreWindows._failed();
+    }
 
     const handleFlagInherit = 1;
-    win32.SetHandleInformation(
-      win32.HANDLE(Pointer.fromAddress(hInputWritePipe.value)),
-      handleFlagInherit,
-      win32.HANDLE_FLAGS(0),
-    );
     win32.SetHandleInformation(
       win32.HANDLE(Pointer.fromAddress(hOutReadPipe.value)),
       handleFlagInherit,
@@ -498,7 +525,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     siLegacy.ref
       ..cb = sizeOf<win32.STARTUPINFO>()
       ..dwFlags = win32.STARTF_USESTDHANDLES
-      ..hStdInput = win32.HANDLE(Pointer.fromAddress(hInputReadPipe.value))
+      ..hStdInput = win32.HANDLE(Pointer.fromAddress(hInputReadPipe))
       ..hStdOutput = win32.HANDLE(Pointer.fromAddress(hOutWritePipe.value))
       ..hStdError = win32.HANDLE(Pointer.fromAddress(hOutWritePipe.value));
 
@@ -517,8 +544,8 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     );
 
     if (!piLegacyRet.value) {
-      _closeRawHandle(hInputReadPipe.value);
-      _closeRawHandle(hInputWritePipe.value);
+      _closeRawHandle(hInputReadPipe);
+      _closeRawHandle(hInputWritePipe);
       _closeRawHandle(hOutReadPipe.value);
       _closeRawHandle(hOutWritePipe.value);
       return PtyCoreWindows._failed();
@@ -526,11 +553,11 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
 
     final hProcess = win32.HANDLE(Pointer.fromAddress(pi.ref.hProcess.address));
     win32.CloseHandle(pi.ref.hThread);
-    _closeRawHandle(hInputReadPipe.value);
+    _closeRawHandle(hInputReadPipe);
     _closeRawHandle(hOutWritePipe.value);
 
     return PtyCoreWindows._(
-      win32.HANDLE(Pointer.fromAddress(hInputWritePipe.value)),
+      win32.HANDLE(Pointer.fromAddress(hInputWritePipe)),
       win32.HANDLE(Pointer.fromAddress(hOutReadPipe.value)),
       win32.HANDLE(nullptr),
       win32.HANDLE(nullptr),
@@ -592,13 +619,15 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     final pHPty = calloc<IntPtr>()..value = hPty ?? 0;
     final pOutputReadSide = calloc<IntPtr>()..value = outputReadSide.address;
     final pInputWriteSide = calloc<IntPtr>()..value = inputWriteSide.address;
-    final pWriteStopped = calloc<IntPtr>();
+    final hStopEvent = win32.CreateEvent(null, true, false, null).value;
+    final pStopEvent = calloc<IntPtr>()
+      ..value = hStopEvent.isValid ? hStopEvent.address : 0;
     final pHProcess = calloc<IntPtr>()..value = hProcess.address;
     _pLock = pLock;
     _pHPty = pHPty;
     _pOutputReadSide = pOutputReadSide;
     _pInputWriteSide = pInputWriteSide;
-    _pWriteStopped = pWriteStopped;
+    _pStopEvent = pStopEvent;
     _pHProcess = pHProcess;
 
     _worker = PtyCoreWindowsWorker(
@@ -606,6 +635,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       pOutputReadSide: pOutputReadSide,
       pHProcess: pHProcess,
       pHPty: pHPty,
+      pStopEvent: pStopEvent,
       closePtyPtr: conPtyBindings?.closePtr,
       buffer: readBuffer,
       pReadlen: pReadlen,
@@ -617,10 +647,13 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     _finalizer.attach(this, _pHPty.cast(), detach: this);
     _finalizer.attach(this, _pOutputReadSide.cast(), detach: this);
     _finalizer.attach(this, _pInputWriteSide.cast(), detach: this);
-    _finalizer.attach(this, _pWriteStopped.cast(), detach: this);
+    _finalizer.attach(this, _pStopEvent.cast(), detach: this);
     _finalizer.attach(this, _pHProcess.cast(), detach: this);
 
     _attachHandleFinalizer(inputWriteSide, detach: _inputWriteDetachToken);
+    if (hStopEvent.isValid) {
+      _attachHandleFinalizer(hStopEvent, detach: _stopEventDetachToken);
+    }
     _attachHandleFinalizer(_inputReadSide);
     _attachHandleFinalizer(_outputWriteSide);
   }
@@ -644,13 +677,14 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     _pHPty = nullptr;
     _pOutputReadSide = nullptr;
     _pInputWriteSide = nullptr;
-    _pWriteStopped = nullptr;
+    _pStopEvent = nullptr;
     _pHProcess = nullptr;
     _worker = PtyCoreWindowsWorker(
       pLock: nullptr,
       pOutputReadSide: null,
       pHProcess: null,
       pHPty: null,
+      pStopEvent: null,
       closePtyPtr: null,
       buffer: nullptr,
       pReadlen: nullptr,
@@ -664,13 +698,14 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
   final _PseudoConsoleBindings? _conPtyBindings;
   final bool _failed;
   final Object _inputWriteDetachToken = Object();
+  final Object _stopEventDetachToken = Object();
   bool _writerTaken = false;
 
   late final Pointer<IntPtr> _pLock;
   late final Pointer<IntPtr> _pHPty;
   late final Pointer<IntPtr> _pOutputReadSide;
   late final Pointer<IntPtr> _pInputWriteSide;
-  late final Pointer<IntPtr> _pWriteStopped;
+  late final Pointer<IntPtr> _pStopEvent;
   late final Pointer<IntPtr> _pHProcess;
 
   static const _bufferSize = 4096;
@@ -694,7 +729,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     return _PtyCoreWindowsWriter(
       pLock: _pLock,
       pInputWriteSide: _pInputWriteSide,
-      pWriteStopped: _pWriteStopped,
+      pStopEvent: _pStopEvent,
     );
   }
 
@@ -714,12 +749,6 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
         void Function(Pointer<IntPtr>)
       >('ReleaseSRWLockExclusive');
 
-  static final _cancelIoEx = _kernel32
-      .lookupFunction<
-        Int32 Function(Pointer<Void>, Pointer<Void>),
-        int Function(Pointer<Void>, Pointer<Void>)
-      >('CancelIoEx');
-
   static final _closeHandleFinalizer = NativeFinalizer(
     _kernel32.lookup<NativeFunction<Void Function(Pointer<Void>)>>(
       'CloseHandle',
@@ -730,7 +759,11 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
   Uint8List? read() => _worker.read();
 
   @override
-  void onReaderClosed() {}
+  void onReaderClosed() {
+    if (!_failed) {
+      _signalWriteStop(_pStopEvent);
+    }
+  }
 
   @override
   int? exitCodeNonBlocking() {
@@ -768,7 +801,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     _killed = true;
 
     _closeHandleFinalizer.detach(this);
-    _markWriteStopped(_pLock, _pWriteStopped);
+    _signalWriteStop(_pStopEvent);
 
     final ret = _withLock(_pLock, () {
       final hProcAddress = _pHProcess.address != 0 ? _pHProcess.value : 0;
@@ -779,9 +812,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
           ).value;
     });
     _closePseudoConsoleOnce(_pLock, _pHPty, _conPtyBindings?.closePtr);
-    if (_writerTaken) {
-      _cancelPendingInputWrites(_pLock, _pInputWriteSide);
-    } else {
+    if (!_writerTaken) {
       _closeHandleFinalizer.detach(_inputWriteDetachToken);
       _closeInputWriteOnce(_pLock, _pInputWriteSide);
     }
@@ -833,90 +864,194 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     if (_failed || _killed || data.isEmpty) return;
     final bytes = data is Uint8List ? data : Uint8List.fromList(data);
     final handleAddress = _withLock(_pLock, () => _pInputWriteSide.value);
-    if (handleAddress == 0) return;
-    using((arena) {
-      final buf = arena<Uint8>(_PtyCoreWindowsWriter._writeChunkSize);
-      final pWritten = arena<Uint32>();
-      _PtyCoreWindowsWriter._writeLoop(
-        bytes: bytes,
-        buf: buf,
-        pWritten: pWritten,
-        resolveHandle: () => _withLock(_pLock, () => _pInputWriteSide.value),
-      );
-    });
+    final stopEventAddress = _pStopEvent.address != 0 ? _pStopEvent.value : 0;
+    if (handleAddress == 0 || stopEventAddress == 0) return;
+
+    final ioEvent = win32.CreateEvent(null, true, false, null).value;
+    if (!ioEvent.isValid) return;
+    try {
+      using((arena) {
+        final buf = arena<Uint8>(_PtyCoreWindowsWriter._writeChunkSize);
+        final pWritten = arena<Uint32>();
+        final pOverlapped = arena<win32.OVERLAPPED>();
+        final pWaitHandles = arena<Pointer>(2);
+        pWaitHandles[0] = Pointer.fromAddress(stopEventAddress);
+        pWaitHandles[1] = Pointer.fromAddress(ioEvent.address);
+        _PtyCoreWindowsWriter._writeOverlappedLoop(
+          bytes: bytes,
+          handle: win32.HANDLE(Pointer.fromAddress(handleAddress)),
+          stopEvent: win32.HANDLE(Pointer.fromAddress(stopEventAddress)),
+          ioEvent: ioEvent,
+          buf: buf,
+          pWritten: pWritten,
+          pOverlapped: pOverlapped,
+          pWaitHandles: pWaitHandles,
+        );
+      });
+    } finally {
+      win32.CloseHandle(ioEvent);
+    }
   }
 }
 
 final class _PtyCoreWindowsWriter implements PtyCoreWriter {
   static const _writeChunkSize = 16384;
+  static const _infinite = 0xFFFFFFFF;
 
   final Pointer<IntPtr> _pLock;
   final Pointer<IntPtr> _pInputWriteSide;
-  final Pointer<IntPtr> _pWriteStopped;
+  final Pointer<IntPtr> _pStopEvent;
 
   bool _freed = false;
   Pointer<Uint8>? _writeBuffer;
   Pointer<Uint32>? _pWritten;
+  Pointer<win32.OVERLAPPED>? _pOverlapped;
+  Pointer<Pointer>? _pWaitHandles;
+  int _ioEventAddress = 0;
 
   _PtyCoreWindowsWriter({
     required Pointer<IntPtr> pLock,
     required Pointer<IntPtr> pInputWriteSide,
-    required Pointer<IntPtr> pWriteStopped,
+    required Pointer<IntPtr> pStopEvent,
   }) : _pLock = pLock,
        _pInputWriteSide = pInputWriteSide,
-       _pWriteStopped = pWriteStopped;
+       _pStopEvent = pStopEvent;
+
+  int _resolveStopEventAddress() =>
+      _pStopEvent.address != 0 ? _pStopEvent.value : 0;
+
+  bool _isStopSignaled(int stopEventAddress) {
+    if (stopEventAddress == 0) return true;
+    final wait = win32.WaitForSingleObject(
+      win32.HANDLE(Pointer.fromAddress(stopEventAddress)),
+      0,
+    );
+    return wait.value == win32.WAIT_OBJECT_0;
+  }
 
   int _resolveActiveHandle() {
     if (_freed || _pInputWriteSide.address == 0) return 0;
-    return PtyCoreWindows._withLock(_pLock, () {
-      if (_pWriteStopped.address != 0 && _pWriteStopped.value != 0) return 0;
-      return _pInputWriteSide.value;
-    });
+    final stopEventAddress = _resolveStopEventAddress();
+    if (_isStopSignaled(stopEventAddress)) return 0;
+    return PtyCoreWindows._withLock(_pLock, () => _pInputWriteSide.value);
   }
 
-  static PtyWriteStatus _writeLoop({
+  static int _writeSingleChunkOverlapped({
+    required win32.HANDLE handle,
+    required win32.HANDLE ioEvent,
+    required Pointer<Uint8> buf,
+    required int chunkLen,
+    required Pointer<Uint32> pWritten,
+    required Pointer<win32.OVERLAPPED> pOverlapped,
+    required Pointer<Pointer> pWaitHandles,
+  }) {
+    win32.ResetEvent(ioEvent);
+    pOverlapped.ref
+      ..Internal = 0
+      ..InternalHigh = 0
+      ..Offset = 0
+      ..OffsetHigh = 0
+      ..hEvent = ioEvent;
+    pWritten.value = 0;
+
+    final ret = win32.WriteFile(handle, buf, chunkLen, pWritten, pOverlapped);
+    if (ret.value) return pWritten.value;
+    if (ret.error != win32.ERROR_IO_PENDING) return 0;
+
+    final wait = win32.WaitForMultipleObjects(
+      2,
+      pWaitHandles,
+      false,
+      _infinite,
+    );
+    if (wait.value == win32.WAIT_EVENT(win32.WAIT_OBJECT_0 + 1)) {
+      final done = win32.GetOverlappedResult(
+        handle,
+        pOverlapped,
+        pWritten,
+        false,
+      );
+      return done.value ? pWritten.value : 0;
+    }
+
+    // Stop event signaled (WAIT_OBJECT_0) or wait failed: cancel the pending
+    // IRP and wait for kernel completion before reusing or freeing buffers.
+    win32.CancelIoEx(handle, pOverlapped);
+    win32.GetOverlappedResult(handle, pOverlapped, pWritten, true);
+    return 0;
+  }
+
+  static PtyWriteStatus _writeOverlappedLoop({
     required Uint8List bytes,
+    required win32.HANDLE handle,
+    required win32.HANDLE stopEvent,
+    required win32.HANDLE ioEvent,
     required Pointer<Uint8> buf,
     required Pointer<Uint32> pWritten,
-    required int Function() resolveHandle,
+    required Pointer<win32.OVERLAPPED> pOverlapped,
+    required Pointer<Pointer> pWaitHandles,
   }) {
     var offset = 0;
     while (offset < bytes.length) {
-      final handleAddress = resolveHandle();
-      if (handleAddress == 0) return PtyWriteStatus.closed;
-
+      if (win32.WaitForSingleObject(stopEvent, 0).value ==
+          win32.WAIT_OBJECT_0) {
+        return PtyWriteStatus.closed;
+      }
       final remaining = bytes.length - offset;
       final chunkLen = remaining > _writeChunkSize
           ? _writeChunkSize
           : remaining;
       buf.asTypedList(chunkLen).setRange(0, chunkLen, bytes, offset);
 
-      final ret = win32.WriteFile(
-        win32.HANDLE(Pointer.fromAddress(handleAddress)),
-        buf,
-        chunkLen,
-        pWritten,
-        nullptr,
+      final written = _writeSingleChunkOverlapped(
+        handle: handle,
+        ioEvent: ioEvent,
+        buf: buf,
+        chunkLen: chunkLen,
+        pWritten: pWritten,
+        pOverlapped: pOverlapped,
+        pWaitHandles: pWaitHandles,
       );
-      final written = pWritten.value;
-      if (!ret.value || written == 0) return PtyWriteStatus.closed;
+      if (written == 0) return PtyWriteStatus.closed;
       offset += written;
     }
     return PtyWriteStatus.written;
   }
 
+  bool _ensureBuffersAllocated(int stopEventAddress) {
+    if (_ioEventAddress == 0) {
+      final ev = win32.CreateEvent(null, true, false, null).value;
+      if (!ev.isValid) return false;
+      _ioEventAddress = ev.address;
+    }
+    _writeBuffer ??= calloc<Uint8>(_writeChunkSize);
+    _pWritten ??= calloc<Uint32>();
+    _pOverlapped ??= calloc<win32.OVERLAPPED>();
+    final handles = _pWaitHandles ??= calloc<Pointer>(2);
+    handles[0] = Pointer.fromAddress(stopEventAddress);
+    handles[1] = Pointer.fromAddress(_ioEventAddress);
+    return true;
+  }
+
   @override
   PtyWriteStatus write(Uint8List data) {
-    if (_freed || _resolveActiveHandle() == 0) return PtyWriteStatus.closed;
+    final handleAddress = _resolveActiveHandle();
+    if (handleAddress == 0) return PtyWriteStatus.closed;
     if (data.isEmpty) return PtyWriteStatus.written;
 
-    final buf = _writeBuffer ??= calloc<Uint8>(_writeChunkSize);
-    final pWritten = _pWritten ??= calloc<Uint32>();
-    return _writeLoop(
+    final stopEventAddress = _resolveStopEventAddress();
+    if (!_ensureBuffersAllocated(stopEventAddress)) {
+      return PtyWriteStatus.closed;
+    }
+    return _writeOverlappedLoop(
       bytes: data,
-      buf: buf,
-      pWritten: pWritten,
-      resolveHandle: _resolveActiveHandle,
+      handle: win32.HANDLE(Pointer.fromAddress(handleAddress)),
+      stopEvent: win32.HANDLE(Pointer.fromAddress(stopEventAddress)),
+      ioEvent: win32.HANDLE(Pointer.fromAddress(_ioEventAddress)),
+      buf: _writeBuffer!,
+      pWritten: _pWritten!,
+      pOverlapped: _pOverlapped!,
+      pWaitHandles: _pWaitHandles!,
     );
   }
 
@@ -932,6 +1067,18 @@ final class _PtyCoreWindowsWriter implements PtyCoreWriter {
       calloc.free(_pWritten!);
       _pWritten = null;
     }
+    if (_pOverlapped != null && _pOverlapped != nullptr) {
+      calloc.free(_pOverlapped!);
+      _pOverlapped = null;
+    }
+    if (_pWaitHandles != null && _pWaitHandles != nullptr) {
+      calloc.free(_pWaitHandles!);
+      _pWaitHandles = null;
+    }
+    if (_ioEventAddress != 0) {
+      win32.CloseHandle(win32.HANDLE(Pointer.fromAddress(_ioEventAddress)));
+      _ioEventAddress = 0;
+    }
     PtyCoreWindows._closeInputWriteOnce(_pLock, _pInputWriteSide);
   }
 }
@@ -941,6 +1088,7 @@ final class PtyCoreWindowsWorker implements PtyCoreWorker {
   final Pointer<IntPtr>? pHProcess;
   final Pointer<IntPtr>? pOutputReadSide;
   final Pointer<IntPtr>? pHPty;
+  final Pointer<IntPtr>? pStopEvent;
   final Pointer<NativeFunction<Void Function(IntPtr)>>? closePtyPtr;
   final Pointer<Uint8> buffer;
   final Pointer<Uint32> pReadlen;
@@ -952,6 +1100,7 @@ final class PtyCoreWindowsWorker implements PtyCoreWorker {
     required this.pOutputReadSide,
     required this.pHProcess,
     required this.pHPty,
+    required this.pStopEvent,
     required this.closePtyPtr,
     required this.buffer,
     required this.pReadlen,
@@ -1014,6 +1163,13 @@ final class PtyCoreWindowsWorker implements PtyCoreWorker {
     final pHPtyPtr = pHPty;
     if (pHPtyPtr != null) {
       PtyCoreWindows._closePseudoConsoleOnce(pLock, pHPtyPtr, closePtyPtr);
+    }
+
+    // Signal the stop event so any blocked overlapped writer wakes up even
+    // when a legacy-pipe grandchild still holds the stdin read end open.
+    final pStop = pStopEvent;
+    if (pStop != null) {
+      PtyCoreWindows._signalWriteStop(pStop);
     }
 
     return exitCode;
