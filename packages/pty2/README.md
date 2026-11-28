@@ -2,13 +2,13 @@
 
 A modern, high-performance Pseudo-Terminal (PTY) package for Dart and Flutter.
 
-`pty2` provides programmatic access to native OS terminal file descriptors, allowing you to spawn and interact with command-line applications (like `bash`, `pwsh`, `vim`, or `htop`) directly from Dart. It serves as the native backend for building terminal emulators and CLI wrappers.
+`pty2` gives Dart apps direct access to native OS pseudo-terminals. You can spawn and control shells or CLI tools like `bash`, `pwsh`, `vim`, or `htop`. It provides the native backend for terminal emulators and CLI wrappers.
 
 ## Features
-- **Cross-Platform**: Full support for Windows (via ConPTY/legacy pipes) and Unix (Linux/macOS via `forkpty`).
-- **Non-Blocking Architecture**: Uses FFI across background Isolates to prevent synchronous OS reads from blocking the Dart event loop.
-- **Robust UTF-8 Decoding**: Correctly buffers and stitches split multi-byte characters (e.g. emojis) that cross chunk boundaries.
-- **Memory Management**: Strict `Arena` scoping and `NativeFinalizer` cleanup reduces FFI memory leaks and ensures handles are deterministically closed.
+- Cross-platform support for Windows (ConPTY and legacy pipes) and Unix (Linux and macOS via `openpty` and a native reaper shim).
+- Non-blocking isolate architecture that offloads both PTY reads and PTY writes to background isolates so blocking OS pipes never stall the Dart event loop.
+- Stateful UTF-8 decoding that buffers split multi-byte characters (such as emojis) across chunk boundaries.
+- Deterministic native resource cleanup using `Arena` scoping, exclusive writer ownership transfer, and `NativeFinalizer` guards.
 
 ## Installation
 
@@ -63,6 +63,10 @@ void main() async {
 
 ## Architecture
 
-To achieve high rendering throughput for Flutter TUI/GUI applications, `pty2` completely decouples the blocking native I/O layer from the main isolate. It spawns a background isolate that executes blocking `ReadFile`/`read` calls against the native pipe. Raw `Uint8List` byte chunks are then fed into a stateful `Utf8Decoder` which buffers split grapheme clusters before sending valid `String` messages back to the main isolate via `SendPort`.
+To keep Flutter and CLI event loops responsive, `pty2` moves blocking native I/O off the caller isolate into three background isolates:
 
-For detailed architecture diagrams, sequence flows, and memory lifecycle documentation, see [doc/architecture.md](doc/architecture.md).
+- A reader isolate (`_readUntilExit`) runs blocking reads against the PTY output handle. It decodes split UTF-8 sequences with a stateful `Utf8Decoder` and sends strings over a `SendPort`.
+- A writer isolate (`_writeUntilClosed`) owns the PTY input write handle and drains queued `write()` payloads in FIFO order. This prevents bidirectional pipe deadlocks when `ackProcessed: true` pauses reads while the caller writes terminal replies.
+- An exit-waiter isolate (`_waitForExitCode`) waits for child process termination and resolves `exitCode`.
+
+For architecture diagrams, sequence flows, and handle lifecycle details, see [doc/architecture.md](doc/architecture.md).
