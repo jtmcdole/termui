@@ -157,13 +157,28 @@ final class GpuAtlasQuadBatch {
   /// Packed ARGB default terminal background color.
   final int defaultBackgroundArgb;
 
-  /// Coalesced Kitty graphics quads drawn at [kittyInsertInstanceIndex].
+  /// Direct layered Kitty graphics quads with `z < -1073741824` drawn before
+  /// non-default cell background quads.
+  final List<GpuKittyQuad> underBgKittyQuads;
+
+  /// Direct layered Kitty graphics quads with `-1073741824 <= z < 0` drawn at
+  /// [bgEndInstanceIndex] (between cell backgrounds and text glyphs).
+  final List<GpuKittyQuad> bgKittyQuads;
+
+  /// Coalesced Kitty graphics quads (`U+10EEEE` placeholders and direct `z >= 0`
+  /// placements) drawn at [kittyInsertInstanceIndex].
   final List<GpuKittyQuad> kittyQuads;
+
+  /// Whether any of the three Kitty Z-layer quad lists is non-empty.
+  bool get hasAnyKittyQuads =>
+      underBgKittyQuads.isNotEmpty ||
+      bgKittyQuads.isNotEmpty ||
+      kittyQuads.isNotEmpty;
 
   /// True when the frame contains Canvas-only elements (unbaked non-Kitty
   /// fallback glyphs, raw RGBA subpixel Kitty cells without a decoded GPU
-  /// image, multi-cell ligature runs, or inline IME composing text) that
-  /// require falling back to `TuiAtlasPainter`.
+  /// image, `OSC 66` scaled text anchor cells, multi-cell ligature runs, or
+  /// inline IME composing text) that require falling back to `TuiAtlasPainter`.
   final bool hasCanvasOnlyContent;
 
   /// Separate `zLayer`-sorted transformed-cell instance slice uploaded
@@ -211,6 +226,8 @@ final class GpuAtlasQuadBatch {
     required this.kittyInsertInstanceIndex,
     required this.generation,
     required this.defaultBackgroundArgb,
+    this.underBgKittyQuads = const <GpuKittyQuad>[],
+    this.bgKittyQuads = const <GpuKittyQuad>[],
     required this.kittyQuads,
     required this.hasCanvasOnlyContent,
     Float32List? transformedInstanceData,
@@ -248,6 +265,8 @@ final class GpuAtlasQuadBatch {
     kittyInsertInstanceIndex: kittyInsertInstanceIndex,
     generation: generation,
     defaultBackgroundArgb: defaultBackgroundArgb,
+    underBgKittyQuads: underBgKittyQuads,
+    bgKittyQuads: bgKittyQuads,
     kittyQuads: kittyQuads,
     hasCanvasOnlyContent: hasCanvasOnlyContent ?? this.hasCanvasOnlyContent,
     transformedInstanceData:
@@ -285,6 +304,7 @@ final class GpuAtlasBatchBuilder {
   int _lastStagingGeneration = -1;
   int _lastConfigSignature = 0;
   int _lastInstanceCount = -1;
+  int _lastKittyQuadSignature = 0;
   GpuAtlasQuadBatch? _lastBatch;
 
   /// Packs [staged] into a [GpuAtlasQuadBatch] scaled to physical pixels using
@@ -312,6 +332,7 @@ final class GpuAtlasBatchBuilder {
     int? outOfBoundsDimArgb,
     String composingText = '',
   }) {
+    final kittyRevisionHash = computeScopedKittyRevisionHash(buffer);
     final configSignature = Object.hash(
       logicalSize,
       devicePixelRatio,
@@ -328,6 +349,8 @@ final class GpuAtlasBatchBuilder {
       composingText.isNotEmpty,
       kittyImages.length,
       kittyImagesById.length,
+      kittyRevisionHash,
+      buffer.hasTextSizing,
     );
 
     final cached = _lastBatch;
@@ -335,7 +358,9 @@ final class GpuAtlasBatchBuilder {
         stagingGeneration == _lastStagingGeneration &&
         configSignature == _lastConfigSignature &&
         staged.fallbackCount == 0 &&
-        staged.ligatureCount == 0) {
+        staged.ligatureCount == 0 &&
+        !buffer.hasKittyImages &&
+        !cached.hasAnyKittyQuads) {
       return cached;
     }
 
@@ -417,6 +442,18 @@ final class GpuAtlasBatchBuilder {
       kittyImagesById: kittyImagesById,
       kittyDecodedRgba: kittyDecodedRgba,
     );
+    final directLayers = _collectDirectLayeredKittyQuads(
+      buffer: buffer,
+      cellWidth: cellWidth,
+      cellHeight: cellHeight,
+      dpr: devicePixelRatio,
+      kittyImages: kittyImages,
+      kittyImagesById: kittyImagesById,
+      kittyDecodedRgba: kittyDecodedRgba,
+    );
+    final fgKittyQuads = directLayers.fgQuads.isEmpty
+        ? fallbackResult.kittyQuads
+        : <GpuKittyQuad>[...fallbackResult.kittyQuads, ...directLayers.fgQuads];
 
     _appendSpriteList(
       transforms: staged.decoTransforms,
@@ -443,17 +480,25 @@ final class GpuAtlasBatchBuilder {
 
     final hasCanvasOnly =
         fallbackResult.hasCanvasOnlyFallback ||
+        directLayers.hasCanvasOnlyFallback ||
         staged.ligatureCount > 0 ||
         composingText.isNotEmpty;
+    final kittyQuadSig = _computeKittyQuadSignature(
+      directLayers.underBgQuads,
+      directLayers.bgQuads,
+      fgKittyQuads,
+    );
 
     if (stagingGeneration != _lastStagingGeneration ||
         configSignature != _lastConfigSignature ||
         _instanceCount != _lastInstanceCount ||
+        kittyQuadSig != _lastKittyQuadSignature ||
         staged.fallbackCount > 0) {
       _batchGeneration++;
       _lastStagingGeneration = stagingGeneration;
       _lastConfigSignature = configSignature;
       _lastInstanceCount = _instanceCount;
+      _lastKittyQuadSignature = kittyQuadSig;
     }
 
     final batch = GpuAtlasQuadBatch(
@@ -464,7 +509,9 @@ final class GpuAtlasBatchBuilder {
       kittyInsertInstanceIndex: kittyInsert,
       generation: _batchGeneration,
       defaultBackgroundArgb: defaultBackgroundArgb,
-      kittyQuads: fallbackResult.kittyQuads,
+      underBgKittyQuads: directLayers.underBgQuads,
+      bgKittyQuads: directLayers.bgQuads,
+      kittyQuads: fgKittyQuads,
       hasCanvasOnlyContent: hasCanvasOnly,
     );
     _lastBatch = batch;
@@ -659,6 +706,22 @@ final class GpuAtlasBatchBuilder {
     _instanceCount++;
   }
 
+  static int _classifyFallbackOsc66Cell(
+    Buffer buffer,
+    StagingBufferSet staged,
+    int index,
+  ) {
+    final gBase = index << 1;
+    final ts = KittyTextSizing(
+      buffer.getTextSizing(
+        staged.fallbackGridCoords[gBase],
+        staged.fallbackGridCoords[gBase + 1],
+      ),
+    );
+    if (ts.isContinuation) return 1;
+    return ts.isAnchor ? 2 : 0;
+  }
+
   ({List<GpuKittyQuad> kittyQuads, bool hasCanvasOnlyFallback})
   _collectKittyQuads({
     required StagingBufferSet staged,
@@ -673,10 +736,20 @@ final class GpuAtlasBatchBuilder {
       return (kittyQuads: const <GpuKittyQuad>[], hasCanvasOnlyFallback: false);
     }
 
+    final hasTextSizing = buffer.hasTextSizing;
     List<GpuKittyQuad>? quads;
     var hasCanvasOnly = false;
     var index = 0;
     while (index < count) {
+      final osc66Kind = hasTextSizing
+          ? _classifyFallbackOsc66Cell(buffer, staged, index)
+          : 0;
+      if (osc66Kind != 0) {
+        if (osc66Kind == 2) hasCanvasOnly = true;
+        index++;
+        continue;
+      }
+
       final char = staged.fallbackChars[index];
       final mods = staged.fallbackAttrs[index << 2];
       if (!isKittyPlaceholderCell(char, mods)) {
@@ -709,6 +782,153 @@ final class GpuAtlasBatchBuilder {
     );
   }
 
+  ({
+    List<GpuKittyQuad> underBgQuads,
+    List<GpuKittyQuad> bgQuads,
+    List<GpuKittyQuad> fgQuads,
+    bool hasCanvasOnlyFallback,
+  })
+  _collectDirectLayeredKittyQuads({
+    required Buffer buffer,
+    required double cellWidth,
+    required double cellHeight,
+    required double dpr,
+    required Map<KittyImageData, ui.Image> kittyImages,
+    required Map<(KittyImageRegistry, int), ui.Image> kittyImagesById,
+    required Map<KittyImageData, Uint8List> kittyDecodedRgba,
+  }) {
+    final layered = collectLayeredDirectKittyPlacements(
+      buffer,
+      cellWidth: cellWidth,
+      cellHeight: cellHeight,
+    );
+    if (layered.underBgPlacements.isEmpty &&
+        layered.bgPlacements.isEmpty &&
+        layered.fgPlacements.isEmpty) {
+      return (
+        underBgQuads: const <GpuKittyQuad>[],
+        bgQuads: const <GpuKittyQuad>[],
+        fgQuads: const <GpuKittyQuad>[],
+        hasCanvasOnlyFallback: false,
+      );
+    }
+    final underBg = _buildDirectLayerQuads(
+      layered.underBgPlacements,
+      dpr: dpr,
+      kittyImages: kittyImages,
+      kittyImagesById: kittyImagesById,
+      kittyDecodedRgba: kittyDecodedRgba,
+    );
+    final bg = _buildDirectLayerQuads(
+      layered.bgPlacements,
+      dpr: dpr,
+      kittyImages: kittyImages,
+      kittyImagesById: kittyImagesById,
+      kittyDecodedRgba: kittyDecodedRgba,
+    );
+    final fg = _buildDirectLayerQuads(
+      layered.fgPlacements,
+      dpr: dpr,
+      kittyImages: kittyImages,
+      kittyImagesById: kittyImagesById,
+      kittyDecodedRgba: kittyDecodedRgba,
+    );
+    return (
+      underBgQuads: underBg.quads,
+      bgQuads: bg.quads,
+      fgQuads: fg.quads,
+      hasCanvasOnlyFallback:
+          underBg.hasCanvasOnlyFallback ||
+          bg.hasCanvasOnlyFallback ||
+          fg.hasCanvasOnlyFallback,
+    );
+  }
+
+  ({List<GpuKittyQuad> quads, bool hasCanvasOnlyFallback})
+  _buildDirectLayerQuads(
+    List<ResolvedKittyDirectPlacement> placements, {
+    required double dpr,
+    required Map<KittyImageData, ui.Image> kittyImages,
+    required Map<(KittyImageRegistry, int), ui.Image> kittyImagesById,
+    required Map<KittyImageData, Uint8List> kittyDecodedRgba,
+  }) {
+    if (placements.isEmpty) {
+      return (quads: const <GpuKittyQuad>[], hasCanvasOnlyFallback: false);
+    }
+    List<GpuKittyQuad>? quads;
+    var needsCanvasFallback = false;
+    for (final item in placements) {
+      final exactImage = kittyImages[item.imageData];
+      final gpuImage =
+          exactImage ??
+          kittyImagesById[(item.registry, item.placement.imageId)];
+      if (gpuImage == null) {
+        if (item.imageData.format != KittyImageData.formatPng) {
+          needsCanvasFallback = true;
+        }
+        continue;
+      }
+      (quads ??= <GpuKittyQuad>[]).add(
+        GpuKittyQuad(
+          image: gpuImage,
+          rawRgbaPixels: _resolveRawRgbaPixels(
+            exactImage,
+            item.imageData,
+            kittyDecodedRgba,
+          ),
+          cacheSlot: _resolveKittyCacheSlot(
+            exactImage,
+            item.registry,
+            item.placement.imageId,
+          ),
+          dstX: item.dstX * dpr,
+          dstY: item.dstY * dpr,
+          dstWidth: item.dstWidth * dpr,
+          dstHeight: item.dstHeight * dpr,
+          u0: item.u0,
+          v0: item.v0,
+          u1: item.u1,
+          v1: item.v1,
+        ),
+      );
+    }
+    return (
+      quads: quads ?? const <GpuKittyQuad>[],
+      hasCanvasOnlyFallback: needsCanvasFallback,
+    );
+  }
+
+  static int _computeKittyQuadSignature(
+    List<GpuKittyQuad> underBg,
+    List<GpuKittyQuad> bg,
+    List<GpuKittyQuad> fg,
+  ) {
+    if (underBg.isEmpty && bg.isEmpty && fg.isEmpty) return 0;
+    var h = Object.hash(underBg.length, bg.length, fg.length);
+    h = _mixKittyQuadListSignature(h, underBg);
+    h = _mixKittyQuadListSignature(h, bg);
+    return _mixKittyQuadListSignature(h, fg);
+  }
+
+  static int _mixKittyQuadListSignature(int seed, List<GpuKittyQuad> quads) {
+    var h = seed;
+    for (final q in quads) {
+      h = Object.hash(
+        h,
+        identityHashCode(q.image),
+        q.dstX,
+        q.dstY,
+        q.dstWidth,
+        q.dstHeight,
+        q.u0,
+        q.v0,
+        q.u1,
+        q.v1,
+      );
+    }
+    return h;
+  }
+
   ({int nextIndex, GpuKittyQuad? quad, bool needsCanvasFallback})
   _resolveKittyRun({
     required StagingBufferSet staged,
@@ -737,12 +957,22 @@ final class GpuAtlasBatchBuilder {
 
     final imageId = extractKittyCellImageId(char, fgArgb);
     final registry = buffer.lookupKittyRegistry(gridCol, gridRow);
-    final data = registry.lookupImage(imageId);
+    final data = registry.activeImageData(imageId);
+    final placementId = extractKittyCellPlacementId(
+      buffer.getUnderlineColor(gridCol, gridRow),
+    );
+    final placement = registry.lookupPlacement(imageId, placementId);
+    final gridCols = placement != null && placement.cols > 0
+        ? placement.cols
+        : (data?.gridCols ?? 0);
+    final gridRows = placement != null && placement.rows > 0
+        ? placement.rows
+        : (data?.gridRows ?? 0);
     if (data == null ||
-        data.gridCols <= 0 ||
-        data.gridRows <= 0 ||
-        coords.row >= data.gridRows ||
-        coords.col >= data.gridCols) {
+        gridCols <= 0 ||
+        gridRows <= 0 ||
+        coords.row >= gridRows ||
+        coords.col >= gridCols) {
       return (nextIndex: index + 1, quad: null, needsCanvasFallback: false);
     }
 
@@ -756,6 +986,7 @@ final class GpuAtlasBatchBuilder {
       startGridCol: gridCol,
       tileRow: coords.row,
       startTileCol: coords.col,
+      maxTileCols: gridCols,
     );
     final runCols = endIdx - index;
 
@@ -770,10 +1001,20 @@ final class GpuAtlasBatchBuilder {
       );
     }
 
-    final u0 = coords.col / data.gridCols;
-    final v0 = coords.row / data.gridRows;
-    final u1 = (coords.col + runCols) / data.gridCols;
-    final v1 = (coords.row + 1) / data.gridRows;
+    final uv = resolveKittySourceUv(
+      imageWidth: data.pixelWidth,
+      imageHeight: data.pixelHeight,
+      placement: placement,
+      subU0: coords.col / gridCols,
+      subV0: coords.row / gridRows,
+      subU1: (coords.col + runCols) / gridCols,
+      subV1: (coords.row + 1) / gridRows,
+    );
+    final offset = resolveKittyCellOffset(
+      placement: placement,
+      cellWidth: w,
+      cellHeight: h,
+    );
 
     return (
       nextIndex: endIdx,
@@ -784,18 +1025,31 @@ final class GpuAtlasBatchBuilder {
           data,
           kittyDecodedRgba,
         ),
-        cacheSlot: exactImage != null ? (registry, imageId) : null,
-        dstX: x * dpr,
-        dstY: y * dpr,
+        cacheSlot: _resolveKittyCacheSlot(exactImage, registry, imageId),
+        dstX: (x + offset.dx) * dpr,
+        dstY: (y + offset.dy) * dpr,
         dstWidth: (runCols * w + kittyTileOverlapLogical) * dpr,
         dstHeight: (h + kittyTileOverlapLogical) * dpr,
-        u0: u0,
-        v0: v0,
-        u1: u1,
-        v1: v1,
+        u0: uv.u0,
+        v0: uv.v0,
+        u1: uv.u1,
+        v1: uv.v1,
       ),
       needsCanvasFallback: false,
     );
+  }
+
+  static Object? _resolveKittyCacheSlot(
+    ui.Image? exactImage,
+    KittyImageRegistry registry,
+    int imageId,
+  ) {
+    if (exactImage == null) return null;
+    final anim = registry.lookupAnimation(imageId);
+    if (anim != null) {
+      return (registry, imageId, anim.currentFrameNumber);
+    }
+    return (registry, imageId);
   }
 
   static Uint8List? _resolveRawRgbaPixels(
