@@ -1056,5 +1056,87 @@ void main() {
         expect(layered, hasLength(1));
       },
     );
+
+    test(
+      'PR #502 H2: pending-wrap direct placement on _scrollBottom anchors on-screen and respects !DECAWM',
+      () {
+        final vt = VirtualTerminal(width: 6, height: 3);
+        // Move cursor to bottom row (row 2 = _scrollBottom) and fill 6 chars -> pending wrap (cursorX == 6).
+        vt.writeString('\x1b[3;1H123456');
+        expect(vt.cursorX, equals(6));
+        expect(vt.cursorY, equals(2));
+
+        final px = base64Encode(_solidRgba(1, 1, 10, 20, 30, 255));
+        vt.writeString(
+          '\x1b_Ga=T,i=160,p=1,f=32,s=1,v=1,c=2,r=1,z=-1;$px\x1b\\',
+        );
+
+        final p = vt.imageRegistry.lookupPlacement(160, 1);
+        expect(p, isNotNull);
+        // Must scroll & anchor at (0, 2) on-screen, NOT off-screen at row 3 (_scrollBottom + 1).
+        expect(p!.gridCol, equals(0));
+        expect(p.gridRow, equals(2));
+
+        // With DECAWM disabled (CSI ? 7 l), pending wrap must stay clamped on the same row.
+        final vtNoWrap = VirtualTerminal(width: 6, height: 3);
+        vtNoWrap.writeString('\x1b[?7l\x1b[1;1H123456');
+        vtNoWrap.writeString(
+          '\x1b_Ga=T,i=161,p=1,f=32,s=1,v=1,c=1,r=1,z=-1;$px\x1b\\',
+        );
+        final pNoWrap = vtNoWrap.imageRegistry.lookupPlacement(161, 1);
+        expect(pNoWrap, isNotNull);
+        expect(pNoWrap!.gridRow, equals(0));
+        expect(pNoWrap.gridCol, equals(5));
+      },
+    );
+
+    test(
+      'PR #502 M1 & M2: invalid a=f preserves t=t temp file and pre-checks animation budget before decode/canvas allocation',
+      () {
+        final tmpDir = Directory.systemTemp.createTempSync('tty-graphics-af-');
+        addTearDown(() {
+          if (tmpDir.existsSync()) tmpDir.deleteSync(recursive: true);
+        });
+
+        final h = _HandlerHarness(allowLocalMedia: true);
+        final rootPx = base64Encode(_solidRgba(4, 4, 1, 2, 3, 255));
+        h.send('a=t,i=170,f=32,s=4,v=4;$rootPx');
+
+        // M1: t=t file with truncated RGBA bytes -> EINVAL, must NOT unlink the temp file!
+        final badFile = File(
+          '${tmpDir.path}/tty-graphics-protocol-bad-frame.bin',
+        )..writeAsBytesSync(Uint8List.fromList([1, 2, 3]));
+        final badPathB64 = base64Encode(utf8.encode(badFile.path));
+        h.replies.clear();
+        h.send('a=f,i=170,t=t,f=32,s=4,v=4;$badPathB64');
+        expect(h.replies.single, startsWith('\x1b_Gi=170;EINVAL:'));
+        expect(
+          badFile.existsSync(),
+          isTrue,
+          reason: 'Invalid a=f must not unlink caller t=t temp file',
+        );
+
+        // M2: 4096x4096 PNG root (64 MiB uncompressed > 32 MiB animation cap)
+        // must fail with EFBIG BEFORE decoding/unlinking t=t or allocating a 64 MiB canvas.
+        final hugePng = base64Encode(minimalPng(4096, 4096));
+        h.send('a=t,i=171,f=100;$hugePng');
+        final hugeFrameFile = File(
+          '${tmpDir.path}/tty-graphics-protocol-huge-frame.bin',
+        )..writeAsBytesSync(Uint8List.fromList([9, 9]));
+        final hugePathB64 = base64Encode(utf8.encode(hugeFrameFile.path));
+        h.replies.clear();
+        h.send('a=f,i=171,t=t,f=32,s=4,v=4;$hugePathB64');
+        expect(
+          h.replies.single,
+          equals('\x1b_Gi=171;EFBIG:animation frame limit exceeded\x1b\\'),
+        );
+        expect(
+          hugeFrameFile.existsSync(),
+          isTrue,
+          reason:
+              'Budget-rejected a=f must not open/unlink t=t or allocate 64 MiB',
+        );
+      },
+    );
   });
 }

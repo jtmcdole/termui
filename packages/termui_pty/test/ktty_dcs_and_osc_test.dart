@@ -516,10 +516,48 @@ void main() {
         tRoot.mount(null);
         tRoot.layout(const BoxConstraints(maxWidth: 12, maxHeight: 4));
         final tPaintBuf = Buffer.blank(12, 4);
+        tPaintBuf.fillRect(const Rect(0, 0, 12, 4), char: 'Z');
         tRoot.paint(tPaintBuf, Offset.zero);
         expect(KittyTextSizing(tPaintBuf.getTextSizing(0, 0)).isAnchor, isTrue);
         expect(tPaintBuf.getCharacter(0, 0), equals('B'));
+        // PR #502 H1: transparent OSC 66 continuation cells must retain
+        // textSizing metadata and overwrite underlying glyphs.
+        expect(
+          KittyTextSizing(tPaintBuf.getTextSizing(1, 0)).isContinuation,
+          isTrue,
+        );
+        expect(
+          KittyTextSizing(tPaintBuf.getTextSizing(0, 1)).isContinuation,
+          isTrue,
+        );
+        expect(
+          KittyTextSizing(tPaintBuf.getTextSizing(1, 1)).isContinuation,
+          isTrue,
+        );
+        expect(tPaintBuf.getCharacter(1, 1), equals(' '));
         tRoot.unmount();
+
+        // Live transparent TerminalView + space OSC 66 also retains continuation metadata.
+        final tvLive = VirtualTerminal(
+          width: 8,
+          height: 4,
+          transparentBackground: true,
+        );
+        tvLive.writeString('\x1b]66;s=2; \x1b\\');
+        final liveView = TerminalView(terminal: tvLive);
+        final liveRoot = liveView.createElement();
+        liveRoot.mount(null);
+        liveRoot.layout(const BoxConstraints(maxWidth: 8, maxHeight: 4));
+        final liveBuf = Buffer.blank(8, 4);
+        liveBuf.fillRect(const Rect(0, 0, 8, 4), char: 'Q');
+        liveRoot.paint(liveBuf, Offset.zero);
+        expect(KittyTextSizing(liveBuf.getTextSizing(0, 0)).isAnchor, isTrue);
+        expect(
+          KittyTextSizing(liveBuf.getTextSizing(1, 1)).isContinuation,
+          isTrue,
+        );
+        expect(liveBuf.getCharacter(1, 1), equals(' '));
+        liveRoot.unmount();
       },
     );
   });

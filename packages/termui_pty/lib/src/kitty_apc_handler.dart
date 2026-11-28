@@ -219,6 +219,10 @@ final class KittyApcHandler {
   /// Optional callback returning whether the alternate screen buffer is active.
   final bool Function()? isAltScreen;
 
+  /// Optional callback resolving pending right-margin wrap before reading
+  /// [cursorPosition] for a direct placement that advances the cursor.
+  final void Function()? resolvePendingWrap;
+
   /// Optional callback invoked when a layered (`z != 0`) or relative (`P > 0`)
   /// direct placement advances the cursor (`C=0`).
   final void Function(int cols, int rows)? onAdvanceCursor;
@@ -256,6 +260,7 @@ final class KittyApcHandler {
     this.cursorPosition,
     this.viewportSize,
     this.isAltScreen,
+    this.resolvePendingWrap,
     this.onAdvanceCursor,
     this.onClearPlacementsAt,
     this.allowLocalMedia = false,
@@ -1649,10 +1654,16 @@ final class KittyApcHandler {
   }
 
   (int col, int row) _resolveDirectAnchor({required bool advanceCursor}) {
+    if (advanceCursor && resolvePendingWrap != null) {
+      resolvePendingWrap!();
+    }
     final (curCol, curRow) = cursorPosition?.call() ?? (0, 0);
     final vpCols = viewportSize?.call().$1;
     if (vpCols != null && vpCols > 0 && curCol >= vpCols) {
-      return advanceCursor ? (0, curRow + 1) : (vpCols - 1, curRow);
+      if (resolvePendingWrap != null || !advanceCursor) {
+        return (vpCols - 1, curRow);
+      }
+      return (0, curRow + 1);
     }
     return (curCol, curRow);
   }
@@ -1860,10 +1871,50 @@ final class KittyApcHandler {
     _finalizeAnimationFrame(pending, chunk.effectiveQuiet);
   }
 
-  Uint8List _decodeFrameRawBytes(_PendingUpload pending) {
+  bool _exceedsAnimationBudget({
+    required int imageId,
+    required int targetNum,
+    required int projectedBytes,
+    required KittyAnimationFrame? existingTarget,
+  }) {
+    final anim = registry.lookupAnimation(imageId);
+    if (existingTarget == null) {
+      final currentFrames = anim != null ? anim.frames.length : 1;
+      if (currentFrames >= KittyImageRegistry.maxFramesPerImage) {
+        return true;
+      }
+    }
+    final existingBytes = existingTarget == null
+        ? 0
+        : existingTarget.imageData.rgbaPixels.length;
+    final byteDelta = projectedBytes - existingBytes;
+    if (byteDelta > 0 &&
+        registry.totalAnimationBytes + byteDelta >
+            KittyImageRegistry.maxAnimationBytes) {
+      return true;
+    }
+    return false;
+  }
+
+  KittyImageData? _decodeAndBuildAnimationFrame({
+    required KittyImageData root,
+    required KittyAnimationFrame? existingTarget,
+    required KittyAnimationFrame? baseFrame,
+    required _PendingUpload pending,
+    required _FrameUploadParams params,
+    required int targetNum,
+  }) {
     final decoded = _decodeBase64Payload(pending.base64Data.toString());
     if (pending.medium == 'd') {
-      return pending.compressed ? _inflateZlibBytes(decoded) : decoded;
+      final raw = pending.compressed ? _inflateZlibBytes(decoded) : decoded;
+      return _buildAnimationFrameData(
+        root: root,
+        existingTarget: existingTarget,
+        baseFrame: baseFrame,
+        pending: pending,
+        params: params,
+        rawBytes: raw,
+      );
     }
     if (pending.medium == 'f') {
       final payloadBytes = _readMediumBytes(
@@ -1873,11 +1924,19 @@ final class KittyApcHandler {
         dataSize: pending.dataSize,
         unlink: false,
       );
-      return pending.compressed
+      final raw = pending.compressed
           ? _inflateZlibBytes(payloadBytes)
           : payloadBytes;
+      return _buildAnimationFrameData(
+        root: root,
+        existingTarget: existingTarget,
+        baseFrame: baseFrame,
+        pending: pending,
+        params: params,
+        rawBytes: raw,
+      );
     }
-    late final Uint8List raw;
+    KittyImageData? built;
     _readMediumBytes(
       pending.medium,
       decoded,
@@ -1885,13 +1944,30 @@ final class KittyApcHandler {
       dataSize: pending.dataSize,
       unlink: true,
       shouldUnlink: (payloadBytes) {
-        raw = pending.compressed
+        final raw = pending.compressed
             ? _inflateZlibBytes(payloadBytes)
             : payloadBytes;
+        final candidate = _buildAnimationFrameData(
+          root: root,
+          existingTarget: existingTarget,
+          baseFrame: baseFrame,
+          pending: pending,
+          params: params,
+          rawBytes: raw,
+        );
+        if (_exceedsAnimationBudget(
+          imageId: pending.imageId,
+          targetNum: targetNum,
+          projectedBytes: candidate.rgbaPixels.length,
+          existingTarget: existingTarget,
+        )) {
+          return false;
+        }
+        built = candidate;
         return true;
       },
     );
-    return raw;
+    return built;
   }
 
   static Uint8List _initFrameCanvas(
@@ -2128,17 +2204,40 @@ final class KittyApcHandler {
         ? params.targetFrame
         : _resolveNextFrameNumber(pending.imageId);
     final existingTarget = _lookupAnimationFrame(pending.imageId, targetNum);
+    final precheckBytes = pending.format == 100
+        ? 0
+        : root.pixelWidth * root.pixelHeight * 4;
+    if (_exceedsAnimationBudget(
+      imageId: pending.imageId,
+      targetNum: targetNum,
+      projectedBytes: precheckBytes,
+      existingTarget: existingTarget,
+    )) {
+      _replyError(
+        pending.replyPrefix,
+        quiet,
+        'EFBIG:animation frame limit exceeded',
+      );
+      return;
+    }
 
     try {
-      final rawBytes = _decodeFrameRawBytes(pending);
-      final frameData = _buildAnimationFrameData(
+      final frameData = _decodeAndBuildAnimationFrame(
         root: root,
         existingTarget: existingTarget,
         baseFrame: baseFrame,
         pending: pending,
         params: params,
-        rawBytes: rawBytes,
+        targetNum: targetNum,
       );
+      if (frameData == null) {
+        _replyError(
+          pending.replyPrefix,
+          quiet,
+          'EFBIG:animation frame limit exceeded',
+        );
+        return;
+      }
       final frame = KittyAnimationFrame(
         frameNumber: targetNum,
         imageData: frameData,
